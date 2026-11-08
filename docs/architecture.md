@@ -80,15 +80,15 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	// --- fail fast: everything below can fail and runs before Listen ---
 	cfg, err := config.Load(opts.configPath, lookupEnv, overrides) // file > default; flags/env override
 	authn, err := auth.New(ctx, …)                               // OIDC discovery happens here
-	reg := conn.NewRegistry(cfg.Connections, logger)               // no Redis I/O, never fails on Redis
-	defer reg.Close()
+	reg, err := conn.NewRegistry(cfg.Connections, logger)          // no Redis I/O; fails only on unreadable TLS files
+	defer reg.Close()                                             // stops the health loops, then closes the clients
 	srv := &http.Server{
 		Handler:     web.NewServer(logger, cfg, reg, authn, policy, &ready),
 		BaseContext: func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 		// ReadHeaderTimeout 10s, ReadTimeout 30s, WriteTimeout 60s, IdleTimeout 120s
 	}
 	ln, err := lc.Listen(ctx, "tcp", cfg.Server.Addr)
-	go srv.Serve(ln); go reg.RunHealthLoop(ctx)
+	go srv.Serve(ln); reg.Start(ctx)                         // health loops in the background
 
 	<-ctx.Done() // or a Serve error
 	stop()                           // a second signal now force-quits
@@ -208,7 +208,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 
 ## Data access and Redis load
 
-- **`conn.Registry`:** one per process. It holds a `*asynq.Inspector`, an `*asynq.Client` and a `redis.UniversalClient` per connection, all created at startup without Redis I/O.
+- **`conn.Registry`:** one per process. It holds a `*asynq.Inspector`, an `*asynq.Client` and a `redis.UniversalClient` per connection, all sharing one go-redis client (one pool) and created at startup without Redis I/O.
 - **Timeouts:** each connection's `dial_timeout` (5s), `read_timeout` (3s) and `write_timeout` (3s) go to its Redis client. There is no global Redis timeout. Every call also runs under the request context.
 - **Per-connection cache:** each snapshot (Overview stats, queue list, servers, …) is cached for **1s** behind `singleflight`, keyed by connection and snapshot. N viewers polling the same connection cost at most one Redis round per second.
 - **Health loop:** one goroutine per connection sends PING every 10s and stores the result (reachable, unreachable + error, or unknown before the first result). The Overview, sidebar and badges only read it. `handleRecheck` runs a check synchronously and stores it.

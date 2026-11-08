@@ -1,0 +1,36 @@
+# Server
+redis_version:7.2.4
+server_name:valkey
+valkey_version:8.0.2
+valkey_release_stage:ga
+redis_git_sha1:00000000
+redis_git_dirty:0
+redis_build_id:4b2c9e8a7d6f5e4c
+server_mode:standalone
+redis_mode:standalone
+os:Linux 6.6.87.2-microsoft-standard-WSL2 x86_64
+arch_bits:64
+process_id:1
+run_id:a1b2c3d4e5f60718293a4b5c6d7e8f9012345678
+tcp_port:6379
+uptime_in_seconds:3605
+uptime_in_days:0
+executable:/data/valkey-server
+config_file:
+listener0:name=tcp,bind=*,bind=-::*,port=6379
+
+# Clients
+connected_clients:1
+maxclients:10000
+
+# Memory
+used_memory:987654
+used_memory_human:964.51K
+used_memory_peak:1003520
+used_memory_peak_human:980.00K
+maxmemory:268435456
+maxmemory_human:256.00M
+maxmemory_policy:allkeys-lru
+
+# Keyspace
+db0:keys=3,expires=1,avg_ttl=59000

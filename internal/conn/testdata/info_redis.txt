@@ -1,0 +1,83 @@
+# Server
+redis_version:7.4.1
+redis_git_sha1:00000000
+redis_git_dirty:0
+redis_build_id:9c7e3a0c2bb7f2a1
+redis_mode:standalone
+os:Linux 6.6.87.2-microsoft-standard-WSL2 x86_64
+arch_bits:64
+monotonic_clock:POSIX clock_gettime
+multiplexing_api:epoll
+atomicvar_api:c11-builtin
+gcc_version:12.2.0
+process_id:1
+process_supervised:no
+run_id:3f1c6d2b9a8e7f4c5d6e7f8091a2b3c4d5e6f708
+tcp_port:6379
+server_time_usec:1762560712345678
+uptime_in_seconds:86523
+uptime_in_days:1
+hz:10
+configured_hz:10
+lru_clock:9876543
+executable:/data/redis-server
+config_file:
+io_threads_active:0
+listener0:name=tcp,bind=*,bind=-::*,port=6379
+
+# Clients
+connected_clients:3
+cluster_connections:0
+maxclients:10000
+blocked_clients:0
+tracking_clients:0
+pubsub_clients:0
+
+# Memory
+used_memory:1258792
+used_memory_human:1.20M
+used_memory_rss:9437184
+used_memory_peak:1480432
+used_memory_peak_human:1.41M
+used_memory_peak_perc:85.03%
+maxmemory:0
+maxmemory_human:0B
+maxmemory_policy:noeviction
+mem_fragmentation_ratio:7.62
+mem_allocator:jemalloc-5.3.0
+
+# Persistence
+loading:0
+rdb_changes_since_last_save:42
+rdb_last_save_time:1762474189
+aof_enabled:0
+
+# Stats
+total_connections_received:57
+total_commands_processed:12034
+instantaneous_ops_per_sec:4
+keyspace_hits:3021
+keyspace_misses:118
+
+# Replication
+role:master
+connected_slaves:0
+master_failover_state:no-failover
+master_replid:8d2a4b6c8e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b
+master_repl_offset:0
+
+# CPU
+used_cpu_sys:12.345678
+used_cpu_user:23.456789
+
+# Modules
+
+# Errorstats
+errorstat_ERR:count=2
+
+# Cluster
+cluster_enabled:0
+
+# Keyspace
+db0:keys=128,expires=4,avg_ttl=3600000,subexpiry=0
+db2:keys=7,expires=0,avg_ttl=0,subexpiry=0
