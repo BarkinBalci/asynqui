@@ -13,21 +13,26 @@ We do **not** follow `golang-standards/project-layout` or Clean/hexagonal archit
 
 ```
 asynqui/
-├── cmd/asynqui/main.go        # tiny: calls run(ctx, args, getenv, stdout) and exits
+├── cmd/asynqui/
+│   ├── main.go                # tiny main; run(ctx, args, lookupEnv, stdout, stderr): wiring and lifecycle
+│   └── flags.go               # flags + ASYNQUI_* env, precedence
 ├── internal/
-│   ├── config/                # YAML load, ${ENV} interpolation, validation
-│   ├── conn/                  # Registry: name → inspector/client/redis; health; shared per-connection cache
+│   ├── config/                # YAML load, ${ENV} interpolation, defaults, validation
+│   ├── conn/                  # Registry: name → inspector/client/redis; health loop; per-connection cache
 │   ├── auth/                  # none | basic | proxy | oidc; session cookie
 │   ├── authz/                 # roles and per-connection policy: Role(user, conn), Can(...)
 │   └── web/
 │       ├── server.go          # NewServer(deps...) http.Handler
 │       ├── routes.go          # every URL, in one file, with its required role
-│       ├── handle_*.go        # one file per area: queues, tasks, servers, schedulers, info, auth
+│       ├── handle_*.go        # one file per area: queues, tasks, servers, schedulers, info, auth, health
 │       ├── middleware.go
+│       ├── format/            # the only place numbers, dates and durations are formatted
 │       ├── views/             # .templ: layout.templ, components/, pages/ (+ generated *_templ.go, committed)
-│       └── static/            # css, htmx, app.js, fonts, logo; embedded with go:embed
+│       └── static/            # files/: css, htmx, app.js, fonts, logo; //go:embed files
+├── tools/go.mod               # templ and golangci-lint, run with go tool -modfile=tools/go.mod
 ├── docs/
-├── config.example.yaml
+├── config.example.yaml        # every key; loads without env vars
+├── config.dev.yaml            # make run: localhost:6379, auth none, admin
 ├── Makefile
 └── .github/workflows/ci.yml
 ```
@@ -36,55 +41,81 @@ asynqui/
 
 ```
 cmd/asynqui → web → conn, auth, authz → config
-                 ↘ views (templ; plain view-model structs only)
+                 ↘ views → format
 ```
 
 - Nothing imports `web`.
-- `views` imports nothing of ours except its own components.
-- `config` imports no other internal package.
+- `views` imports only its own components and `web/format`.
+- `format` and `config` import no other internal package.
 
 ## Rules
 
-1. **No globals; dependencies are explicit.** Handlers are constructors that return `http.Handler`, e.g. `func handleQueueList(reg *conn.Registry, …) http.Handler`. Per-handler setup runs once, inside the closure.
+1. **No globals; dependencies are explicit.** The only package-level variables are `main.version` (set by `-ldflags`) and the embedded `static.FS`. Sentinel errors (`var ErrX = errors.New(...)`) count as constants and are allowed; nothing else is. Handlers are constructors that return `http.Handler`, e.g. `func handleQueueList(reg *conn.Registry, …) http.Handler`. Per-handler setup runs once, inside the closure.
 2. **`routes.go` is the map.** Every method, path and required role lives in that one file.
 3. **Packages are named for what they do.** No `utils`, `common`, `helpers`, `models` or `pkg/`.
 4. **Thin layers.** A handler fetches through `conn`, builds a plain view-model struct and renders a templ component. Templates never call Redis and contain no business logic.
 5. **One handler per page, for full pages and fragments.** When `HX-Request` is set (polling, sorting, paging), the handler renders only the fragment. Otherwise it renders the full page. Every URL works without htmx and is bookmarkable.
 6. **Small interfaces, declared where they're used,** and only where a test needs a fake.
-7. **Errors and logs:** wrap errors with `%w`, log with `log/slog` (structured), and give every Redis call a `context` with a timeout. Never log secrets.
-8. **CSS:** one hand-written stylesheet using CSS custom properties taken from the canvas style guide. Dark mode swaps tokens under `[data-theme=dark]`, and `[data-theme=system]` follows `prefers-color-scheme`. No Tailwind and no CSS build step.
-9. **Minimal dependencies.** Use the standard library where it is good enough (see Libraries).
+7. **Errors and logs:** wrap errors with `%w`, log with `log/slog` (structured), and run every Redis call under the request context. Never log secrets.
+8. **UI text lives in templ.** Go code never builds user-facing strings. It returns typed errors or codes (`errors.Is`/`errors.As`) that templates map to copy. English only.
+9. **Formatting goes through `web/format`.** No `fmt.Sprintf("%d")`, `time.Format` or `humanize` calls in handlers or templates outside it.
+10. **CSS:** one hand-written stylesheet using CSS custom properties taken from the canvas style guide. Dark mode swaps tokens under `[data-theme=dark]`, and `[data-theme=system]` follows `prefers-color-scheme`. No Tailwind and no CSS build step.
+11. **CSP-clean markup.** No inline `<script>`, `<style>`, `style=""` or `on*=` attributes; use classes, SVG attributes and `app.js`.
+12. **Minimal dependencies.** Use the standard library where it is good enough (see Libraries).
 
-## Wiring
+## Wiring and lifecycle
 
-All dependencies are built in `run()` and passed down explicitly. There is no DI framework (no wire, fx or dig).
+All dependencies are built in `run()` and passed down explicitly. There is no DI framework (no wire, fx or dig). Product rules for startup, shutdown and precedence are in [requirements.md §7](requirements.md#7-operational).
 
 ```go
-func run(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer) error {
-	cfg, err := config.Load(args, getenv)
-	if err != nil { return err }
-	reg := conn.NewRegistry(cfg.Connections, logger)
+func main() {
+	err := run(context.Background(), os.Args, os.LookupEnv, os.Stdout, os.Stderr)
+	// nil → exit 0; usageError → exit 2 (flag already printed); else print to stderr, exit 1
+}
+
+func run(ctx context.Context, args []string, lookupEnv func(string) (string, bool), stdout, stderr io.Writer) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	opts, err := parseFlags(args, lookupEnv, stderr) // flag > env; -h → opts.help, return nil
+	// --- fail fast: everything below can fail and runs before Listen ---
+	cfg, err := config.Load(opts.configPath, lookupEnv, overrides) // file > default; flags/env override
+	authn, err := auth.New(ctx, …)                               // OIDC discovery happens here
+	reg := conn.NewRegistry(cfg.Connections, logger)               // no Redis I/O, never fails on Redis
 	defer reg.Close()
-	authn, err := auth.New(ctx, cfg.Auth)
-	if err != nil { return err }
-	srv := web.NewServer(logger, cfg, reg, authn, authz.New(cfg.Authz))
-	// http.Server with Read/Write/Idle timeouts, ListenAndServe, graceful Shutdown on ctx.Done()
+	srv := &http.Server{
+		Handler:     web.NewServer(logger, cfg, reg, authn, policy, &ready),
+		BaseContext: func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
+		// ReadHeaderTimeout 10s, ReadTimeout 30s, WriteTimeout 60s, IdleTimeout 120s
+	}
+	ln, err := lc.Listen(ctx, "tcp", cfg.Server.Addr)
+	go srv.Serve(ln); go reg.RunHealthLoop(ctx)
+
+	<-ctx.Done() // or a Serve error
+	stop()                           // a second signal now force-quits
+	ready.Drain()                    // readiness 503, terminal
+	time.Sleep(cfg.Server.ShutdownDelay) // default 5s, 0 skips
+	srv.Shutdown(10s timeout)        // on timeout: srv.Close(), return error
 }
 ```
 
+- `lookupEnv` (not `getenv`) so interpolation can tell an unset variable from an empty one.
+- `overrides` carries only the flags seen by `fs.Visit` and the non-empty `ASYNQUI_*` variables, so the file wins over defaults but not over them.
+- `BaseContext` is detached from the signal: in-flight requests keep their context until `Shutdown` drains them.
+- `web.Readiness` has one transition, `Drain()`. Its zero value is ready.
+
 ## Routes
 
-Go 1.22+ `http.ServeMux` patterns only. There is no third-party router.
+Go 1.22+ `http.ServeMux` patterns only. There is no third-party router. Paths below are relative to `base_path`.
 
 ```go
 func addRoutes(mux *http.ServeMux, d deps) {
 	// probes (no auth, not logged)
-	mux.Handle("GET /health/liveness", handleLive())
-	mux.Handle("GET /health/readiness", handleReady(d))
+	mux.Handle("GET /health/liveness", handleLiveness())
+	mux.Handle("GET /health/readiness", handleReadiness(d.ready))
 
 	// auth
 	mux.Handle("GET /login", handleLogin(d))
-	mux.Handle("POST /login", handleLoginSubmit(d))
+	mux.Handle("POST /login", handleLoginSubmit(d))            // basic form; oidc "Sign in with SSO" starts the flow
 	mux.Handle("GET /auth/callback", handleOIDCCallback(d))
 	mux.Handle("POST /logout", handleLogout(d))
 
@@ -118,14 +149,20 @@ func addRoutes(mux *http.ServeMux, d deps) {
 }
 ```
 
-- **Wrappers:** `view`, `op` and `admin` require a session and resolve `{conn}`. A connection the user cannot see returns 404. An insufficient role returns 403.
-- **Global middleware**, applied once in `NewServer`: request logging (skipped for `/health/*`), panic recovery, `http.CrossOriginProtection`, authentication and security headers.
+- **Base path:** `NewServer` mounts the app mux on an outer mux at `<base>/` with `http.StripPrefix(base, …)`. Everything else under the outer mux is 404. With an empty base the app mux is the root.
+- **Links:** one helper, `d.url(segments ...string) string` (a method, so it does not shadow `net/url`), builds every link, redirect and cookie path: it prefixes `base_path` and escapes each segment with `url.PathEscape`. Templates never concatenate paths. Query strings use `url.Values`.
+- **Wrappers:** `view`, `op` and `admin` read the identity set by the auth middleware and resolve `{conn}`.
+  - No identity: `authn.Challenge` (303 to login, or 401 + `HX-Redirect` for htmx, or 401 for `proxy`/`none`).
+  - Hidden connection or unknown name: 404.
+  - Insufficient role: 403.
+- **Auth middleware** only identifies; it never rejects. A proxy request with untrusted identity headers is marked as rejected, and the wrappers answer it with 401.
+- **Global middleware**, applied once in `NewServer`, outermost first: request logging (skips `/health/*`) → panic recovery (logs `debug.Stack()`, writes 500 only if the header is unsent) → security headers (CSP, nosniff, Referrer-Policy) → `http.CrossOriginProtection` (+ `server.trusted_origins` via `AddTrustedOrigin`) → authentication → app mux.
 - **Gotchas:** `GET /static/` is a prefix match, while `GET /c/{conn}` is exact. `GET /{$}` matches only `/`. A more specific pattern wins regardless of registration order. Conflicting patterns panic at startup.
 
 ### Probes
 
 - `/health/liveness` answers "is the process alive?". If it fails, a restart might help.
-- `/health/readiness` answers "should this instance receive traffic?". It turns 503 when shutdown starts, so load balancers drain before the listener closes.
+- `/health/readiness` answers "should this instance receive traffic?". It is 200 while serving and turns 503 for good when shutdown starts, `shutdown_delay` before the listener closes, so load balancers drain first.
 - Neither checks Redis. A Redis outage is shown in the UI per connection; it must not make the orchestrator restart or unroute every replica.
 
 ## Libraries
@@ -136,7 +173,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 |---|---|
 | Queue data and actions | `github.com/hibiken/asynq`: Inspector for reads and actions, Client for scheduler "Run now" |
 | PING, INFO | `github.com/redis/go-redis/v9` (already a dependency of asynq) |
-| HTML components | `github.com/a-h/templ`; codegen runs through `go tool templ` |
+| HTML components | `github.com/a-h/templ`; codegen runs through `go tool -modfile=tools/go.mod templ` |
 | Config | `go.yaml.in/yaml/v3`, the maintained successor to the archived `gopkg.in/yaml.v3` |
 | OIDC | `github.com/coreos/go-oidc/v3` + `golang.org/x/oauth2` |
 | Basic-auth hashes | `golang.org/x/crypto/bcrypt` |
@@ -154,7 +191,9 @@ func addRoutes(mux *http.ServeMux, d deps) {
   - copy to clipboard
   - Gmail-style select-all
   - the theme toggle
-  - pausing polling while the tab is hidden
+  - polling timers, paused while the tab is hidden
+  - local-time rendering of `<time>` elements
+  - toasts
 
 **Test and tooling**
 
@@ -164,24 +203,28 @@ func addRoutes(mux *http.ServeMux, d deps) {
 | HTML assertions | `github.com/PuerkitoBio/goquery` |
 | Diffs | `github.com/google/go-cmp` (no assertion library) |
 | Browser smoke tests | `github.com/playwright-community/playwright-go` |
-| Lint | golangci-lint v2, pinned with a `tool` directive in `go.mod` |
+| Lint | golangci-lint v2, pinned with a `tool` directive in `tools/go.mod` |
 | Releases | GoReleaser |
 
 ## Data access and Redis load
 
-- **`conn.Registry`:** one per process. It holds a `*asynq.Inspector`, an `*asynq.Client` and a `redis.UniversalClient` per connection, all created at startup.
-- **Per-connection cache:** each snapshot (Overview stats, queue list) is cached for `min(refresh interval, 2s)` behind `singleflight`. N viewers polling the same connection cost one Redis round per interval.
-- **Concurrency:** connections are fetched in parallel, each with its own timeout (`redis.timeout`, default 2s). A failing connection renders "Connection failed" and does not block the page.
-- **Hidden tabs:** polling pauses (`hx-trigger="every 5s [document.visibilityState === 'visible']"` plus a `visibilitychange` refresh).
+- **`conn.Registry`:** one per process. It holds a `*asynq.Inspector`, an `*asynq.Client` and a `redis.UniversalClient` per connection, all created at startup without Redis I/O.
+- **Timeouts:** each connection's `dial_timeout` (5s), `read_timeout` (3s) and `write_timeout` (3s) go to its Redis client. There is no global Redis timeout. Every call also runs under the request context.
+- **Per-connection cache:** each snapshot (Overview stats, queue list, servers, …) is cached for **1s** behind `singleflight`, keyed by connection and snapshot. N viewers polling the same connection cost at most one Redis round per second.
+- **Health loop:** one goroutine per connection sends PING every 10s and stores the result (reachable, unreachable + error, or unknown before the first result). The Overview, sidebar and badges only read it. `handleRecheck` runs a check synchronously and stores it.
+- **Concurrency:** connections are fetched in parallel. A failing connection renders "Connection failed" and does not block the page.
 - **Overview cost:** `GetQueueInfo` per queue, plus `Servers()` per connection. Instance-wide INFO is fetched only by the Info page.
 
 ## Frontend conventions
 
 - **`views/layout.templ`:** the page shell (sidebar, top bar, theme attribute from the cookie).
-- **`views/components/`:** shared pieces (table, toolbar, badge, stat card, code block, dialog, sidebar). These map 1:1 to the style guide.
+- **`views/components/`:** shared pieces (table, toolbar, badge, stat card, code block, dialog, toast, sidebar, time). These map 1:1 to the style guide.
 - **`views/pages/`:** one file per page. Each takes one view-model struct.
 - **Forms:** actions are `<form method="post">`, enhanced with `hx-post`. Destructive and "all" actions go through a confirmation dialog.
-- **Assets:** served with content-hashed filenames and `Cache-Control: immutable`.
+- **htmx config** (set in `app.js`, before any request): `htmx.config.allowEval = false`, `htmx.config.includeIndicatorStyles = false` (it would inject an inline `<style>`). No `hx-on` or `js:` attributes.
+- **Polling:** `hx-trigger="every 5s [document.visibilityState === 'visible']"` cannot be used, because trigger filters need eval. `app.js` owns visibility gating instead: it starts the interval timers, skips ticks while `document.hidden`, and fires one refresh on `visibilitychange` to visible. With "Off", no timer runs.
+- **Time:** the `time` component renders `<time datetime="RFC3339 UTC">` with the absolute UTC text from `format`. `app.js` rewrites it to local relative text with the absolute local time in `title`, and re-renders relative text on each tick.
+- **Assets:** served with content-hashed filenames and `Cache-Control: immutable`. `//go:embed files` (without `all:`), so dotfiles are never embedded.
 
 ## Testing
 
@@ -201,14 +244,23 @@ func addRoutes(mux *http.ServeMux, d deps) {
 Other conventions:
 - **No mock frameworks.** Use small hand-written fakes for error paths and a fake OIDC provider built on `httptest.Server`.
 - **Time:** inject `now func() time.Time` where output depends on the clock.
-- **Style:** tests are table-driven. CI runs `go test -race`.
+- **Style:** tests are table-driven. Subtests never share mutable state: each builds its own fixtures, so any of them can run alone or in parallel.
+- **`run()`** has an end-to-end test on `127.0.0.1:0`: it reads the bound address from the "listening" log line, cancels the context and checks that readiness is 503 while the listener still serves during `shutdown_delay`, then that the listener closes and `run` returns nil.
+- **Race detector:** CI runs `go test -race`. It needs cgo and a C compiler, so locally it is `make test-race`; `make test` runs without it.
 - **Out of scope for v1:** pixel-diff visual regression.
+
+## Tooling and CI
+
+- **Tools module:** `tools/go.mod` pins templ and golangci-lint with `tool` directives. Run them as `go tool -modfile=tools/go.mod <tool>`; the main `go.mod` lists only runtime and test dependencies.
+- **Go version:** `go 1.26.0` with `toolchain go1.26.10` in both `go.mod` files. CI installs `1.26.x`.
+- **Makefile:** `make help` lists the targets (`generate`, `lint`, `test`, `test-race`, `run`, `build`, `tidy`).
+- **CI** (`.github/workflows/ci.yml`, actions pinned by commit SHA): `go mod tidy -diff` for both modules, templ generate + `git status --porcelain` must be empty, vet, golangci-lint, `go test -race`, static build.
 
 ## Documentation plan
 
 - **README.md:** what asynqui is, a screenshot, and the quickstart.
 - **`config.example.yaml`:** every option with comments. CI checks that it parses and validates.
-- **`docs/`:** configuration, authentication, authorization, deployment, architecture (this file), requirements and contributing.
+- **`docs/`:** requirements (behaviour, config reference), architecture (this file) and [deployment](deployment.md) now; authentication, authorization and contributing guides later.
 - **`CHANGELOG.md`:** generated by GoReleaser.
 - **pkg.go.dev:** shows only the `cmd/asynqui` package comment, which points to the README.
 - **A docs site:** Hugo on GitHub Pages, added only once `docs/` outgrows plain Markdown.

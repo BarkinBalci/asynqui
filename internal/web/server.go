@@ -12,6 +12,7 @@ func NewServer(logger *slog.Logger, ready *Readiness) http.Handler {
 	addRoutes(mux, ready)
 
 	var h http.Handler = mux
+	h = securityHeaders(h)
 	h = recoverPanics(logger, h)
 	h = logRequests(logger, h)
 	return h

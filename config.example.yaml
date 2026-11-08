@@ -1,90 +1,105 @@
-# asynqui example configuration. Every option is shown with its default.
-# Values may reference environment variables as ${NAME}; a missing variable is
-# a startup error. Run with:  asynqui -config config.example.yaml
+# asynqui example configuration. Every key is shown with its default, and the
+# file loads as is, without any environment variables:
+#   asynqui -config config.example.yaml
+# Full reference: docs/requirements.md §8.
+#
+# Interpolation, applied to each parsed scalar value:
+#   ${NAME}           value of NAME; unset is a startup error ("" is used as is)
+#   ${NAME:-default}  default when NAME is unset
+#   $$                a literal "$"; any other "$" is kept, so bcrypt hashes are safe
+# Precedence: flag > env > file > default. Only -config/ASYNQUI_CONFIG,
+# -addr/ASYNQUI_ADDR and -log-level/ASYNQUI_LOG_LEVEL have a flag and env var.
 
-# Listen address (overridden by -addr or ASYNQUI_ADDR).
-addr: ":8080"
-
-# Serve the UI under a sub-path behind a reverse proxy, e.g. "/asynq".
-base_path: ""
+server:
+  addr: ":8080"
+  # Serve under a sub-path, e.g. "/asynq". Applies to every route, including
+  # /health/* and /static/, and to cookie paths.
+  base_path: ""
+  # Readiness reports 503 for this long before the listener closes. 0 disables.
+  # shutdown_delay + 10s must stay below terminationGracePeriodSeconds.
+  shutdown_delay: 5s
+  # Extra origins allowed to send POSTs (CSRF protection), e.g.
+  # ["https://ops.example.com"]. The proxy must preserve Host.
+  trusted_origins: []
 
 log:
   level: info            # debug | info | warn | error
 
-# Default auto-refresh interval for new visitors: off | 2s | 5s | 10s.
+# Initial auto-refresh for new visitors: off | 2s | 5s | 10s.
 refresh:
   default: 5s
 
 # Check GitHub releases (cached 24h) to show the update dot in the sidebar.
 update_check: true
 
-# Timeouts applied to every Redis call made by asynqui.
-redis:
-  timeout: 2s
-
-# One connection = one Redis address + logical DB. Names are required, must be
-# unique, and are used in URLs and authorization rules
-# (lowercase letters, digits, ".", "_", "-").
+# One connection = one Redis address + logical DB. Names are required, unique,
+# match ^[a-z0-9][a-z0-9._-]{0,62}$, and are used in URLs and authz rules.
 connections:
-  - name: main
-    addr: redis-main.internal:6379
+  - name: local
+    addr: localhost:6379
     db: 0
-    username: asynq-ui              # Redis ACL user (optional)
-    password: ${MAIN_REDIS_PASSWORD} # optional
+    username: ""                          # Redis ACL user
+    password: ${LOCAL_REDIS_PASSWORD:-}   # empty when the variable is unset
     tls:
-      enabled: true
-      ca_file: /etc/asynqui/ca.pem   # optional; system roots when empty
-      cert_file: ""                  # client certificate (mutual TLS), optional
+      enabled: false
+      ca_file: ""                # empty: system roots
+      cert_file: ""              # client certificate (mutual TLS); with key_file
       key_file: ""
-      server_name: ""                # override SNI / verification name
+      server_name: ""            # overrides SNI and the verified name
       insecure_skip_verify: false
     dial_timeout: 5s
     read_timeout: 3s
     write_timeout: 3s
 
-  - name: main-jobs
-    addr: redis-main.internal:6379
+  # Same instance, another logical DB.
+  - name: local-jobs
+    addr: localhost:6379
     db: 3
 
-  - name: local
-    addr: localhost:6379
-    db: 1
-
 # Authentication provider: none | basic | proxy | oidc.
+# Keep inactive provider blocks commented out: their ${...} values are still
+# interpolated, and an unset variable is an error.
 auth:
   provider: none
 
-  # Session cookie keys (required unless provider is none). Generate with:
-  #   openssl rand -hex 32
-  session:
-    hash_key: ${ASYNQUI_SESSION_HASH_KEY}
-    block_key: ${ASYNQUI_SESSION_BLOCK_KEY}
-    ttl: 12h
+  # Session cookie (basic and oidc only). Hex-encoded keys:
+  #   hash_key  32 or 64 bytes:  openssl rand -hex 32
+  #   block_key 32 bytes:        openssl rand -hex 32
+  # Sessions cannot be revoked server-side; rotating keys (without keeping the
+  # old pair) signs everyone out.
+  # session:
+  #   hash_key: ${ASYNQUI_SESSION_HASH_KEY}
+  #   block_key: ${ASYNQUI_SESSION_BLOCK_KEY}
+  #   previous_keys: []      # [{hash_key: ..., block_key: ...}], decode only
+  #   ttl: 12h               # absolute
+  #   cookie_secure: true    # false only for local plain http
 
-  # provider: basic. Passwords are bcrypt hashes:
+  # provider: basic. bcrypt hashes (max 72-byte passwords):
   #   htpasswd -nbBC 12 "" 'secret' | cut -d: -f2
-  basic:
-    users:
-      - username: jdoe
-        password_hash: ${JDOE_PASSWORD_HASH}
-        groups: [payments-team]
+  # basic:
+  #   users:
+  #     - username: jdoe
+  #       password_hash: "$2y$12$<53 chars from htpasswd>"
+  #       groups: [payments-team]
 
-  # provider: proxy. Identity headers are trusted only from these CIDRs.
-  proxy:
-    user_header: X-Forwarded-User
-    groups_header: X-Forwarded-Groups  # comma-separated, optional
-    trusted_proxies: [10.0.0.0/8]
+  # provider: proxy. Identity headers are trusted only from r.RemoteAddr in
+  # trusted_proxies; see docs/deployment.md for header stripping.
+  # proxy:
+  #   user_header: X-Forwarded-User
+  #   groups_header: ""              # e.g. X-Forwarded-Groups (comma-separated)
+  #   trusted_proxies: [10.0.0.10/32]
+  #   logout_url: ""                 # empty hides Sign out
 
-  # provider: oidc. Authorization code flow with PKCE.
-  # Register the redirect URL https://<host><base_path>/auth/callback.
-  oidc:
-    issuer: https://login.example.com/realms/acme
-    client_id: asynqui
-    client_secret: ${ASYNQUI_OIDC_CLIENT_SECRET}
-    redirect_url: https://asynqui.example.com/auth/callback
-    scopes: [openid, profile, email, groups]
-    username_claim: email
-    groups_claim: groups
+  # provider: oidc. Authorization code flow with PKCE (S256).
+  # Register https://<host><base_path>/auth/callback at the IdP.
+  # oidc:
+  #   issuer: https://login.example.com/realms/acme
+  #   client_id: asynqui
+  #   client_secret: ${ASYNQUI_OIDC_CLIENT_SECRET}   # empty for public clients
+  #   redirect_url: https://asynqui.example.com/auth/callback
+  #   scopes: [openid, profile, email]               # add groups if your IdP needs it
+  #   username_claim: email                          # email requires email_verified
+  #   groups_claim: groups
 
 # Roles: viewer < operator < admin, scoped per connection.
 #   viewer:   read everything
@@ -93,14 +108,18 @@ auth:
 # A user's role on a connection is the highest of `default` and every matching
 # binding. Connections with no role are hidden from that user.
 authz:
-  default: viewer          # viewer | operator | admin | none  (admin when auth.provider is none)
-  bindings:
-    - groups: [platform]
-      role: admin
-      connections: ["*"]
-    - groups: [payments-team]
-      role: operator
-      connections: ["main", "main-*"]
-    - users: [jdoe@example.com]
-      role: operator
-      connections: ["local"]
+  # Default: viewer with provider none, none with every other provider.
+  # Set admin for full control without login.
+  default: viewer          # none | viewer | operator | admin
+  # Users match case-insensitively, groups exactly. With provider none nobody
+  # has a user or groups, so bindings never match.
+  bindings: []
+  #  - groups: [platform]
+  #    role: admin
+  #    connections: ["*"]
+  #  - groups: [payments-team]
+  #    role: operator
+  #    connections: ["local", "local-*"]
+  #  - users: [jdoe@example.com]
+  #    role: operator
+  #    connections: ["local-jobs"]

@@ -1,28 +1,35 @@
-# asynqui developer tasks. Tools are pinned in go.mod (tool directives).
+# asynqui developer tasks. Tools (templ, golangci-lint) are pinned in
+# tools/go.mod so the main go.mod stays lean.
 GO      ?= go
+TOOL    := $(GO) tool -modfile=tools/go.mod
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: generate lint test test-short run build tidy
+.DEFAULT_GOAL := help
+.PHONY: help generate lint test test-race run build tidy
+
+help: ## List targets
+	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 generate: ## Generate templ code
-	$(GO) tool templ generate
+	$(TOOL) templ generate
 
 lint: ## Run go vet and golangci-lint
 	$(GO) vet ./...
-	$(GO) tool golangci-lint run
+	$(TOOL) golangci-lint run
 
-test: ## Run all tests (needs Docker for Redis-backed tests)
-	$(GO) test -race ./...
+test: ## Run all tests (Redis-backed tests need Docker)
+	$(GO) test ./...
 
-test-short: ## Run tests that need no Docker
-	$(GO) test -short ./...
+test-race: ## Run all tests with the race detector (needs cgo and a C compiler)
+	CGO_ENABLED=1 $(GO) test -race ./...
 
-run: generate ## Run locally with config.example.yaml
-	$(GO) run ./cmd/asynqui -config config.example.yaml
+run: generate ## Run locally against localhost:6379 with config.dev.yaml
+	$(GO) run ./cmd/asynqui -config config.dev.yaml
 
-build: generate ## Build the binary into bin/
+build: generate ## Build the static binary into bin/
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o bin/asynqui ./cmd/asynqui
 
-tidy:
+tidy: ## Tidy go.mod and tools/go.mod
 	$(GO) mod tidy
+	cd tools && $(GO) mod tidy

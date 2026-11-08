@@ -12,18 +12,29 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          # Oldest supported minor; go.mod's toolchain line pins the patch floor.
+          go-version: '1.26.x'
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+      - name: go mod tidy leaves no diff
+        run: |
+          go mod tidy -diff
+          (cd tools && go mod tidy -diff)
       - name: templ generate is up to date
         run: |
-          go tool templ generate
-          git diff --exit-code
+          go tool -modfile=tools/go.mod templ generate
+          git status --porcelain
+          test -z "$(git status --porcelain)"
       - name: vet
         run: go vet ./...
       - name: lint
-        run: go tool golangci-lint run
+        run: go tool -modfile=tools/go.mod golangci-lint run
       - name: test
-        # ubuntu runners ship Docker, which testcontainers uses for Redis.
+        # ubuntu runners ship Docker (testcontainers) and gcc (-race needs cgo).
         run: go test -race ./...
+      - name: build
+        run: CGO_ENABLED=0 go build -trimpath ./cmd/asynqui

@@ -1,0 +1,8 @@
+# Minimal config for `make run`: one local Redis, no login, full control.
+connections:
+  - name: local
+    addr: localhost:6379
+auth:
+  provider: none
+authz:
+  default: admin

@@ -2,7 +2,7 @@
 
 asynqui is an open-source web dashboard for [asynq](https://github.com/hibiken/asynq) that covers **several Redis instances and logical databases** in a single deployment. v1 targets feature parity with asynqmon. The visual reference is the design canvas: <https://claude.ai/artifact/HbfWPswwsqyV498Lrfpfnu>.
 
-This document is the source of truth for behaviour. When this file and the canvas disagree, this file wins; update the canvas afterwards.
+This document is the source of truth for behaviour. When this file and the canvas disagree, this file wins; update the canvas afterwards. Every config key and default is listed in §8.
 
 ## 1. Scope
 
@@ -24,46 +24,95 @@ This document is the source of truth for behaviour. When this file and the canva
 - Per-queue RBAC. The config shape leaves room for it later.
 - Editing scheduler entries. asynq has no API for it.
 - Connection env tags or colours.
+- Localisation. The UI is English only, with no i18n framework.
+- Server-side session revocation (§3).
 
 ## 2. Connections
 
-- **Config only:** connections are defined in YAML with `${ENV}` interpolation and are read-only in the UI.
+- **Config only:** connections are defined in YAML (§8) and are read-only in the UI.
 - **What a connection is:** a Redis address plus a logical DB, plus a **name**.
-- **Name:** required and unique. Duplicates make the binary refuse to start, with an error that names both entries. Names must be URL-safe: `^[a-z0-9][a-z0-9._-]{0,62}$`. The name is used in URLs and RBAC.
+- **Name:** required and unique. Duplicates make the binary refuse to start, with an error that names both entries. Names must match `^[a-z0-9][a-z0-9._-]{0,62}$`. The name is used in URLs and RBAC.
 - **Standalone Redis only.** Supported options:
   - TLS: on/off, CA file, client cert/key, `insecure_skip_verify`, server name
   - ACL username and password
-  - dial/read/write timeouts
+  - `dial_timeout` (default 5s), `read_timeout` (3s), `write_timeout` (3s), per connection. There is no global Redis timeout.
 - **Backend detection:** auto-detected from `INFO server`. If `server_name:valkey` is present, label it "Valkey info" and show `valkey_version` with "Redis-compatible `redis_version`" underneath. Otherwise label it "Redis info" and show `redis_version`.
 - **Where the DB number appears:** only in the sidebar's second line, `host:port/db`. Breadcrumbs, headings, titles and Overview cards show the name only.
-- **Health:** a connection is *reachable* if a PING succeeds within the timeout. Otherwise it is *unreachable*, and the error text is kept for display.
+- **Health:**
+  - A background loop sends PING to every connection every 10s, bounded by that connection's timeouts. The first round starts at startup without blocking it.
+  - *Reachable* means the last PING succeeded. *Unreachable* means it failed; the error text is kept for display.
+  - Until the first PING finishes, the connection is *unknown*: muted dot, no badge.
+  - The Overview, sidebar and page badges read the cached result and never PING themselves.
+  - "Retry now" (§6.1) runs a check immediately and updates the cache.
+- **Load:** see §7 "Redis load".
 
 ## 3. Authentication
 
-`auth.provider` is one of:
+`auth.provider` is one of `none` (default), `basic`, `proxy` or `oidc`. Startup fails on any provider error, including OIDC discovery (§7 "Startup").
 
-| Provider | Behaviour |
-|---|---|
-| `none` | No login. Everyone gets the `authz.default` role, which defaults to `admin` when the provider is `none`. The account menu is hidden. |
-| `basic` | Login form (username + password). Users are listed in config with **bcrypt** password hashes. |
-| `proxy` | Trust identity headers from a reverse proxy: a user header, plus an optional groups header (comma-separated). Only accept them from configured trusted proxy CIDRs. |
-| `oidc` | Authorization-code flow with PKCE, callback `GET /auth/callback`. Configured with issuer, client ID and secret, scopes, and the claim names for username (default `email`) and groups (default `groups`). |
+### Common rules
+- **Middleware:** the authentication middleware only identifies the user. It never rejects a request. The route wrappers (`view`, `op`, `admin`) decide:
+  - no identity, `basic`/`oidc`: 303 to `<base>/login?next=<path>`; for htmx requests, 401 with `HX-Redirect: <base>/login?next=<current page>` so the whole page navigates instead of swapping in a fragment.
+  - no identity, or rejected identity headers, `proxy`: 401.
+  - Probes and `/static/` need no identity.
+- **Return-to (`next`):** accepted only if it is a same-origin relative path under `base_path` (starts with `<base>/`, not `//`, no scheme or host). Anything else falls back to `<base>/`.
+- **Logout:** `POST /logout`. `basic` and `oidc` clear the session cookie and redirect to the login page (OIDC: local logout only). `proxy` redirects to `auth.proxy.logout_url`.
+- **Sign out visibility:** shown for `basic` and `oidc`; for `proxy` only when `logout_url` is set; never for `none`.
 
-- **Sessions:** a signed and encrypted cookie (`gorilla/securecookie`). Keys come from config/env, are required for every provider except `none`, and are never auto-generated. Cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` when served over HTTPS. Session TTL is configurable, default 12h.
-- **Logout:** `POST /logout`. It clears the session and, for OIDC, does a local logout only.
-- **Login page:**
-  - The username/password form appears only for `basic`.
-  - The "Sign in with SSO" button appears only for `oidc`.
-  - Invalid credentials show "Invalid username or password."
-  - The version is shown under the card.
+### `none`
+- No login and no session. Every request is anonymous, so bindings never match and everyone gets `authz.default`.
+- `authz.default` is **viewer** unless set explicitly. For full control set `authz.default: admin`.
+- The account menu is hidden.
+- Startup logs a WARN when the listen address is not loopback (empty host, `0.0.0.0`, `::` or any non-loopback IP or hostname other than `localhost`).
+
+### `basic`
+- Login form (username + password). Users are listed in config with **bcrypt** hashes and optional `groups`.
+- Unknown usernames are compared against a dummy hash, so a miss costs the same as a hit.
+- **Rate limit:** 5 `POST /login` attempts per minute per client IP (`r.RemoteAddr`). Further attempts get 429 and "Too many attempts. Try again later." Behind a proxy every user shares the proxy's IP.
+- bcrypt reads at most 72 bytes. Passwords longer than 72 bytes are rejected at login.
+- Every request re-checks the session's user against the current config: a user removed from config is signed out, and groups always come from config.
+- Invalid credentials show "Invalid username or password."
+
+### `proxy`
+- Identity comes from request headers set by a reverse proxy: `user_header` (default `X-Forwarded-User`) and optional `groups_header` (default unset).
+- **Trust** is decided from `r.RemoteAddr` only, against `trusted_proxies` (CIDRs or IPs, required). `X-Forwarded-For` is never consulted.
+- A request from an untrusted IP that carries either identity header gets 401.
+- A trusted request with a missing or empty user header gets 401.
+- Groups: split on `,`, trim spaces, drop empty entries.
+- Identity is read on every request. There is no session cookie, so `auth.session` is not needed.
+- There is no login page.
+- Header stripping and network isolation are the deployer's job: see [deployment.md](deployment.md).
+
+### `oidc`
+- Authorization-code flow with **PKCE (S256)**. "Sign in with SSO" posts to `POST /login`, which redirects to the IdP. The IdP returns to `GET /auth/callback`.
+- **Flow cookie:** state, nonce, PKCE verifier and `next` are kept in an encrypted cookie `asynqui_oidc`: 10 minute lifetime, `Path=<base>/auth/callback`, `HttpOnly`, `SameSite=Lax`, `Secure` per `cookie_secure`. It is deleted after the callback.
+- **ID token:** verified with go-oidc's Verifier (issuer, audience = `client_id`, expiry) and the nonce.
+- **Username:** the `username_claim` (default `email`). When it is `email`, `email_verified` must be `true`, otherwise login fails.
+- **Groups:** read from `groups_claim` (default `groups`) in the ID token, falling back to the userinfo endpoint. The claim may be a string or an array of strings. On a groups overage (`_claim_names` / `_claim_sources`), log a WARN and treat groups as empty.
+- **Scopes:** default `openid profile email`. `groups` is not a default; add it if your IdP needs it. `openid` is always sent.
+- `issuer`, `client_id` and `redirect_url` are required. `client_secret` is optional (public clients).
+- **Session size:** the session keeps only groups referenced by some `authz.bindings` entry. If the encoded cookie would exceed 3800 bytes, login is refused with "Sign-in failed: too many groups for a session cookie."
+- Login failures show "Single sign-on failed." on the login page; details go to the log.
+
+### Session cookie (`basic`, `oidc`)
+- Name `asynqui_session`, `Path=<base_path>` (`/` when `base_path` is empty), `HttpOnly`, `SameSite=Lax`, `Secure` unless `auth.session.cookie_secure: false` (default `true`; set `false` only for local plain HTTP).
+- Signed and encrypted with `gorilla/securecookie`. Keys are hex in config: `hash_key` decodes to 32 or 64 bytes, `block_key` to 32 bytes. Both are validated at startup and never auto-generated.
+- **Rotation:** `previous_keys` (list of `{hash_key, block_key}`) still decode existing cookies; new cookies always use the current pair (`securecookie.CodecsFromPairs`).
+- **TTL:** absolute from sign-in, default 12h. There is no sliding renewal.
+- **No server-side revocation.** Signing out clears the cookie in that browser only. To invalidate every session, rotate the keys without keeping the old pair in `previous_keys`. For `basic`, removing a user from config also signs them out.
+
+### Login page
+- The username/password form appears only for `basic`.
+- The "Sign in with SSO" button appears only for `oidc`.
+- The version is shown under the card.
 
 ## 4. Authorization
 
-Roles are ordered **viewer < operator < admin** and scoped per connection.
+Roles are ordered **viewer < operator < admin** and scoped per connection. `none` as a role means no access.
 
 ```yaml
 authz:
-  default: viewer          # role for any authenticated user with no binding; "none" = no access
+  default: none            # role for every user on every connection; see defaults below
   bindings:
     - groups: [platform]
       role: admin
@@ -73,11 +122,14 @@ authz:
       connections: ["billing", "main*"]
 ```
 
-- **Matching:** a binding matches if the user is in `users`, or shares a group with `groups`. `connections` takes globs (`path.Match` syntax).
+- **Default:** `authz.default` applies to every identified user on every connection.
+  - `auth.provider: none`: defaults to **viewer**.
+  - `basic`, `proxy`, `oidc`: defaults to **none**, so access comes only from bindings.
+- **Matching:** a binding matches if the username is in `users` (case-insensitive) or the user has a group in `groups` (exact, case-sensitive). `connections` takes globs (`path.Match` syntax).
 - **Effective role:** for each connection, the highest role among the matching bindings and `default`.
-- **Startup validation:** the binary fails to start on an unknown role, an empty `connections` list, an invalid glob, or a binding with neither users nor groups.
+- **Startup validation:** the binary fails to start on an unknown role, an empty `connections` list, an invalid glob, or a binding with neither users nor groups. A binding's `role` cannot be `none`.
 - **Hidden connections:** a connection where the user's effective role is none is invisible to them everywhere (sidebar, Overview, counts). Its URLs return 404, not 403.
-- **Server enforcement:** every action is checked on the server. Disabled buttons are only a UI hint.
+- **Server enforcement:** every action is checked on the server. An insufficient role returns 403. Disabled buttons are only a UI hint.
 
 | Capability | viewer | operator | admin |
 |---|---|---|---|
@@ -117,7 +169,7 @@ authz:
 ### Top bar (every page, every control 36px tall)
 - **Breadcrumbs:** `Overview / {conn} / {section} / {item}`. Every segment except the last is a link.
 - **"Updated Ns ago":** muted text.
-- **Auto refresh:** a segmented control with Off / 2s / 5s / 10s. The default comes from config (`refresh.default`, 5s). The choice is stored in a cookie.
+- **Auto refresh:** a segmented control with Off / 2s / 5s / 10s. The default comes from config (`refresh.default`, 5s). The choice is stored in a cookie. "Off" means no polling requests at all.
 - **Theme:** a segmented control with three icon buttons (System, the default; Light; Dark). The choice is stored in a cookie, and the server renders the `data-theme` attribute so there is no flash on load.
 - **Account menu:** `{user}` followed by the muted role for the current connection (the highest role on the Overview), then ▾. The menu holds Sign out. Hidden when auth is `none`.
 
@@ -125,18 +177,25 @@ authz:
 - htmx re-fetches only the data regions of the page at the chosen interval.
 - Polling pauses while the tab is hidden and resumes immediately when the tab is visible again.
 - It never resets the user's selection, sort, page or open dialog.
+- Data is served from the per-connection 1s cache (§7 "Redis load").
 
 ### Copy and visual rules
 - **Minimal copy:** no helper or explanatory text. Empty states are one short line.
 - **No "·" separators anywhere.** Separate items with spacing, weight and muted colour.
 - **Links:** always look like links (accent `#3B5BDB` light, `#7C93F5` dark). This includes whole-row links.
 - **Monospace** (JetBrains Mono) only for IDs, cron specs, payloads, options, errors, addresses and INFO output. Everything else uses Inter.
-- **Shortened IDs:** the first 8-4 hex groups plus "…" (e.g. `c3e81b90-04aa…`) everywhere an ID is shortened, with the full ID in `title`.
-- **Times:** relative ("3m ago", "in 2m 40s") with the absolute time in `title`, or absolute as "Nov 8, 00:11:52" where the design shows it.
-- **Daily counters:** "today" means asynq's UTC calendar day. The label is plain "today".
+- **Shortened IDs:** a UUID shows its first 8-4 hex groups plus "…" (e.g. `c3e81b90-04aa…`). Any other ID longer than 12 characters shows its first 12 characters plus "…"; shorter IDs are shown whole. The full ID is always in `title` and in what Copy copies.
 - **Code blocks:** dark block with a copy button pinned top-right, outside the scrolling area (`scrollbar-gutter: stable`).
 - **Fonts:** self-hosted and embedded. No requests to third-party domains.
 - **Tokens:** colours, spacing and type follow the canvas "Style guide" board. Dark mode swaps CSS custom properties.
+- **Errors:** an action that fails (e.g. a duplicate task) shows its error in a toast.
+
+### Localization and time
+- **English only** in v1. No i18n framework.
+- **UI strings** live only in `.templ` files. Go code never builds user-facing text; it returns typed errors or codes that templates map to copy.
+- **Formatting:** every number, date and duration is formatted by `internal/web/format`.
+- **Timestamps:** rendered as `<time datetime="2026-11-08T00:11:52Z">` (RFC 3339, UTC) whose text is the absolute UTC time ("Nov 8, 00:11:52"). `app.js` converts each to the viewer's local time zone: relative text ("3m ago", "in 2m 40s") with the absolute local time in `title`, or the absolute local time where the design shows an absolute time. Without JS the UTC absolute time stays.
+- **Daily counters:** "today" means asynq's UTC calendar day. The label is plain "today", with no UTC note.
 
 ### Tables
 1. **Select, then act.** A checkbox column plus a toolbar showing "N selected" and the bulk action buttons. There are no per-row action buttons or kebab menus. Read-only tables have no checkboxes.
@@ -154,11 +213,11 @@ authz:
 
 ## 6. Pages
 
-URLs follow docs/architecture.md. Every page works without JavaScript for reading. htmx enhances it with polling, partial swaps and selection.
+URLs follow docs/architecture.md and are shown here without `base_path`. Every link the server generates carries `base_path`, and every path segment (connection, queue, task, server and entry IDs) is escaped with `url.PathEscape`. Every page works without JavaScript for reading. htmx enhances it with polling, partial swaps and selection.
 
 ### 6.1 Overview `/`
 - **Heading:** "All connections". A red "N unreachable" badge appears when N > 0.
-- **Cards:** a grid with one card per visible connection, in config order.
+- **Cards:** a grid with one card per visible connection, in config order. Health comes from the cached background check (§2).
 - **Reachable card:**
   - name (title)
   - the user's role on that connection (chip)
@@ -169,7 +228,8 @@ URLs follow docs/architecture.md. Every page works without JavaScript for readin
 - **Unreachable card:**
   - name, role chip and address
   - "Connection failed", with the error in a mono block
-  - footer: an "Unreachable" badge and a "Retry now" button that re-checks health immediately
+  - footer: an "Unreachable" badge and a "Retry now" button (`POST /c/{conn}/recheck`, viewer) that runs a health check immediately and re-renders the card
+- **Unknown card** (first check still running): name, role chip, address and a muted "Checking" line, no badge.
 - **Layout:** all card footers line up.
 
 ### 6.2 Connection → Queues `/c/{conn}`
@@ -263,6 +323,7 @@ URLs follow docs/architecture.md. Every page works without JavaScript for readin
 - **Run now:**
   - A confirmation dialog first.
   - It enqueues a **one-off copy** of the entry's task (type, payload and options) via `asynq.Client`. It never touches the scheduler.
+  - The `TaskID` option is stripped, so each copy gets a fresh ID. `Unique` is kept; on `ErrDuplicateTask` the error is shown in a toast and nothing is enqueued.
   - Result notice: "Enqueued task {shortId} in {queue}" with "View task →". For several entries: "Enqueued N tasks".
   - These tasks do not appear in Enqueue history, because only the scheduler process writes it.
 
@@ -299,16 +360,127 @@ URLs follow docs/architecture.md. Every page works without JavaScript for readin
 
 ## 7. Operational
 
-- **Binary:** a single static binary.
-  - Flags: `-config path` (default `asynqui.yaml`) and `-addr` (default `:8080`). Env vars override flags.
-  - Graceful shutdown on SIGINT/SIGTERM, with a 10s timeout.
-- **Probes:** both need no auth, return plain text (`ok` or the reason) and are excluded from request logs (everything under `/health/`).
-  - `GET /health/liveness` returns 200 whenever the process is running. It has no dependency checks.
-  - `GET /health/readiness` returns 200 once startup has finished: config loaded and the auth provider initialised (e.g. OIDC discovery succeeded). It returns 503 as soon as graceful shutdown begins, so load balancers drain traffic. It **never** depends on Redis connection health.
-- **Base path:** `base_path` config, so the app can be served under a sub-path behind a proxy.
-- **Logging:** structured JSON via `log/slog`. Level is configurable. Secrets are never logged.
-- **Redis load:**
-  - One shared fetch per connection per refresh interval, whatever the number of viewers (cache + singleflight).
-  - Connections are fetched in parallel, each with its own timeout.
-  - One slow connection never blocks a page.
-- **Releases:** GoReleaser builds linux/darwin/windows for amd64 and arm64, plus a multi-arch Docker image (distroless).
+### Command line
+- A single static binary.
+- **Flags:** `-config`, `-addr`, `-log-level`. `-h` prints usage to stderr and exits 0.
+- **Exit codes:** 0 after a clean shutdown or `-h`; 1 on a startup, serve or shutdown error (message on stderr); 2 on a usage error (unknown flag or positional argument).
+
+### Precedence
+**flag > env > file > default.** A flag counts as set only if it appears on the command line (detected with `flag.FlagSet.Visit`), even when its value equals the default. An `ASYNQUI_*` variable that is set but empty counts as unset.
+
+| Setting | Flag | Env | File key | Default |
+|---|---|---|---|---|
+| Config file path | `-config` | `ASYNQUI_CONFIG` | — | `asynqui.yaml` |
+| Listen address | `-addr` | `ASYNQUI_ADDR` | `server.addr` | `:8080` |
+| Log level | `-log-level` | `ASYNQUI_LOG_LEVEL` | `log.level` | `info` |
+
+These are the only environment variables asynqui reads directly. Everything else comes from the file, which can pull values from any variable through interpolation (§8).
+
+### Startup (fail fast)
+1. Parse flags and env.
+2. Load, interpolate and validate the config file. A missing file is an error.
+3. Initialise authentication, including OIDC discovery, and the authorization policy.
+4. Build the connection registry. This opens no Redis connections and never fails on Redis being down.
+5. Open the listener and start the health loop.
+
+Any error in steps 1–5 is printed to stderr and exits 1. The process never serves in a half-initialised state.
+
+### Shutdown
+On the first SIGINT or SIGTERM:
+1. Signal handling is reset, so a **second signal force-quits** immediately.
+2. Readiness turns 503 `shutting down`. This is terminal.
+3. Wait `server.shutdown_delay` (default 5s; `0` skips the wait). The listener stays open and serves normally, so load balancers see the 503 and stop routing first.
+4. `http.Server.Shutdown` with a **10s** timeout: the listener closes and in-flight requests finish. Request contexts are not canceled by the signal.
+5. If the timeout expires, remaining connections are force-closed and the process exits 1.
+
+`shutdown_delay` + 10s must stay below the orchestrator's grace period (Kubernetes `terminationGracePeriodSeconds`; the default 30s fits the default 15s). See [deployment.md](deployment.md).
+
+### Probes
+Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control: no-store`, live under `<base>/health/` and are excluded from request logs.
+- `GET <base>/health/liveness`: 200 whenever the process can serve HTTP. No dependency checks.
+- `GET <base>/health/readiness`: 200 while serving, 503 `shutting down` from the start of shutdown until exit. There is no "starting" state, because the listener opens only after startup succeeds. It **never** depends on Redis.
+
+### HTTP
+- **Base path:** `server.base_path` applies to every route, including `/health/*` and `/static/`, to cookie paths and to every redirect. Requests outside it get 404.
+- **Server timeouts:** read header 10s, read 30s, write 60s, idle 120s.
+- **Security headers** on every response:
+  - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'`. There is no `unsafe-inline` or `unsafe-eval`, so templates have no inline `<script>`, `<style>` or `style=""`.
+  - `X-Content-Type-Options: nosniff`
+  - `Referrer-Policy: same-origin`
+- **CSRF:** `http.CrossOriginProtection` on every unsafe method. Extra allowed origins come from `server.trusted_origins` (each is passed to `AddTrustedOrigin`; an invalid origin fails startup). The proxy must preserve the `Host` header ([deployment.md](deployment.md)).
+- **Panics:** recovered, logged with the stack, answered with 500 unless the response has already started.
+
+### Logging
+- Structured JSON via `log/slog` to stdout. Level from §7 "Precedence".
+- One line per request (method, path, status, duration), except probes.
+- Secrets (passwords, keys, client secret, cookies, tokens) are never logged.
+
+### Redis load
+- Each connection has a cache with a **1s TTL** behind `singleflight`, per snapshot. Every viewer shares the same fetches, whatever the number of viewers or their refresh interval.
+- Connections are fetched in parallel. One slow or failing connection never blocks a page.
+- Polling "Off" sends no polling requests at all.
+
+### Releases
+GoReleaser builds linux/darwin/windows for amd64 and arm64, plus a multi-arch Docker image (distroless).
+
+## 8. Configuration
+
+YAML, path from §7 "Precedence". [config.example.yaml](../config.example.yaml) shows every key and loads without any environment variables. Unknown keys are an error.
+
+### Interpolation
+- Applied to each **parsed scalar value** after YAML parsing and before decoding, so an interpolated value can never change the document's structure. `db: ${REDIS_DB:-0}` works.
+- `${NAME}` is replaced by the variable's value. An unset variable is an error naming the variable and its location (`connections[1].password`, line 12). A variable set to an empty string is used as is.
+- `${NAME:-default}` uses `default` when `NAME` is unset (an empty value is still used as is).
+- `$$` produces a literal `$`.
+- Any other `$` is left alone, so bcrypt hashes like `$2y$12$…` need no escaping.
+
+### Keys and defaults
+
+| Key | Default | Notes |
+|---|---|---|
+| `server.addr` | `:8080` | Overridden by `-addr` / `ASYNQUI_ADDR`. |
+| `server.base_path` | `""` | Empty or `/segment[/segment…]`, no trailing `/`. `/` is treated as empty. |
+| `server.shutdown_delay` | `5s` | `0` disables. |
+| `server.trusted_origins` | `[]` | Origins like `https://ops.example.com`. |
+| `log.level` | `info` | `debug`, `info`, `warn`, `error`. |
+| `refresh.default` | `5s` | `off`, `2s`, `5s`, `10s`. Initial auto-refresh for visitors without the cookie. |
+| `update_check` | `true` | GitHub release check, cached 24h, fails silently. |
+| `connections` | — | Required, at least one. |
+| `connections[].name` | — | Required, unique, `^[a-z0-9][a-z0-9._-]{0,62}$`. |
+| `connections[].addr` | — | Required, `host:port`. |
+| `connections[].db` | `0` | ≥ 0. |
+| `connections[].username` | `""` | ACL user. |
+| `connections[].password` | `""` | |
+| `connections[].tls.enabled` | `false` | |
+| `connections[].tls.ca_file` | `""` | Empty uses the system roots. Read at startup. |
+| `connections[].tls.cert_file`, `key_file` | `""` | Client certificate; both or neither. Read at startup. |
+| `connections[].tls.server_name` | `""` | Overrides SNI and the verified name. |
+| `connections[].tls.insecure_skip_verify` | `false` | |
+| `connections[].dial_timeout` | `5s` | |
+| `connections[].read_timeout` | `3s` | |
+| `connections[].write_timeout` | `3s` | |
+| `auth.provider` | `none` | `none`, `basic`, `proxy`, `oidc`. |
+| `auth.session.hash_key` | — | Hex, 32 or 64 bytes. Required for `basic` and `oidc`. |
+| `auth.session.block_key` | — | Hex, 32 bytes. Required for `basic` and `oidc`. |
+| `auth.session.previous_keys` | `[]` | List of `{hash_key, block_key}`, decode only. |
+| `auth.session.ttl` | `12h` | Absolute. |
+| `auth.session.cookie_secure` | `true` | |
+| `auth.basic.users[]` | — | Required for `basic`, at least one. |
+| `auth.basic.users[].username` | — | Required, unique (case-insensitive). |
+| `auth.basic.users[].password_hash` | — | Required, bcrypt. |
+| `auth.basic.users[].groups` | `[]` | |
+| `auth.proxy.user_header` | `X-Forwarded-User` | |
+| `auth.proxy.groups_header` | `""` | Empty disables groups. |
+| `auth.proxy.trusted_proxies` | — | Required for `proxy`. CIDRs or IPs. |
+| `auth.proxy.logout_url` | `""` | Empty hides Sign out. |
+| `auth.oidc.issuer` | — | Required for `oidc`. |
+| `auth.oidc.client_id` | — | Required for `oidc`. |
+| `auth.oidc.client_secret` | `""` | |
+| `auth.oidc.redirect_url` | — | Required for `oidc`. `https://<host><base_path>/auth/callback`. |
+| `auth.oidc.scopes` | `[openid, profile, email]` | |
+| `auth.oidc.username_claim` | `email` | |
+| `auth.oidc.groups_claim` | `groups` | |
+| `authz.default` | `viewer` with `none`, otherwise `none` | `none`, `viewer`, `operator`, `admin`. |
+| `authz.bindings[]` | `[]` | `users` and/or `groups`, `role` (`viewer`/`operator`/`admin`), `connections` (globs, non-empty). |
+
+Sections for providers other than `auth.provider` are not used but are still decoded and interpolated, so an unset `${NAME}` there is an error too. Keep inactive provider blocks commented out.

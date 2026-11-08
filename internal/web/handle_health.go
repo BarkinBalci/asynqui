@@ -2,44 +2,23 @@ package web
 
 import (
 	"net/http"
-	"sync"
+	"sync/atomic"
 )
 
-// Readiness reports whether this instance should receive traffic. It starts
-// not ready, becomes ready once startup completes and becomes not ready again
-// when graceful shutdown begins. It never reflects Redis health: an outage is
-// shown per connection in the UI and must not unroute or restart replicas.
+// Readiness reports whether this instance should receive traffic. The zero
+// value is ready: startup is fail-fast and the listener opens only after it
+// succeeds, so there is no "starting" state. Drain is terminal. Readiness
+// never reflects Redis health: an outage is shown per connection in the UI and
+// must not unroute or restart replicas.
 type Readiness struct {
-	mu     sync.RWMutex
-	ready  bool
-	reason string
+	draining atomic.Bool
 }
 
-// NewReadiness returns a Readiness that is not ready, with the given reason.
-func NewReadiness(reason string) *Readiness {
-	return &Readiness{reason: reason}
-}
+// Drain marks the instance as shutting down. It cannot be undone.
+func (r *Readiness) Drain() { r.draining.Store(true) }
 
-// SetReady marks the instance ready.
-func (r *Readiness) SetReady() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.ready, r.reason = true, ""
-}
-
-// SetNotReady marks the instance not ready with a human-readable reason.
-func (r *Readiness) SetNotReady(reason string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.ready, r.reason = false, reason
-}
-
-// State returns whether the instance is ready and, if not, why.
-func (r *Readiness) State() (bool, string) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.ready, r.reason
-}
+// Draining reports whether Drain has been called.
+func (r *Readiness) Draining() bool { return r.draining.Load() }
 
 // handleLiveness answers 200 whenever the process can serve HTTP.
 func handleLiveness() http.Handler {
@@ -48,12 +27,11 @@ func handleLiveness() http.Handler {
 	})
 }
 
-// handleReadiness answers 200 once startup is done and 503 otherwise.
+// handleReadiness answers 200 until shutdown begins and 503 afterwards.
 func handleReadiness(ready *Readiness) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		ok, reason := ready.State()
-		if !ok {
-			writePlain(w, http.StatusServiceUnavailable, reason)
+		if ready.Draining() {
+			writePlain(w, http.StatusServiceUnavailable, "shutting down")
 			return
 		}
 		writePlain(w, http.StatusOK, "ok")
