@@ -14,7 +14,7 @@ import (
 
 func mustJar(t *testing.T, o SessionOptions, base string, groups []string, now func() time.Time) *cookieJar {
 	t.Helper()
-	j, err := newCookieJar(o, base, groups, now)
+	j, err := newCookieJar(KindOIDC, o, base, groups, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestSessionRoundTrip(t *testing.T) {
 		t.Fatalf("readSession ok=%v present=%v", ok, present)
 	}
 	want := sessionData{
-		Subject: "sub-1", Name: "jdoe@example.com", Email: "jdoe@example.com",
+		Provider: KindOIDC, Subject: "sub-1", Name: "jdoe@example.com", Email: "jdoe@example.com",
 		Groups:  []string{"platform", "ops"}, // only groups referenced by bindings
 		Version: "v1",
 		Expires: clk.now().Add(12 * time.Hour).Unix(),
@@ -210,7 +210,7 @@ func TestSessionKeyValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := newCookieJar(tt.o, "", nil, time.Now)
+			_, err := newCookieJar(KindOIDC, tt.o, "", nil, time.Now)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -237,23 +237,62 @@ func TestFlowCookie(t *testing.T) {
 		t.Errorf("flow cookie attributes: %+v", c)
 	}
 
-	take := func() (flowData, *http.Cookie, error) {
+	read := func(c *http.Cookie) (flowData, error) {
 		r := httptest.NewRequest(http.MethodGet, "/asynq/auth/callback", nil)
 		r.AddCookie(c)
-		w := httptest.NewRecorder()
-		f, err := j.takeFlow(w, r)
-		return f, w.Result().Cookies()[0], err
+		return j.readFlow(r)
 	}
-	f, cleared, err := take()
+	f, err := read(c)
 	if err != nil || f.State != "st" || f.Nonce != "n" || f.Verifier != "v" || f.Next != "/asynq/c/main" {
-		t.Errorf("takeFlow = %+v, %v", f, err)
+		t.Errorf("readFlow = %+v, %v", f, err)
 	}
-	if cleared.MaxAge >= 0 || cleared.Path != "/asynq/auth/callback" {
+	cw := httptest.NewRecorder()
+	j.clearFlow(cw)
+	if cleared := cw.Result().Cookies()[0]; cleared.MaxAge >= 0 || cleared.Path != "/asynq/auth/callback" {
 		t.Errorf("flow cookie not cleared: %+v", cleared)
+	}
+	if _, err := read(&http.Cookie{Name: flowCookie, Value: strings.Repeat("A", maxDecodeBytes+1)}); err == nil {
+		t.Error("oversized flow cookie decoded")
 	}
 
 	clk.add(10*time.Minute + time.Second)
-	if _, _, err := take(); err == nil || !strings.Contains(err.Error(), "expired") {
+	if _, err := read(c); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Errorf("expired flow error = %v", err)
+	}
+}
+
+func TestSessionProviderBound(t *testing.T) {
+	basic, err := newCookieJar(KindBasic, testSession(), "", nil, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oidc := mustJar(t, testSession(), "", nil, time.Now)
+	c := issue(t, basic, Identity{Name: "jdoe@example.com", Groups: []string{"g"}}, "v")
+	if _, ok, present := read(oidc, c); ok || !present {
+		t.Errorf("basic session accepted by oidc jar: ok=%v", ok)
+	}
+	d, ok, _ := read(basic, c)
+	if !ok || d.Provider != KindBasic || d.Groups != nil {
+		t.Errorf("basic session = %+v, %v; want provider basic and no groups", d, ok)
+	}
+}
+
+func TestSessionMultipleCookies(t *testing.T) {
+	j := mustJar(t, testSession(), "", nil, time.Now)
+	good := issue(t, j, Identity{Name: "u"}, "")
+	stale := &http.Cookie{Name: sessionCookie, Value: "stale-from-another-path"}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(stale)
+	r.AddCookie(good)
+	if d, ok, _ := j.readSession(r); !ok || d.Name != "u" {
+		t.Errorf("readSession with a stale cookie first = %+v, %v", d, ok)
+	}
+}
+
+func TestSessionOversizedDecode(t *testing.T) {
+	j := mustJar(t, testSession(), "", nil, time.Now)
+	huge := &http.Cookie{Name: sessionCookie, Value: strings.Repeat("A", 900<<10)}
+	if _, ok, present := read(j, huge); ok || !present {
+		t.Errorf("900KiB cookie: ok=%v present=%v", ok, present)
 	}
 }

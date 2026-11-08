@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -37,7 +38,11 @@ const (
 	FailInternal                              // anything else
 )
 
-const maxFormBytes = 64 << 10
+const (
+	maxFormBytes = 64 << 10
+	// maxNextBytes caps the return-to path; it travels in the flow cookie.
+	maxNextBytes = 1024
+)
 
 // Options configures New. Only the section matching Provider is used.
 type Options struct {
@@ -46,8 +51,9 @@ type Options struct {
 	// session: proxy re-reads the headers on every request.
 	Session SessionOptions
 	// SessionGroups are the groups worth keeping in an OIDC session: those
-	// referenced by some authz binding. Other groups are dropped to keep the
-	// cookie small. Basic sessions take groups from config instead.
+	// referenced by some authz binding (authz.Policy.Groups). Other groups
+	// are dropped to keep the cookie small. Basic sessions store no groups;
+	// they come from config on every request.
 	SessionGroups []string
 	Basic         BasicOptions
 	Proxy         ProxyOptions
@@ -81,7 +87,8 @@ type Authenticator struct {
 	ident    identifier
 	jar      *cookieJar // basic, oidc
 	basic    *basicProvider
-	limiter  *limiter // basic
+	ipLimit  *limiter // basic
+	usrLimit *limiter // basic
 	oidc     *oidcProvider
 	proxy    *proxyProvider
 }
@@ -109,11 +116,8 @@ func New(ctx context.Context, o Options) (*Authenticator, error) {
 		a.ident = anonymous{}
 		return a, nil
 	case KindProxy:
-		if a.proxy, err = newProxy(o.Proxy, logger); err != nil {
+		if a.proxy, err = newProxy(ctx, o.Proxy, logger, now); err != nil {
 			return nil, fmt.Errorf("auth: %w", err)
-		}
-		if len(a.proxy.trusted) == 0 {
-			logger.WarnContext(ctx, "auth: proxy provider has no trusted proxies; every request is unauthenticated")
 		}
 		a.ident = a.proxy
 		return a, nil
@@ -122,12 +126,13 @@ func New(ctx context.Context, o Options) (*Authenticator, error) {
 		return nil, fmt.Errorf("auth: unknown provider %q (want none, basic, proxy or oidc)", o.Provider)
 	}
 
-	if a.jar, err = newCookieJar(o.Session, base, o.SessionGroups, now); err != nil {
+	if a.jar, err = newCookieJar(o.Provider, o.Session, base, o.SessionGroups, now); err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
 	}
 	if o.Provider == KindBasic {
 		a.basic, err = newBasic(o.Basic)
-		a.limiter = newLimiter(loginAttempts, loginWindow, now)
+		a.ipLimit = newLimiter(loginAttempts, loginWindow, limiterCap, now)
+		a.usrLimit = newLimiter(loginAttempts, loginWindow, limiterCap, now)
 	} else {
 		a.oidc, err = newOIDC(ctx, o.OIDC, logger, now)
 	}
@@ -200,31 +205,36 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 
 // Challenge answers a request that needs an identity but has none. For
 // basic and oidc it redirects to <base>/login?next=<this page> (303), or,
-// for htmx requests, sets HX-Redirect so the whole page navigates instead
-// of a fragment swap. For proxy and none it is a plain 401.
+// for htmx requests, sets HX-Redirect to the login page with the page the
+// user is on (HX-Current-URL), so the whole page navigates instead of a
+// fragment swap. For proxy and none it is a plain 401. Responses are never
+// cached.
 func (a *Authenticator) Challenge(w http.ResponseWriter, r *http.Request) {
-	if a.jar == nil {
+	w.Header().Set("Cache-Control", "no-store")
+	switch a.kind {
+	case KindBasic, KindOIDC:
+	default:
 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 		return
 	}
-	target := a.basePath + "/login"
-	next := a.basePath + "/"
-	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+	htmx := r.Header.Get("HX-Request") == "true"
+	next := a.root()
+	switch {
+	case htmx:
+		// The request URL is a fragment; return to the page shown.
+		if u, err := url.Parse(r.Header.Get("HX-Current-URL")); err == nil && u.Path != "" {
+			next = a.safeNext(u.RequestURI())
+		}
+	case r.Method == http.MethodGet || r.Method == http.MethodHead:
 		// RequestURI is the original request target, unaffected by
 		// http.StripPrefix, so it still carries the base path.
 		next = a.safeNext(r.RequestURI)
 	}
-	if next != a.basePath+"/" {
-		target += "?next=" + url.QueryEscape(next)
+	target := a.basePath + "/login"
+	if next != a.root() {
+		target += "?" + url.Values{"next": {next}}.Encode()
 	}
-	if r.Header.Get("HX-Request") == "true" {
-		if cur := r.Header.Get("HX-Current-URL"); cur != "" {
-			if u, err := url.Parse(cur); err == nil {
-				if n := a.safeNext(u.RequestURI()); n != a.basePath+"/" {
-					target = a.basePath + "/login?next=" + url.QueryEscape(n)
-				}
-			}
-		}
+	if htmx {
 		w.Header().Set("HX-Redirect", target)
 		w.WriteHeader(http.StatusUnauthorized)
 		return
@@ -233,14 +243,17 @@ func (a *Authenticator) Challenge(w http.ResponseWriter, r *http.Request) {
 }
 
 // LoginHandler serves POST /login. For basic it checks the "username" and
-// "password" form fields (at most 5 attempts per client IP per minute),
-// sets the session and redirects to "next". For oidc it starts the
-// authorization code flow (the "Sign in with SSO" button posts here). Other
-// providers get 404. fail may be nil, which writes a plain-text error.
+// "password" form fields (at most 5 attempts per minute per client IP and
+// per username), sets the session and redirects to "next". For oidc it
+// starts the authorization code flow (the "Sign in with SSO" button posts
+// here). Other providers get 404. fail may be nil, which writes a
+// plain-text error.
 func (a *Authenticator) LoginHandler(fail FailFunc) http.Handler {
 	fail = failFunc(fail)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.basic == nil && a.oidc == nil {
+		switch a.kind {
+		case KindBasic, KindOIDC:
+		default:
 			http.NotFound(w, r)
 			return
 		}
@@ -250,33 +263,48 @@ func (a *Authenticator) LoginHandler(fail FailFunc) http.Handler {
 			return
 		}
 		next := a.safeNext(r.PostForm.Get("next"))
-
-		if a.oidc != nil {
+		if a.kind == KindOIDC {
 			if err := a.oidc.start(w, r, a.jar, next); err != nil {
 				a.logger.ErrorContext(r.Context(), "oidc start failed", slog.Any("error", err))
 				fail(w, r, http.StatusInternalServerError, FailSSO)
 			}
 			return
 		}
-
-		if ok, retry := a.limiter.allow(r.RemoteAddr); !ok {
-			a.logger.WarnContext(r.Context(), "login rate limited", slog.String("remote_addr", r.RemoteAddr))
-			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Round(time.Second)/time.Second)+1))
-			fail(w, r, http.StatusTooManyRequests, FailTooManyAttempts)
-			return
-		}
-		username := r.PostForm.Get("username")
-		id, version, ok := a.basic.verify(username, r.PostForm.Get("password"))
-		if !ok {
-			a.logger.WarnContext(r.Context(), "login failed", slog.String("username", username))
-			fail(w, r, http.StatusUnauthorized, FailInvalidCredentials)
-			return
-		}
-		if !a.startSession(w, r, id, version, fail) {
-			return
-		}
-		http.Redirect(w, r, next, http.StatusSeeOther) //nolint:gosec // G710: next passed safeNext above.
+		a.basicLogin(w, r, next, fail)
 	})
+}
+
+func (a *Authenticator) basicLogin(w http.ResponseWriter, r *http.Request, next string, fail FailFunc) {
+	username := r.PostForm.Get("username")
+	known := a.basic.exists(username)
+	logUser := slog.Attr{}
+	if known {
+		// Unknown "usernames" are not logged: they are often passwords
+		// typed into the wrong field.
+		logUser = slog.String("username", username)
+	}
+	ok, retry := a.ipLimit.allow(clientKey(r.RemoteAddr))
+	if ok {
+		var r2 time.Duration
+		ok, r2 = a.usrLimit.allow(foldUsername(username))
+		retry = max(retry, r2)
+	}
+	if !ok {
+		a.logger.WarnContext(r.Context(), "login rate limited", slog.String("remote_addr", r.RemoteAddr), logUser)
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Round(time.Second)/time.Second)+1))
+		fail(w, r, http.StatusTooManyRequests, FailTooManyAttempts)
+		return
+	}
+	id, version, ok := a.basic.verify(username, r.PostForm.Get("password"))
+	if !ok {
+		a.logger.WarnContext(r.Context(), "login failed", slog.String("remote_addr", r.RemoteAddr), logUser)
+		fail(w, r, http.StatusUnauthorized, FailInvalidCredentials)
+		return
+	}
+	if !a.startSession(w, r, id, version, fail) {
+		return
+	}
+	http.Redirect(w, r, next, http.StatusSeeOther) //nolint:gosec // G710: next passed safeNext.
 }
 
 // CallbackHandler serves GET /auth/callback for oidc; other providers get
@@ -285,7 +313,7 @@ func (a *Authenticator) LoginHandler(fail FailFunc) http.Handler {
 func (a *Authenticator) CallbackHandler(fail FailFunc) http.Handler {
 	fail = failFunc(fail)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.oidc == nil {
+		if a.kind != KindOIDC {
 			http.NotFound(w, r)
 			return
 		}
@@ -312,10 +340,10 @@ func (a *Authenticator) CallbackHandler(fail FailFunc) http.Handler {
 func (a *Authenticator) LogoutHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case a.jar != nil:
+		case a.kind == KindBasic || a.kind == KindOIDC:
 			a.jar.clearSession(w)
 			http.Redirect(w, r, a.basePath+"/login", http.StatusSeeOther)
-		case a.proxy != nil && a.proxy.logoutURL != "":
+		case a.kind == KindProxy && a.proxy.logoutURL != "":
 			http.Redirect(w, r, a.proxy.logoutURL, http.StatusSeeOther)
 		default:
 			http.NotFound(w, r)
@@ -348,21 +376,43 @@ func failFunc(f FailFunc) FailFunc {
 	}
 }
 
-// safeNext returns next if it is a same-origin relative path under the
-// base path, and the app root otherwise, so a login link cannot redirect
-// off-site.
+func (a *Authenticator) root() string { return a.basePath + "/" }
+
+// safeNext returns next, cleaned and re-serialized, if it is a same-origin
+// relative path under the base path, and the app root otherwise, so a
+// login link cannot redirect off-site or escape the base path.
 func (a *Authenticator) safeNext(next string) string {
-	root := a.basePath + "/"
-	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") ||
-		strings.ContainsAny(next, "\\\x00\r\n\t") {
+	root := a.root()
+	if next == "" || len(next) > maxNextBytes || !strings.HasPrefix(next, "/") ||
+		strings.HasPrefix(next, "//") || strings.ContainsAny(next, "\\\x00\r\n\t") {
 		return root
+	}
+	// Encoded dots, slashes and backslashes would let the path mean one
+	// thing to this check and another to a browser or proxy.
+	lower := strings.ToLower(next)
+	for _, enc := range []string{"%2e", "%2f", "%5c"} {
+		if strings.Contains(lower, enc) {
+			return root
+		}
 	}
 	u, err := url.Parse(next)
 	if err != nil || u.Scheme != "" || u.Host != "" || u.Opaque != "" || u.User != nil {
 		return root
 	}
-	if a.basePath != "" && u.Path != a.basePath && !strings.HasPrefix(u.Path, root) {
+	if strings.ContainsFunc(u.Path, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return root
 	}
-	return next
+	clean := path.Clean(u.Path)
+	if strings.HasSuffix(u.Path, "/") && clean != "/" {
+		clean += "/"
+	}
+	if a.basePath != "" && clean != a.basePath && !strings.HasPrefix(clean, root) {
+		return root
+	}
+	out := url.URL{Path: clean, RawQuery: u.RawQuery}
+	s := out.String()
+	if !strings.HasPrefix(s, "/") || strings.HasPrefix(s, "//") {
+		return root
+	}
+	return s
 }

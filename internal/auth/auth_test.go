@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -26,6 +27,7 @@ func TestNewErrors(t *testing.T) {
 		{"oidc without issuer", Options{Provider: KindOIDC, Session: testSession()}, "issuer is required"},
 		{"oidc without client", Options{Provider: KindOIDC, Session: testSession(), OIDC: OIDCOptions{Issuer: "https://x"}}, "client id is required"},
 		{"oidc without redirect", Options{Provider: KindOIDC, Session: testSession(), OIDC: OIDCOptions{Issuer: "https://x", ClientID: "c"}}, "redirect url is required"},
+		{"proxy without trusted proxies", Options{Provider: KindProxy}, "trusted_proxies is required"},
 		{"oidc relative redirect", Options{Provider: KindOIDC, Session: testSession(), OIDC: OIDCOptions{Issuer: "https://x", ClientID: "c", RedirectURL: "/auth/callback"}}, "must be absolute"},
 	}
 	for _, tt := range tests {
@@ -40,7 +42,7 @@ func TestNewErrors(t *testing.T) {
 
 func TestNoneAndProxyNeedNoKeys(t *testing.T) {
 	for _, k := range []Kind{KindNone, KindProxy} {
-		a := mustNew(t, Options{Provider: k})
+		a := mustNew(t, Options{Provider: k, Proxy: ProxyOptions{TrustedProxies: []string{"10.0.0.1"}}})
 		if a.Kind() != k || a.SignOutVisible() {
 			t.Errorf("%s: Kind=%s SignOutVisible=%v", k, a.Kind(), a.SignOutVisible())
 		}
@@ -100,11 +102,57 @@ func TestSafeNext(t *testing.T) {
 		{"/asynq", "/asynqx", "/asynq/"},
 		{"/asynq", "/other", "/asynq/"},
 		{"/asynq", "", "/asynq/"},
+
+		// Encoded dots, slashes and backslashes are refused outright.
+		{"", "/%2F%2Fevil", "/"},
+		{"", "/%2f%2fevil", "/"},
+		{"", "/%5Cevil", "/"},
+		{"", "/%5c%5cevil", "/"},
+		{"", "/asynq%2fx", "/"},
+		{"", "/asynq/%2e%2e/evil", "/"},
+		{"", "/asynq/..%2fevil", "/"},
+		{"", "/asynq/%2E%2E%2Fevil", "/"},
+		{"/asynq", "/asynq%2fx", "/asynq/"},
+		{"/asynq", "/asynq/%2e%2e/evil", "/asynq/"},
+		{"/asynq", "/asynq/..%2fevil", "/asynq/"},
+		{"/asynq", "/%2F%2Fevil", "/asynq/"},
+		{"/asynq", "/%5Cevil", "/asynq/"},
+
+		// The prefix is checked on the cleaned path, and the cleaned path
+		// is what is returned.
+		{"", "/asynq/../evil", "/evil"},
+		{"", "/./asynq/../evil", "/evil"},
+		{"", "/asynq/./../../evil", "/evil"},
+		{"/asynq", "/asynq/../evil", "/asynq/"},
+		{"/asynq", "/./asynq/../evil", "/asynq/"},
+		{"/asynq", "/asynq/./../../evil", "/asynq/"},
+		{"/asynq", "/asynq/c/../c/main", "/asynq/c/main"},
+		{"/asynq", "/asynq/c/main/", "/asynq/c/main/"},
+		{"/asynq", "/asynq//c", "/asynq/c"},
+
+		// Re-serialized: odd characters are escaped, fragments dropped,
+		// queries kept.
+		{"", "/@evil", "/@evil"},
+		{"", "/ /evil", "/%20/evil"},
+		{"/asynq", "/ /evil", "/asynq/"},
+		{"/asynq", "/@evil", "/asynq/"},
+		{"/asynq", "/asynq/x#//evil", "/asynq/x"},
+		{"/asynq", "/asynq?next=//evil", "/asynq?next=//evil"},
+		{"/asynq", "/asynq/c/%E2%9C%93", "/asynq/c/%E2%9C%93"},
+		{"/asynq", "/asynq/%00", "/asynq/"},
+		{"/asynq", "/asynq/" + strings.Repeat("a", 1100), "/asynq/"},
 	}
 	for _, tt := range tests {
 		a := &Authenticator{basePath: tt.base}
-		if got := a.safeNext(tt.next); got != tt.want {
+		got := a.safeNext(tt.next)
+		if got != tt.want {
 			t.Errorf("base %q safeNext(%q) = %q, want %q", tt.base, tt.next, got, tt.want)
+		}
+		// http.Redirect must pass it through unchanged.
+		w := httptest.NewRecorder()
+		http.Redirect(w, httptest.NewRequest(http.MethodPost, "/login", nil), got, http.StatusSeeOther)
+		if loc := w.Header().Get("Location"); loc != got {
+			t.Errorf("base %q next %q: Location = %q, want %q", tt.base, tt.next, loc, got)
 		}
 	}
 }
@@ -125,8 +173,20 @@ func TestChallenge(t *testing.T) {
 		{"post loses next", basicAuth(t, user, nil, ""), req{method: http.MethodPost, target: "/c/main/queues/pause"}, 303, "/login", ""},
 		{"htmx fragment uses current page", basicAuth(t, user, nil, ""), req{target: "/c/main?fragment=1", header: http.Header{
 			"Hx-Request": {"true"}, "Hx-Current-Url": {"http://example.com/c/main/servers"}}}, 401, "", "/login?next=%2Fc%2Fmain%2Fservers"},
-		{"htmx without current url", basicAuth(t, user, nil, ""), req{target: "/c/main", header: http.Header{"Hx-Request": {"true"}}}, 401, "", "/login?next=%2Fc%2Fmain"},
-		{"proxy", mustNew(t, Options{Provider: KindProxy}), req{target: "/c/main"}, 401, "", ""},
+		{"proxy", proxyAuth(t, ProxyOptions{TrustedProxies: []string{"10.0.0.1"}}), req{target: "/c/main"}, 401, "", ""},
+		{"none", mustNew(t, Options{Provider: KindNone}), req{target: "/c/main"}, 401, "", ""},
+		{"absolute-form request target", basicAuth(t, user, nil, "/asynq"), req{target: "http://evil.example/asynq/c/main"}, 303, "/asynq/login", ""},
+		{"htmx without current url goes to root", basicAuth(t, user, nil, "/asynq"), req{target: "/asynq/c/main", header: http.Header{"Hx-Request": {"true"}}}, 401, "", "/asynq/login"},
+		{"htmx current url with ..", basicAuth(t, user, nil, "/asynq"), req{target: "/asynq/c/main", header: http.Header{
+			"Hx-Request": {"true"}, "Hx-Current-Url": {"https://x/asynq/../evil"}}}, 401, "", "/asynq/login"},
+		{"htmx current url on another host keeps only the path", basicAuth(t, user, nil, "/asynq"), req{target: "/asynq/c/main", header: http.Header{
+			"Hx-Request": {"true"}, "Hx-Current-Url": {"https://evil.example/asynq/c/main"}}}, 401, "", "/asynq/login?next=%2Fasynq%2Fc%2Fmain"},
+		{"htmx current url doubled host", basicAuth(t, user, nil, "/asynq"), req{target: "/asynq/c/main", header: http.Header{
+			"Hx-Request": {"true"}, "Hx-Current-Url": {"https://evil.example//evil.example/x"}}}, 401, "", "/asynq/login"},
+		{"htmx current url outside base", basicAuth(t, user, nil, "/asynq"), req{target: "/asynq/c/main", header: http.Header{
+			"Hx-Request": {"true"}, "Hx-Current-Url": {"https://x/asynqx"}}}, 401, "", "/asynq/login"},
+		{"htmx javascript url", basicAuth(t, user, nil, "/asynq"), req{target: "/asynq/c/main", header: http.Header{
+			"Hx-Request": {"true"}, "Hx-Current-Url": {"javascript:alert(1)"}}}, 401, "", "/asynq/login"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -135,6 +195,9 @@ func TestChallenge(t *testing.T) {
 			if res.status != tt.wantStatus || res.header.Get("Location") != tt.wantLocation || res.header.Get("HX-Redirect") != tt.wantHX {
 				t.Errorf("Challenge = %d Location=%q HX-Redirect=%q; want %d %q %q",
 					res.status, res.header.Get("Location"), res.header.Get("HX-Redirect"), tt.wantStatus, tt.wantLocation, tt.wantHX)
+			}
+			if cc := res.header.Get("Cache-Control"); cc != "no-store" {
+				t.Errorf("Cache-Control = %q, want no-store", cc)
 			}
 		})
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -42,8 +43,20 @@ func TestProxyIdentify(t *testing.T) {
 		{"v4-mapped remote", trusted, "[::ffff:10.0.0.1]:1", hdr("X-Forwarded-User", "jdoe"), Identity{Subject: "jdoe", Name: "jdoe"}, true},
 		{"v4-mapped CIDR", trusted, "172.16.9.9:1", hdr("X-Forwarded-User", "jdoe"), Identity{Subject: "jdoe", Name: "jdoe"}, true},
 		{"groups parsed", trusted, "10.0.0.1:1",
-			hdr("X-Forwarded-User", " jdoe ", "X-Forwarded-Groups", " platform, ,ops,,", "X-Forwarded-Groups", "dev"),
+			hdr("X-Forwarded-User", " jdoe ", "X-Forwarded-Groups", " platform, ,ops,,dev"),
 			Identity{Subject: "jdoe", Name: "jdoe", Groups: []string{"platform", "ops", "dev"}}, true},
+		// Header names are case-insensitive on the wire; net/http
+		// canonicalises them before the handler sees them.
+		{"lower-case header name", trusted, "10.0.0.1:1", hdr("x-forwarded-user", "jdoe"), Identity{Subject: "jdoe", Name: "jdoe"}, true},
+		{"underscore is a different header", trusted, "10.0.0.1:1", hdr("X_Forwarded_User", "jdoe"), Identity{}, false},
+
+		// A proxy that appends rather than replaces would pass the
+		// client's copy along with its own: fail closed.
+		{"two user lines", trusted, "10.0.0.1:1", hdr("X-Forwarded-User", "admin", "X-Forwarded-User", "jdoe"), Identity{}, false},
+		{"two groups lines", trusted, "10.0.0.1:1",
+			hdr("X-Forwarded-User", "jdoe", "X-Forwarded-Groups", "platform", "X-Forwarded-Groups", "dev"), Identity{}, false},
+		{"two groups lines ignored when groups are off", ProxyOptions{TrustedProxies: []string{"10.0.0.0/8"}}, "10.0.0.1:1",
+			hdr("X-Forwarded-User", "jdoe", "X-Forwarded-Groups", "a", "X-Forwarded-Groups", "b"), Identity{Subject: "jdoe", Name: "jdoe"}, true},
 		{"groups header disabled", ProxyOptions{TrustedProxies: []string{"10.0.0.0/8"}}, "10.0.0.1:1",
 			hdr("X-Forwarded-User", "jdoe", "X-Forwarded-Groups", "platform"), Identity{Subject: "jdoe", Name: "jdoe"}, true},
 		{"custom user header", ProxyOptions{UserHeader: "Remote-User", TrustedProxies: []string{"10.0.0.0/8"}}, "10.0.0.1:1",
@@ -54,7 +67,6 @@ func TestProxyIdentify(t *testing.T) {
 		{"just outside bare IP", trusted, "192.0.2.8:1", hdr("X-Forwarded-User", "jdoe"), Identity{}, false},
 		{"trusted missing user header", trusted, "10.0.0.1:1", hdr("X-Forwarded-Groups", "platform"), Identity{}, false},
 		{"trusted empty user header", trusted, "10.0.0.1:1", hdr("X-Forwarded-User", "  "), Identity{}, false},
-		{"no trusted proxies configured", ProxyOptions{}, "10.0.0.1:1", hdr("X-Forwarded-User", "jdoe"), Identity{}, false},
 		{"unparseable remote", trusted, "garbage", hdr("X-Forwarded-User", "jdoe"), Identity{}, false},
 	}
 	for _, tt := range tests {
@@ -87,19 +99,80 @@ func TestProxyNewErrors(t *testing.T) {
 			t.Errorf("TrustedProxies %q: error = %v", cidr, err)
 		}
 	}
+	for _, tp := range [][]string{nil, {}} {
+		if _, err := New(t.Context(), Options{Provider: KindProxy, Proxy: ProxyOptions{TrustedProxies: tp}}); err == nil ||
+			!strings.Contains(err.Error(), "trusted_proxies is required") {
+			t.Errorf("TrustedProxies %#v: error = %v", tp, err)
+		}
+	}
+}
+
+func TestProxyTrustedPrefixes(t *testing.T) {
+	tests := []struct {
+		cidr          string
+		wantWarn      bool
+		trustsV4      bool // 203.0.113.1
+		trustsV6      bool // 2001:db8::1
+		trustsPrivate bool // 10.9.9.9
+	}{
+		{"0.0.0.0/0", true, true, false, true},
+		{"::/0", true, false, true, false},
+		{"::ffff:0:0/96", true, true, false, true}, // every IPv4 address, mapped
+		{"::ffff:10.0.0.0/104", false, false, false, true},
+		{"::ffff:10.0.0.0/90", false, false, false, false}, // shorter than the mapping: matches no unmapped IPv4
+		{"10.0.0.1/8", false, false, false, true},          // host bits masked
+		{"10.0.0.0/8", false, false, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cidr, func(t *testing.T) {
+			var logs bytes.Buffer
+			p, err := newProxy(t.Context(), ProxyOptions{TrustedProxies: []string{tt.cidr}},
+				slog.New(slog.NewTextHandler(&logs, nil)), time.Now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(logs.String(), "covers every address"); got != tt.wantWarn {
+				t.Errorf("warned = %v, want %v: %s", got, tt.wantWarn, logs.String())
+			}
+			got := [3]bool{p.trustedPeer("203.0.113.1:1"), p.trustedPeer("[2001:db8::1]:1"), p.trustedPeer("10.9.9.9:1")}
+			if want := [3]bool{tt.trustsV4, tt.trustsV6, tt.trustsPrivate}; got != want {
+				t.Errorf("trusts (v4, v6, private) = %v, want %v", got, want)
+			}
+		})
+	}
 }
 
 func TestProxyWarnings(t *testing.T) {
+	clk := newClock()
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	a := mustNew(t, Options{Provider: KindProxy, Logger: logger})
-	if !strings.Contains(buf.String(), "no trusted proxies") {
-		t.Errorf("no startup warning: %q", buf.String())
+	a := mustNew(t, Options{Provider: KindProxy, Proxy: ProxyOptions{TrustedProxies: []string{"10.0.0.0/8"}, GroupsHeader: "X-Forwarded-Groups"},
+		Logger: slog.New(slog.NewTextHandler(&buf, nil)), Now: clk.now})
+	h := app(a)
+	spoof := func(hdr http.Header) {
+		do(t, h, req{target: "/whoami", remote: "203.0.113.1:1", header: hdr})
 	}
+	count := func() int { return strings.Count(buf.String(), "untrusted peer") }
+
+	spoof(http.Header{"X-Forwarded-User": {"admin"}})
+	if count() != 1 {
+		t.Fatalf("no spoofing warning: %q", buf.String())
+	}
+	// An attacker can trigger this at will; it is logged once a minute.
+	spoof(http.Header{"X-Forwarded-User": {"admin"}})
+	spoof(http.Header{"X-Forwarded-Groups": {"platform"}})
+	if count() != 1 {
+		t.Errorf("warning not throttled: %d", count())
+	}
+	clk.add(time.Minute)
+	spoof(http.Header{"X-Forwarded-Groups": {"platform"}})
+	if count() != 2 {
+		t.Errorf("groups-only spoof after a minute not logged: %d", count())
+	}
+
 	buf.Reset()
-	do(t, app(a), req{target: "/whoami", remote: "203.0.113.1:1", header: http.Header{"X-Forwarded-User": {"admin"}}})
-	if !strings.Contains(buf.String(), "untrusted peer") {
-		t.Errorf("no spoofing warning: %q", buf.String())
+	do(t, h, req{target: "/whoami", remote: "10.0.0.1:1", header: http.Header{"X-Forwarded-User": {"a", "b"}}})
+	if !strings.Contains(buf.String(), "repeated") {
+		t.Errorf("repeated header not logged: %q", buf.String())
 	}
 }
 

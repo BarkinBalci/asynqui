@@ -17,17 +17,13 @@ const (
 	// maxCookieBytes bounds the whole Set-Cookie value, leaving headroom
 	// under the 4096-byte browser limit.
 	maxCookieBytes = 3800
+	// maxDecodeBytes bounds a cookie value before any HMAC or decryption.
+	maxDecodeBytes = 4096
 )
-
-// constError is an error that can be a constant, keeping sentinel errors
-// out of package-level vars.
-type constError string
-
-func (e constError) Error() string { return string(e) }
 
 // errSessionTooLarge means the identity does not fit in the session cookie,
 // usually because of too many groups.
-const errSessionTooLarge constError = "session cookie too large"
+var errSessionTooLarge = errors.New("session cookie too large")
 
 // KeyPair is one hash/block key pair, already hex-decoded.
 type KeyPair struct {
@@ -62,9 +58,14 @@ func (k KeyPair) validate() error {
 
 // cookieJar encodes signed, encrypted, expiring cookies. securecookie binds
 // the cookie name into the MAC, so a flow cookie cannot be replayed as a
-// session or vice versa.
+// session or vice versa; the payload names the provider, so a session from
+// a basic deployment is not accepted by an oidc one sharing the keys.
 type cookieJar struct {
-	session    []securecookie.Codec
+	kind Kind
+	// sessionEnc has no length limit so oversized sessions reach the
+	// explicit check in setSession; sessionDec and flow cap input size.
+	sessionEnc []securecookie.Codec
+	sessionDec []securecookie.Codec
 	flow       []securecookie.Codec
 	ttl        time.Duration
 	secure     bool
@@ -74,7 +75,7 @@ type cookieJar struct {
 	now        func() time.Time
 }
 
-func newCookieJar(o SessionOptions, basePath string, keepGroups []string, now func() time.Time) (*cookieJar, error) {
+func newCookieJar(kind Kind, o SessionOptions, basePath string, keepGroups []string, now func() time.Time) (*cookieJar, error) {
 	pairs := append([]KeyPair{o.KeyPair}, o.PreviousKeys...)
 	raw := make([][]byte, 0, 2*len(pairs))
 	for i, p := range pairs {
@@ -93,38 +94,38 @@ func newCookieJar(o SessionOptions, basePath string, keepGroups []string, now fu
 	if ttl == 0 {
 		ttl = defaultTTL
 	}
-	codecs := func(maxAge time.Duration) ([]securecookie.Codec, error) {
+	codecs := func(maxAge time.Duration, maxLen int) ([]securecookie.Codec, error) {
 		cs := securecookie.CodecsFromPairs(raw...)
 		for _, c := range cs {
 			sc, ok := c.(*securecookie.SecureCookie)
 			if !ok {
 				return nil, fmt.Errorf("session: unexpected codec %T", c)
 			}
-			sc.SetSerializer(securecookie.JSONEncoder{}).MaxAge(int(maxAge / time.Second)).MaxLength(0) // size is checked in setSession
+			sc.SetSerializer(securecookie.JSONEncoder{}).MaxAge(int(maxAge / time.Second)).MaxLength(maxLen)
 		}
 		return cs, nil
 	}
-	sess, err := codecs(ttl)
-	if err != nil {
-		return nil, err
-	}
-	flow, err := codecs(flowTTL)
-	if err != nil {
-		return nil, err
-	}
-	path := basePath
-	if path == "" {
-		path = "/"
-	}
 	j := &cookieJar{
-		session:    sess,
-		flow:       flow,
+		kind:       kind,
 		ttl:        ttl,
 		secure:     !o.Insecure,
-		path:       path,
+		path:       basePath,
 		flowPath:   basePath + "/auth/callback",
 		keepGroups: make(map[string]struct{}, len(keepGroups)),
 		now:        now,
+	}
+	if j.path == "" {
+		j.path = "/"
+	}
+	var err error
+	if j.sessionEnc, err = codecs(ttl, 0); err != nil {
+		return nil, err
+	}
+	if j.sessionDec, err = codecs(ttl, maxDecodeBytes); err != nil {
+		return nil, err
+	}
+	if j.flow, err = codecs(flowTTL, maxDecodeBytes); err != nil {
+		return nil, err
 	}
 	for _, g := range keepGroups {
 		j.keepGroups[g] = struct{}{}
@@ -135,10 +136,11 @@ func newCookieJar(o SessionOptions, basePath string, keepGroups []string, now fu
 // sessionData is the cookie payload: identity claims and an expiry, never
 // tokens.
 type sessionData struct {
-	Subject string   `json:"sub"`
-	Name    string   `json:"name"`
-	Email   string   `json:"email,omitempty"`
-	Groups  []string `json:"groups,omitempty"`
+	Provider Kind     `json:"p"`
+	Subject  string   `json:"sub"`
+	Name     string   `json:"name"`
+	Email    string   `json:"email,omitempty"`
+	Groups   []string `json:"groups,omitempty"`
 	// Version ties a basic session to the user's password hash, so changing
 	// the hash in config ends existing sessions.
 	Version string `json:"v,omitempty"`
@@ -146,23 +148,26 @@ type sessionData struct {
 }
 
 // setSession writes the session cookie. Only groups in keepGroups are
-// stored. It fails with ErrSessionTooLarge rather than write a cookie the
-// browser would drop.
+// stored, and none for basic, whose groups come from config. It fails with
+// errSessionTooLarge rather than write a cookie the browser would drop.
 func (j *cookieJar) setSession(w http.ResponseWriter, id Identity, version string) error {
 	var groups []string
-	for _, g := range id.Groups {
-		if _, ok := j.keepGroups[g]; ok {
-			groups = append(groups, g)
+	if j.kind != KindBasic {
+		for _, g := range id.Groups {
+			if _, ok := j.keepGroups[g]; ok {
+				groups = append(groups, g)
+			}
 		}
 	}
 	v, err := securecookie.EncodeMulti(sessionCookie, sessionData{
-		Subject: id.Subject,
-		Name:    id.Name,
-		Email:   id.Email,
-		Groups:  groups,
-		Version: version,
-		Expires: j.now().Add(j.ttl).Unix(),
-	}, j.session...)
+		Provider: j.kind,
+		Subject:  id.Subject,
+		Name:     id.Name,
+		Email:    id.Email,
+		Groups:   groups,
+		Version:  version,
+		Expires:  j.now().Add(j.ttl).Unix(),
+	}, j.sessionEnc...)
 	if err != nil {
 		return fmt.Errorf("encode session: %w", err)
 	}
@@ -174,20 +179,29 @@ func (j *cookieJar) setSession(w http.ResponseWriter, id Identity, version strin
 	return nil
 }
 
-// readSession decodes the session cookie. present reports whether a cookie
-// was sent at all, so callers can clear a bad one.
+// readSession decodes the session cookie. Browsers may send several
+// cookies of the same name (e.g. from different paths); the first valid
+// one wins. present reports whether any was sent, so callers can clear a
+// bad one.
 func (j *cookieJar) readSession(r *http.Request) (d sessionData, ok, present bool) {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil {
-		return sessionData{}, false, false
+	for _, c := range r.CookiesNamed(sessionCookie) {
+		present = true
+		if d, ok := j.decodeSession(c.Value); ok {
+			return d, true, true
+		}
 	}
-	if err := securecookie.DecodeMulti(sessionCookie, c.Value, &d, j.session...); err != nil {
-		return sessionData{}, false, true
+	return sessionData{}, false, present
+}
+
+func (j *cookieJar) decodeSession(value string) (sessionData, bool) {
+	var d sessionData
+	if err := securecookie.DecodeMulti(sessionCookie, value, &d, j.sessionDec...); err != nil {
+		return sessionData{}, false
 	}
-	if !j.now().Before(time.Unix(d.Expires, 0)) || d.Name == "" {
-		return sessionData{}, false, true
+	if d.Provider != j.kind || d.Name == "" || !j.now().Before(time.Unix(d.Expires, 0)) {
+		return sessionData{}, false
 	}
-	return d, true, true
+	return d, true
 }
 
 func (j *cookieJar) clearSession(w http.ResponseWriter) {
@@ -213,14 +227,14 @@ func (j *cookieJar) setFlow(w http.ResponseWriter, f flowData) error {
 	return nil
 }
 
-// takeFlow reads and clears the flow cookie; each login state is usable
-// once.
-func (j *cookieJar) takeFlow(w http.ResponseWriter, r *http.Request) (flowData, error) {
+// readFlow decodes the flow cookie without clearing it, so a forged
+// callback cannot cancel a login in progress; call clearFlow once the
+// state has matched.
+func (j *cookieJar) readFlow(r *http.Request) (flowData, error) {
 	c, err := r.Cookie(flowCookie)
 	if err != nil {
 		return flowData{}, errors.New("missing login state cookie")
 	}
-	http.SetCookie(w, j.expired(flowCookie, j.flowPath))
 	var f flowData
 	if err := securecookie.DecodeMulti(flowCookie, c.Value, &f, j.flow...); err != nil {
 		return flowData{}, fmt.Errorf("decode login state: %w", err)
@@ -229,6 +243,10 @@ func (j *cookieJar) takeFlow(w http.ResponseWriter, r *http.Request) (flowData, 
 		return flowData{}, errors.New("login state expired")
 	}
 	return f, nil
+}
+
+func (j *cookieJar) clearFlow(w http.ResponseWriter) {
+	http.SetCookie(w, j.expired(flowCookie, j.flowPath))
 }
 
 // cookie builds every cookie this package writes: HttpOnly, SameSite=Lax,

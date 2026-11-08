@@ -38,6 +38,10 @@ type fakeIDP struct {
 	// means no userinfo endpoint in discovery).
 	claims   func(map[string]any)
 	userinfo map[string]any
+	// signRaw, if set, replaces RS256 signing (alg-confusion tests);
+	// algs, if set, replaces the advertised signing algorithms.
+	signRaw func(map[string]any) string
+	algs    []string
 
 	mu    sync.Mutex
 	codes map[string]authRequest
@@ -71,7 +75,7 @@ func (f *fakeIDP) discovery(w http.ResponseWriter, _ *http.Request) {
 		"authorization_endpoint":                f.srv.URL + "/authorize",
 		"token_endpoint":                        f.srv.URL + "/token",
 		"jwks_uri":                              f.srv.URL + "/jwks",
-		"id_token_signing_alg_values_supported": []string{"RS256"},
+		"id_token_signing_alg_values_supported": f.algList(),
 		"code_challenge_methods_supported":      []string{"S256"},
 	}
 	if f.userinfo != nil {
@@ -160,7 +164,7 @@ func (f *fakeIDP) token(w http.ResponseWriter, r *http.Request) {
 		"access_token": "at-" + rand.Text(),
 		"token_type":   "Bearer",
 		"expires_in":   3600,
-		"id_token":     f.sign(claims),
+		"id_token":     f.signOrRaw(claims),
 	})
 }
 
@@ -324,6 +328,16 @@ func TestOIDCFailures(t *testing.T) {
 		{"no username claim", func(c map[string]any) { delete(c, "email") }, nil, http.StatusUnauthorized},
 		{"malformed groups", func(c map[string]any) { c["groups"] = []any{"a", 1} }, nil, http.StatusUnauthorized},
 		{"groups wrong type", func(c map[string]any) { c["groups"] = map[string]any{"a": 1} }, nil, http.StatusUnauthorized},
+		{"no sub", func(c map[string]any) { delete(c, "sub") }, nil, http.StatusUnauthorized},
+		{"empty sub", func(c map[string]any) { c["sub"] = "" }, nil, http.StatusUnauthorized},
+		{"azp is another client", func(c map[string]any) {
+			c["aud"] = []string{"other-client", testClientID}
+			c["azp"] = "other-client"
+		}, nil, http.StatusUnauthorized},
+		{"several audiences without azp", func(c map[string]any) { c["aud"] = []string{testClientID, "other-client"} }, nil, http.StatusUnauthorized},
+		{"azp present but wrong with one audience", func(c map[string]any) { c["azp"] = "other-client" }, nil, http.StatusUnauthorized},
+		{"issued in the future", func(c map[string]any) { c["iat"] = time.Now().Add(48 * time.Hour).Unix() }, nil, http.StatusUnauthorized},
+		{"email_verified as the string false", func(c map[string]any) { c["email_verified"] = "false" }, nil, http.StatusUnauthorized},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -374,35 +388,49 @@ func TestOIDCClaims(t *testing.T) {
 		claims   func(map[string]any)
 		userinfo map[string]any
 		want     Identity
+		wantLog  string // must appear in the log when set
 	}{
+		{"email_verified as the string true (Cognito)", nil, func(c map[string]any) { c["email_verified"] = "true" }, nil,
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"platform"}}, ""},
+		{"azp equal to client with several audiences", nil, func(c map[string]any) {
+			c["aud"] = []string{testClientID, "other-client"}
+			c["azp"] = testClientID
+		}, nil, Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"platform"}}, ""},
+		// Look-alike names are kept verbatim; authz's ASCII-only folding
+		// keeps them from matching bindings for the real address.
+		{"kelvin-sign email kept verbatim", nil, func(c map[string]any) { c["email"] = "\u212Aevin@example.com" }, nil,
+			Identity{Subject: "user-1", Name: "\u212Aevin@example.com", Email: "\u212Aevin@example.com", Groups: []string{"platform"}}, ""},
+		{"userinfo without sub ignored", nil, func(c map[string]any) { delete(c, "groups") },
+			map[string]any{"groups": []string{"ops"}},
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}, "userinfo subject missing"},
 		{"single string group", nil, func(c map[string]any) { c["groups"] = "ops" }, nil,
-			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"ops"}}},
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"ops"}}, ""},
 		{"no groups", nil, func(c map[string]any) { delete(c, "groups") }, nil,
-			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}},
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}, ""},
 		{"groups from userinfo", nil, func(c map[string]any) { delete(c, "groups") },
 			map[string]any{"sub": "user-1", "groups": []string{"ops", "x"}},
-			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"ops"}}},
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"ops"}}, ""},
 		{"email_verified from userinfo", nil, func(c map[string]any) { delete(c, "email_verified") },
 			map[string]any{"sub": "user-1", "email_verified": true},
-			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"platform"}}},
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"platform"}}, ""},
 		{"userinfo for another subject ignored", nil, func(c map[string]any) { delete(c, "groups") },
 			map[string]any{"sub": "user-2", "groups": []string{"ops"}},
-			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}},
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}, ""},
 		{"id token wins over userinfo", nil, nil,
 			map[string]any{"sub": "user-1", "groups": []string{"ops"}},
-			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"platform"}}},
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com", Groups: []string{"platform"}}, ""},
 		{"overage", nil, func(c map[string]any) {
 			// Microsoft Entra's shape for users in too many groups.
 			delete(c, "groups")
 			c["_claim_names"] = map[string]any{"groups": "src1"}
 			c["_claim_sources"] = map[string]any{"src1": map[string]any{"endpoint": "https://graph.example/getMemberObjects"}}
 		}, map[string]any{"sub": "user-1", "groups": []string{"ops"}},
-			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}},
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}, "groups overage"},
 		{"overage hasgroups", nil, func(c map[string]any) {
 			delete(c, "groups")
 			c["hasgroups"] = true
 		}, map[string]any{"sub": "user-1", "groups": []string{"ops"}},
-			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}},
+			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}, "groups overage"},
 		{"custom claims", func(o *Options) {
 			o.OIDC.UsernameClaim = "preferred_username"
 			o.OIDC.GroupsClaim = "roles"
@@ -411,7 +439,7 @@ func TestOIDCClaims(t *testing.T) {
 			c["email_verified"] = false // not required when the username is not the email
 			c["roles"] = []string{"ops"}
 		}, nil,
-			Identity{Subject: "user-1", Name: "jdoe", Email: "jdoe@example.com", Groups: []string{"ops"}}},
+			Identity{Subject: "user-1", Name: "jdoe", Email: "jdoe@example.com", Groups: []string{"ops"}}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -433,8 +461,8 @@ func TestOIDCClaims(t *testing.T) {
 			if diff := cmp.Diff(tt.want, id); !ok || diff != "" {
 				t.Errorf("identity ok=%v (-want +got):\n%s", ok, diff)
 			}
-			if tt.name == "overage" && !strings.Contains(logs.String(), "overage") {
-				t.Error("overage not logged")
+			if tt.wantLog != "" && !strings.Contains(logs.String(), tt.wantLog) {
+				t.Errorf("log lacks %q:\n%s", tt.wantLog, logs.String())
 			}
 		})
 	}

@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"path"
 	"slices"
-	"strings"
 )
 
 // Identity is what the policy needs to know about a user. Name is the
-// username matched case-insensitively against Binding.Users; Groups are
+// username matched against Binding.Users after FoldUsername; Groups are
 // matched exactly against Binding.Groups.
 type Identity struct {
 	Name   string
@@ -57,7 +56,7 @@ func New(def Role, bindings []Binding) (*Policy, error) {
 			continue
 		}
 		p.bindings = append(p.bindings, binding{
-			users:  set(b.Users, strings.ToLower),
+			users:  set(b.Users, FoldUsername),
 			groups: set(b.Groups, nil),
 			role:   b.Role,
 			conns:  slices.Clone(b.Connections),
@@ -163,7 +162,7 @@ func (p *Policy) MaxRole(user Identity, conns []string) Role {
 
 func (b binding) matchesUser(u Identity) bool {
 	if u.Name != "" {
-		if _, ok := b.users[strings.ToLower(u.Name)]; ok {
+		if _, ok := b.users[FoldUsername(u.Name)]; ok {
 			return true
 		}
 	}

@@ -55,7 +55,7 @@ This document is the source of truth for behaviour. When this file and the canva
   - no identity, `basic`/`oidc`: 303 to `<base>/login?next=<path>`; for htmx requests, 401 with `HX-Redirect: <base>/login?next=<current page>` so the whole page navigates instead of swapping in a fragment.
   - no identity, or rejected identity headers, `proxy`: 401.
   - Probes and `/static/` need no identity.
-- **Return-to (`next`):** accepted only if it is a same-origin relative path under `base_path` (starts with `<base>/`, not `//`, no scheme or host). Anything else falls back to `<base>/`.
+- **Return-to (`next`):** accepted only if it is a same-origin relative path under `base_path` (starts with `<base>/`, not `//`, no scheme or host), at most 1 KB, with no backslash, control character or encoded `.`, `/` or `\` (`%2e`, `%2f`, `%5c`). The path is cleaned (`path.Clean`, keeping a trailing slash) before the prefix check, and the cleaned, re-encoded URL is what is used; fragments are dropped. Anything else falls back to `<base>/`. For htmx requests it comes from `HX-Current-URL` (path and query only), or is `<base>/` without one. Challenges send `Cache-Control: no-store`.
 - **Logout:** `POST /logout`. `basic` and `oidc` clear the session cookie and redirect to the login page (OIDC: local logout only). `proxy` redirects to `auth.proxy.logout_url`.
 - **Sign out visibility:** shown for `basic` and `oidc`; for `proxy` only when `logout_url` is set; never for `none`.
 
@@ -66,18 +66,18 @@ This document is the source of truth for behaviour. When this file and the canva
 - Startup logs a WARN when the listen address is not loopback (empty host, `0.0.0.0`, `::` or any non-loopback IP or hostname other than `localhost`).
 
 ### `basic`
-- Login form (username + password). Users are listed in config with **bcrypt** hashes and optional `groups`.
+- Login form (username + password). Users are listed in config with **bcrypt** hashes and optional `groups`. All hashes must use the same bcrypt cost (startup fails otherwise; rehash at one cost), so a failed login takes the same time whichever user was tried. Usernames that differ only in ASCII case are rejected at startup.
 - Unknown usernames are compared against a dummy hash, so a miss costs the same as a hit.
-- **Rate limit:** 5 `POST /login` attempts per minute per client IP (`r.RemoteAddr`). Further attempts get 429 and "Too many attempts. Try again later." Behind a proxy every user shares the proxy's IP.
+- **Rate limit:** 5 `POST /login` attempts per minute per client IP (`r.RemoteAddr`, IPv6 per /64) and 5 per minute per username. Further attempts get 429 and "Too many attempts. Try again later." Behind a proxy every user shares the proxy's IP, so one user's failures can lock out the others. Failed logins are logged with the username only when it exists.
 - bcrypt reads at most 72 bytes. Passwords longer than 72 bytes are rejected at login.
 - Every request re-checks the session's user against the current config: a user removed from config is signed out, and groups always come from config.
 - Invalid credentials show "Invalid username or password."
 
 ### `proxy`
 - Identity comes from request headers set by a reverse proxy: `user_header` (default `X-Forwarded-User`) and optional `groups_header` (default unset).
-- **Trust** is decided from `r.RemoteAddr` only, against `trusted_proxies` (CIDRs or IPs, required). `X-Forwarded-For` is never consulted.
+- **Trust** is decided from `r.RemoteAddr` only, against `trusted_proxies` (CIDRs or IPs, required: an empty list fails startup; a prefix covering every address, such as `0.0.0.0/0`, logs a WARN). `X-Forwarded-For` is never consulted.
 - A request from an untrusted IP that carries either identity header gets 401.
-- A trusted request with a missing or empty user header gets 401.
+- A trusted request with a missing or empty user header gets 401. So does one where the user or groups header appears more than once (a proxy that appends instead of replacing); this is logged as a WARN.
 - Groups: split on `,`, trim spaces, drop empty entries.
 - Identity is read on every request. There is no session cookie, so `auth.session` is not needed.
 - There is no login page.
@@ -85,9 +85,9 @@ This document is the source of truth for behaviour. When this file and the canva
 
 ### `oidc`
 - Authorization-code flow with **PKCE (S256)**. "Sign in with SSO" posts to `POST /login`, which redirects to the IdP. The IdP returns to `GET /auth/callback`.
-- **Flow cookie:** state, nonce, PKCE verifier and `next` are kept in an encrypted cookie `asynqui_oidc`: 10 minute lifetime, `Path=<base>/auth/callback`, `HttpOnly`, `SameSite=Lax`, `Secure` per `cookie_secure`. It is deleted after the callback.
-- **ID token:** verified with go-oidc's Verifier (issuer, audience = `client_id`, expiry) and the nonce.
-- **Username:** the `username_claim` (default `email`). When it is `email`, `email_verified` must be `true`, otherwise login fails.
+- **Flow cookie:** state, nonce, PKCE verifier and `next` are kept in an encrypted cookie `asynqui_oidc`: 10 minute lifetime, `Path=<base>/auth/callback`, `HttpOnly`, `SameSite=Lax`, `Secure` per `cookie_secure`. It is deleted by a callback whose `state` matches; a forged callback leaves it, so it cannot cancel a login in progress.
+- **ID token:** verified with go-oidc's Verifier (issuer, audience = `client_id`, expiry, RS256 and other asymmetric algorithms only) and the nonce. `sub` must be non-empty; `azp` must equal `client_id` when present or when `aud` has several entries; `iat` may be at most 5 minutes in the future.
+- **Username:** the `username_claim` (default `email`). When it is `email`, `email_verified` must be `true` (the boolean, or the string `"true"` as Amazon Cognito sends it), otherwise login fails. Userinfo claims are used only when the userinfo `sub` is present and equals the ID token's.
 - **Groups:** read from `groups_claim` (default `groups`) in the ID token, falling back to the userinfo endpoint. The claim may be a string or an array of strings. On a groups overage (`_claim_names` / `_claim_sources`), log a WARN and treat groups as empty.
 - **Scopes:** default `openid profile email`. `groups` is not a default; add it if your IdP needs it. `openid` is always sent.
 - `issuer`, `client_id` and `redirect_url` are required. `client_secret` is optional (public clients).
@@ -99,6 +99,7 @@ This document is the source of truth for behaviour. When this file and the canva
 - Signed and encrypted with `gorilla/securecookie`. Keys are hex in config: `hash_key` decodes to 32 or 64 bytes, `block_key` to 32 bytes. Both are validated at startup and never auto-generated.
 - **Rotation:** `previous_keys` (list of `{hash_key, block_key}`) still decode existing cookies; new cookies always use the current pair (`securecookie.CodecsFromPairs`).
 - **TTL:** absolute from sign-in, default 12h. There is no sliding renewal.
+- **Payload:** identity claims only, never tokens, plus the provider name: a cookie minted by another provider (e.g. a `basic` deployment sharing the keys) is rejected. Basic sessions store no groups. Cookie values over 4096 bytes are rejected before decoding; when several `asynqui_session` cookies arrive, the first valid one is used.
 - **No server-side revocation.** Signing out clears the cookie in that browser only. To invalidate every session, rotate the keys without keeping the old pair in `previous_keys`. For `basic`, removing a user from config also signs them out.
 
 ### Login page
@@ -125,7 +126,7 @@ authz:
 - **Default:** `authz.default` applies to every identified user on every connection.
   - `auth.provider: none`: defaults to **viewer**.
   - `basic`, `proxy`, `oidc`: defaults to **none**, so access comes only from bindings.
-- **Matching:** a binding matches if the username is in `users` (case-insensitive) or the user has a group in `groups` (exact, case-sensitive). `connections` takes globs (`path.Match` syntax).
+- **Matching:** a binding matches if the username is in `users` (case-insensitive for ASCII letters only, so look-alikes such as the Kelvin sign do not match `k`) or the user has a group in `groups` (exact, case-sensitive). `connections` takes globs (`path.Match` syntax).
 - **Effective role:** for each connection, the highest role among the matching bindings and `default`.
 - **Startup validation:** the binary fails to start on an unknown role, an empty `connections` list, an invalid glob, or a binding with neither users nor groups. A binding's `role` cannot be `none`.
 - **Hidden connections:** a connection where the user's effective role is none is invisible to them everywhere (sidebar, Overview, counts). Its URLs return 404, not 403.

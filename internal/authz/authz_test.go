@@ -52,6 +52,7 @@ func TestMatrix(t *testing.T) {
 		ActionDeleteTask:        {false, false, false, true},
 		ActionDeleteQueue:       {false, false, false, true},
 		Action(0):               {false, false, false, false},
+		ActionDeleteQueue + 1:   {false, false, false, false},
 		Action(999):             {false, false, false, false},
 	}
 	for a, want := range matrix {
@@ -317,6 +318,114 @@ func TestNewCopiesInput(t *testing.T) {
 	}
 	if _, ok := p.RoleFor(Identity{Name: "u"}, "b"); ok {
 		t.Error("caller mutation of Connections leaked into policy")
+	}
+}
+
+func TestFoldUsername(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"", ""},
+		{"jdoe", "jdoe"},
+		{"JDoe@Example.COM", "jdoe@example.com"},
+		{"\u212Aevin", "\u212Aevin"},       // Kelvin sign is not K
+		{"adm\u0130n", "adm\u0130n"},       // U+0130 is not I
+		{"\u212Bngström", "\u212Bngström"}, // Angstrom sign is not Å
+		{"ÄBC", "Äbc"},                     // only ASCII folds
+	}
+	for _, tt := range tests {
+		if got := FoldUsername(tt.in); got != tt.want {
+			t.Errorf("FoldUsername(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestLookalikeUsernames: Unicode case folding would map these onto the
+// bound ASCII names; ASCII-only folding must not.
+func TestLookalikeUsernames(t *testing.T) {
+	p := mustPolicy(t, RoleNone,
+		Binding{Users: []string{"kevin@example.com"}, Role: RoleAdmin, Connections: []string{"*"}},
+		Binding{Users: []string{"admin"}, Role: RoleAdmin, Connections: []string{"*"}},
+		Binding{Users: []string{"ångström"}, Role: RoleAdmin, Connections: []string{"*"}},
+	)
+	tests := []struct {
+		name string
+		user string
+		want Role
+	}{
+		{"ascii upper case", "KEVIN@EXAMPLE.COM", RoleAdmin},
+		{"kelvin sign", "\u212Aevin@example.com", RoleNone},
+		{"capital I with dot", "adm\u0130n", RoleNone},
+		{"dotless i", "adm\u0131n", RoleNone},
+		{"angstrom sign", "\u212Bngström", RoleNone},
+		{"zero-width space", "admin\u200B", RoleNone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, _ := p.RoleFor(Identity{Name: tt.user}, "main"); got != tt.want {
+				t.Errorf("RoleFor(%q) = %v, want %v", tt.user, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEdgeIdentitiesAndConnections(t *testing.T) {
+	p := mustPolicy(t, RoleNone,
+		Binding{Users: []string{"x"}, Groups: []string{"g"}, Role: RoleAdmin, Connections: []string{"main*", "[ab]illing"}},
+	)
+	ids := []struct {
+		name string
+		id   Identity
+	}{
+		{"zero", Identity{}},
+		{"empty group", Identity{Groups: []string{""}}},
+		{"group case differs", Identity{Groups: []string{"G"}}},
+		{"group with space", Identity{Groups: []string{" g"}}},
+	}
+	for _, tt := range ids {
+		if r, ok := p.RoleFor(tt.id, "main"); ok {
+			t.Errorf("%s: RoleFor = %v, want hidden", tt.name, r)
+		}
+	}
+	conns := []struct {
+		conn string
+		want Role
+	}{
+		{"main", RoleAdmin},
+		{"main-prod", RoleAdmin},
+		{"mainx", RoleAdmin},
+		{"billing", RoleAdmin},
+		{"ailling", RoleAdmin},
+		{"cilling", RoleNone},
+		{"Main", RoleNone},
+		{"", RoleNone},
+		{"../main", RoleNone},
+	}
+	for _, tt := range conns {
+		if got, _ := p.RoleFor(Identity{Name: "x"}, tt.conn); got != tt.want {
+			t.Errorf("RoleFor(x, %q) = %v, want %v", tt.conn, got, tt.want)
+		}
+	}
+}
+
+func TestGlobValidation(t *testing.T) {
+	tests := []struct {
+		glob    string
+		wantErr bool
+	}{
+		{"*", false},
+		{"[^a]", false},
+		{`\*`, false},
+		{"[", true},
+		{"x[", true},
+		{"*[", true},
+		{`a\`, true},
+		{"[a-]", true},
+		{"[]a]", true},
+	}
+	for _, tt := range tests {
+		_, err := New(RoleNone, []Binding{{Users: []string{"x"}, Role: RoleAdmin, Connections: []string{tt.glob}}})
+		if (err != nil) != tt.wantErr {
+			t.Errorf("glob %q: err = %v, wantErr %v", tt.glob, err, tt.wantErr)
+		}
 	}
 }
 
