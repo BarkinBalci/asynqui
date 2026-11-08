@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: templ generate is up to date
+        run: |
+          go tool templ generate
+          git diff --exit-code
+      - name: vet
+        run: go vet ./...
+      - name: lint
+        run: go tool golangci-lint run
+      - name: test
+        # ubuntu runners ship Docker, which testcontainers uses for Redis.
+        run: go test -race ./...

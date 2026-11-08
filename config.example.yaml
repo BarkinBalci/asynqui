@@ -1,0 +1,106 @@
+# asynqui example configuration. Every option is shown with its default.
+# Values may reference environment variables as ${NAME}; a missing variable is
+# a startup error. Run with:  asynqui -config config.example.yaml
+
+# Listen address (overridden by -addr or ASYNQUI_ADDR).
+addr: ":8080"
+
+# Serve the UI under a sub-path behind a reverse proxy, e.g. "/asynq".
+base_path: ""
+
+log:
+  level: info            # debug | info | warn | error
+
+# Default auto-refresh interval for new visitors: off | 2s | 5s | 10s.
+refresh:
+  default: 5s
+
+# Check GitHub releases (cached 24h) to show the update dot in the sidebar.
+update_check: true
+
+# Timeouts applied to every Redis call made by asynqui.
+redis:
+  timeout: 2s
+
+# One connection = one Redis address + logical DB. Names are required, must be
+# unique, and are used in URLs and authorization rules
+# (lowercase letters, digits, ".", "_", "-").
+connections:
+  - name: main
+    addr: redis-main.internal:6379
+    db: 0
+    username: asynq-ui              # Redis ACL user (optional)
+    password: ${MAIN_REDIS_PASSWORD} # optional
+    tls:
+      enabled: true
+      ca_file: /etc/asynqui/ca.pem   # optional; system roots when empty
+      cert_file: ""                  # client certificate (mutual TLS), optional
+      key_file: ""
+      server_name: ""                # override SNI / verification name
+      insecure_skip_verify: false
+    dial_timeout: 5s
+    read_timeout: 3s
+    write_timeout: 3s
+
+  - name: main-jobs
+    addr: redis-main.internal:6379
+    db: 3
+
+  - name: local
+    addr: localhost:6379
+    db: 1
+
+# Authentication provider: none | basic | proxy | oidc.
+auth:
+  provider: none
+
+  # Session cookie keys (required unless provider is none). Generate with:
+  #   openssl rand -hex 32
+  session:
+    hash_key: ${ASYNQUI_SESSION_HASH_KEY}
+    block_key: ${ASYNQUI_SESSION_BLOCK_KEY}
+    ttl: 12h
+
+  # provider: basic. Passwords are bcrypt hashes:
+  #   htpasswd -nbBC 12 "" 'secret' | cut -d: -f2
+  basic:
+    users:
+      - username: jdoe
+        password_hash: ${JDOE_PASSWORD_HASH}
+        groups: [payments-team]
+
+  # provider: proxy. Identity headers are trusted only from these CIDRs.
+  proxy:
+    user_header: X-Forwarded-User
+    groups_header: X-Forwarded-Groups  # comma-separated, optional
+    trusted_proxies: [10.0.0.0/8]
+
+  # provider: oidc. Authorization code flow with PKCE.
+  # Register the redirect URL https://<host><base_path>/auth/callback.
+  oidc:
+    issuer: https://login.example.com/realms/acme
+    client_id: asynqui
+    client_secret: ${ASYNQUI_OIDC_CLIENT_SECRET}
+    redirect_url: https://asynqui.example.com/auth/callback
+    scopes: [openid, profile, email, groups]
+    username_claim: email
+    groups_claim: groups
+
+# Roles: viewer < operator < admin, scoped per connection.
+#   viewer:   read everything
+#   operator: + pause/resume queues, run/archive/cancel tasks, scheduler Run now
+#   admin:    + delete tasks and delete queues
+# A user's role on a connection is the highest of `default` and every matching
+# binding. Connections with no role are hidden from that user.
+authz:
+  default: viewer          # viewer | operator | admin | none  (admin when auth.provider is none)
+  bindings:
+    - groups: [platform]
+      role: admin
+      connections: ["*"]
+    - groups: [payments-team]
+      role: operator
+      connections: ["main", "main-*"]
+    - users: [jdoe@example.com]
+      role: operator
+      connections: ["local"]
