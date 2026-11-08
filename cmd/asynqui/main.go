@@ -13,27 +13,23 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/BarkinBalci/asynqui/internal/config"
 	"github.com/BarkinBalci/asynqui/internal/web"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const (
-	// shutdownTimeout bounds http.Server.Shutdown. shutdown_delay plus this
-	// must stay below the orchestrator's grace period
-	// (terminationGracePeriodSeconds on Kubernetes).
-	shutdownTimeout = 10 * time.Second
-	// defaultShutdownDelay is how long readiness reports 503 before the
-	// listener closes, so load balancers stop routing first. Config key
-	// server.shutdown_delay; 0 disables.
-	defaultShutdownDelay = 5 * time.Second
-)
+// shutdownTimeout bounds http.Server.Shutdown. server.shutdown_delay plus
+// this must stay below the orchestrator's grace period
+// (terminationGracePeriodSeconds on Kubernetes).
+const shutdownTimeout = 10 * time.Second
 
 func main() {
 	err := run(context.Background(), os.Args, os.LookupEnv, os.Stdout, os.Stderr)
@@ -64,15 +60,27 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		return nil
 	}
 
-	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: opts.logLevel}))
+	cfg, err := config.Load(opts.configPath, lookupEnv, opts.overrides)
+	if err != nil {
+		return err // Load names the file and every problem
+	}
+	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: cfg.Log.SlogLevel()}))
+	logger.Info("config loaded", slog.String("path", opts.configPath), slog.Any("config", cfg))
+	for _, w := range cfg.Warnings() {
+		logger.Warn("config", slog.String("warning", w))
+	}
+	if cfg.Auth.Provider == config.ProviderNone && !isLoopback(cfg.Server.Addr) {
+		logger.Warn("authentication is disabled (auth.provider: none) on a non-loopback address",
+			slog.String("addr", cfg.Server.Addr), slog.String("authz_default", string(cfg.Authz.Default)))
+	}
 
-	// Config loading (opts.configPath), auth initialisation and OIDC
-	// discovery are added here, before Listen, as their packages land.
-	shutdownDelay := defaultShutdownDelay
+	// Auth initialisation and OIDC discovery are added here, before Listen,
+	// as their packages land.
+	shutdownDelay := cfg.Server.ShutdownDelay
 
 	var ready web.Readiness
 	httpServer := &http.Server{
-		Addr:              opts.addr,
+		Addr:              cfg.Server.Addr,
 		Handler:           web.NewServer(logger, &ready),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -84,7 +92,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	}
 
 	var lc net.ListenConfig
-	ln, err := lc.Listen(ctx, "tcp", opts.addr)
+	ln, err := lc.Listen(ctx, "tcp", cfg.Server.Addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
@@ -122,4 +130,18 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	}
 	logger.Info("stopped")
 	return nil
+}
+
+// isLoopback reports whether a listen address accepts only local
+// connections. An empty host listens on every interface.
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
 }

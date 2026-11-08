@@ -433,6 +433,13 @@ YAML, path from §7 "Precedence". [config.example.yaml](../config.example.yaml) 
 - `${NAME:-default}` uses `default` when `NAME` is unset (an empty value is still used as is).
 - `$$` produces a literal `$`.
 - Any other `$` is left alone, so bcrypt hashes like `$2y$12$…` need no escaping.
+- An interpolated value is read as its field's type, whatever its quoting: verbatim for strings, decimal for integers (`010` is 10), as if unquoted otherwise. An empty value in a non-string field keeps the default. Keys are never interpolated.
+
+### Errors
+- Every problem is reported at once, ordered by line, as `line N: location: problem`.
+- Messages name the location, never the value, so secrets cannot leak through them.
+- Also rejected: null list entries, values of the wrong type, and an alias (`*name`) of an interpolated value used for a field of another type.
+- Warnings (logged, not fatal): a binding glob that matches no connection, TLS options set while `tls.enabled` is false, an OIDC `redirect_url` whose path is not `<base_path>/auth/callback`.
 
 ### Keys and defaults
 
@@ -461,7 +468,7 @@ YAML, path from §7 "Precedence". [config.example.yaml](../config.example.yaml) 
 | `connections[].write_timeout` | `3s` | |
 | `auth.provider` | `none` | `none`, `basic`, `proxy`, `oidc`. |
 | `auth.session.hash_key` | — | Hex, 32 or 64 bytes. Required for `basic` and `oidc`. |
-| `auth.session.block_key` | — | Hex, 32 bytes. Required for `basic` and `oidc`. |
+| `auth.session.block_key` | — | Hex, 32 bytes, different from `hash_key`. Required for `basic` and `oidc`. |
 | `auth.session.previous_keys` | `[]` | List of `{hash_key, block_key}`, decode only. |
 | `auth.session.ttl` | `12h` | Absolute. |
 | `auth.session.cookie_secure` | `true` | |
@@ -471,7 +478,7 @@ YAML, path from §7 "Precedence". [config.example.yaml](../config.example.yaml) 
 | `auth.basic.users[].groups` | `[]` | |
 | `auth.proxy.user_header` | `X-Forwarded-User` | |
 | `auth.proxy.groups_header` | `""` | Empty disables groups. |
-| `auth.proxy.trusted_proxies` | — | Required for `proxy`. CIDRs or IPs. |
+| `auth.proxy.trusted_proxies` | — | Required for `proxy`. CIDRs or IPs; a CIDR must have no host bits set (`10.0.0.0/8`, not `10.1.2.3/8`). |
 | `auth.proxy.logout_url` | `""` | Empty hides Sign out. |
 | `auth.oidc.issuer` | — | Required for `oidc`. |
 | `auth.oidc.client_id` | — | Required for `oidc`. |

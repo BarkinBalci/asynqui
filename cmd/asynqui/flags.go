@@ -5,15 +5,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 // options are the command-line settings. Precedence is flag > env > config
-// file > default; the file layer is applied by config loading.
+// file > default; overrides holds only what a flag or env var set, and
+// config.Load applies it over the file.
 type options struct {
 	configPath string
-	addr       string
-	logLevel   slog.Level
+	overrides  config.Overrides
 	help       bool
 }
 
@@ -34,8 +35,8 @@ func parseFlags(args []string, lookupEnv func(string) (string, bool), stderr io.
 	fs := flag.NewFlagSet("asynqui", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "asynqui.yaml", "path to the configuration file (env ASYNQUI_CONFIG)")
-	addr := fs.String("addr", ":8080", "listen address (env ASYNQUI_ADDR)")
-	logLevel := fs.String("log-level", "info", "debug, info, warn or error (env ASYNQUI_LOG_LEVEL)")
+	addr := fs.String("addr", config.DefaultAddr, "listen address (env ASYNQUI_ADDR; overrides server.addr)")
+	logLevel := fs.String("log-level", config.DefaultLogLevel, "debug, info, warn or error (env ASYNQUI_LOG_LEVEL; overrides log.level)")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return options{help: true}, nil
@@ -50,35 +51,32 @@ func parseFlags(args []string, lookupEnv func(string) (string, bool), stderr io.
 
 	set := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	fromEnv := func(name string, dst *string, env string) {
+	// explicit returns the flag's value if it was set, else its env var if
+	// set and non-empty, else "".
+	explicit := func(name, value, env string) string {
 		if set[name] {
-			return
+			return value
 		}
 		if v, ok := lookupEnv(env); ok && v != "" {
-			*dst = v
+			return v
+		}
+		return ""
+	}
+
+	opts := options{
+		configPath: explicit("config", *configPath, "ASYNQUI_CONFIG"),
+		overrides: config.Overrides{
+			Addr:     explicit("addr", *addr, "ASYNQUI_ADDR"),
+			LogLevel: explicit("log-level", *logLevel, "ASYNQUI_LOG_LEVEL"),
+		},
+	}
+	if opts.configPath == "" {
+		opts.configPath = *configPath
+	}
+	if l := opts.overrides.LogLevel; l != "" {
+		if _, err := config.ParseLogLevel(l); err != nil {
+			return options{}, fmt.Errorf("-log-level %q: %w", l, err)
 		}
 	}
-	fromEnv("config", configPath, "ASYNQUI_CONFIG")
-	fromEnv("addr", addr, "ASYNQUI_ADDR")
-	fromEnv("log-level", logLevel, "ASYNQUI_LOG_LEVEL")
-
-	level, err := parseLevel(*logLevel)
-	if err != nil {
-		return options{}, err
-	}
-	return options{configPath: *configPath, addr: *addr, logLevel: level}, nil
-}
-
-func parseLevel(s string) (slog.Level, error) {
-	switch s {
-	case "debug":
-		return slog.LevelDebug, nil
-	case "info":
-		return slog.LevelInfo, nil
-	case "warn":
-		return slog.LevelWarn, nil
-	case "error":
-		return slog.LevelError, nil
-	}
-	return 0, fmt.Errorf("log level %q: want debug, info, warn or error", s)
+	return opts, nil
 }
