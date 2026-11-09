@@ -11,6 +11,12 @@ import (
 
 // readInfoFixture returns a testdata INFO reply with Redis's CRLF line
 // endings.
+//
+// The fixtures were built from the INFO code of Redis 7.4.1 and Valkey 8.0
+// (src/server.c): every field a fresh standalone master writes in the
+// default sections, in order, with made-up values. Regenerate them from
+// real containers (redis:7.4-alpine, valkey/valkey:8.0-alpine; INFO with no
+// argument) once Docker is available.
 func readInfoFixture(t *testing.T, name string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", name))
@@ -55,17 +61,20 @@ func TestParseInfoFixtures(t *testing.T) {
 		},
 		{
 			fixture: "info_valkey.txt",
-			picks:   []string{"server/server_name", "server/redis_mode", "memory/maxmemory_policy", "keyspace/db0"},
+			// Valkey writes server_mode, not redis_mode, unless
+			// extended-redis-compatibility is on (it is off by default).
+			picks: []string{"server/server_name", "server/server_mode", "server/redis_mode", "server/availability_zone", "memory/maxmemory_policy", "keyspace/db0"},
 			want: summary{
 				Backend:      BackendValkey,
 				Version:      "8.0.2",
 				RedisVersion: "7.2.4",
-				Sections:     []string{"Server", "Clients", "Memory", "Keyspace"},
+				Sections:     []string{"Server", "Clients", "Memory", "Persistence", "Stats", "Replication", "CPU", "Modules", "Errorstats", "Cluster", "Keyspace"},
 				Picks: map[string]string{
-					"server/server_name":      "valkey",
-					"server/redis_mode":       "standalone",
-					"memory/maxmemory_policy": "allkeys-lru",
-					"keyspace/db0":            "keys=3,expires=1,avg_ttl=59000",
+					"server/server_name":       "valkey",
+					"server/server_mode":       "standalone",
+					"server/availability_zone": "",
+					"memory/maxmemory_policy":  "noeviction",
+					"keyspace/db0":             "keys=3,expires=1,avg_ttl=59000",
 				},
 			},
 		},

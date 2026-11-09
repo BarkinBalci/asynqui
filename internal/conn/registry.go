@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -15,8 +16,13 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
-// ErrNotFound is returned for a connection name that is not configured.
-var ErrNotFound = errors.New("conn: unknown connection")
+// Errors.
+var (
+	// ErrNotFound is returned for a connection name that is not configured.
+	ErrNotFound = errors.New("conn: unknown connection")
+	// ErrClosed is returned by health checks after Registry.Close.
+	ErrClosed = errors.New("conn: registry closed")
+)
 
 // Registry holds every configured connection, in config order. It is safe
 // for concurrent use.
@@ -93,9 +99,8 @@ func (r *Registry) Start(ctx context.Context) {
 	}
 }
 
-// Recheck runs a health check of the named connection now and stores its
-// result, which it returns. It returns ErrNotFound for an unknown name, and
-// ctx's error, without storing anything, if ctx ends first.
+// Recheck runs a health check of the named connection now; see
+// Conn.Recheck. It returns ErrNotFound for an unknown name.
 func (r *Registry) Recheck(ctx context.Context, name string) (Health, error) {
 	c, ok := r.Get(name)
 	if !ok {
@@ -118,6 +123,9 @@ func (r *Registry) Close() error {
 		r.stop()
 	}
 	r.mu.Unlock()
+	for _, c := range r.conns {
+		c.closed.Store(true) // checks from now on do nothing
+	}
 	r.wg.Wait()
 
 	var errs []error
@@ -134,33 +142,54 @@ func (r *Registry) Close() error {
 type Conn struct {
 	name string
 	addr string // display address, host:port/db
-	// timeout bounds one Redis operation that may need a fresh connection:
-	// dial (with TLS and AUTH), write and read.
+	// timeout is the context deadline of our own commands (PING, INFO):
+	// dial_timeout + write_timeout + read_timeout, room for one attempt on
+	// a fresh connection. Inspector calls take no context; see newConn.
 	timeout time.Duration
 	logger  *slog.Logger
 
 	inspector *asynq.Inspector
-	client    *asynq.Client
 	redis     redis.UniversalClient
 
 	pinger pinger         // redis, or a fake in tests
 	queues queueInspector // inspector, or a fake in tests
 	cache  *cache
 
-	mu     sync.Mutex
-	health Health
+	closed atomic.Bool // set by Registry.Close
+
+	mu            sync.Mutex
+	health        Health
+	healthStarted time.Time // when the check behind health started
 }
+
+// maxRetries is how often go-redis retries a failed command (on a network
+// error or timeout). One retry still covers a pooled connection that died
+// with a Redis restart, and keeps the bound below tight.
+const maxRetries = 1
 
 // newConn builds a connection without any Redis I/O.
 //
-// The Inspector, the Client and our own commands share one go-redis client,
-// and so one connection pool, instead of the three pools that
-// asynq.NewInspector and asynq.NewClient with a RedisClientOpt would open.
-// Its options are those asynq.RedisClientOpt.MakeRedisClient sets, plus
-// ContextTimeoutEnabled so that context deadlines bound our own commands
-// (PING, INFO) and Client.EnqueueContext. Inspector methods take no context
-// and run under context.Background() inside asynq, so only the socket
-// timeouts bound them.
+// The Inspector and our own commands share one go-redis client, and so one
+// connection pool, instead of the second pool that asynq.NewInspector with a
+// RedisClientOpt would open. Its options are those
+// asynq.RedisClientOpt.MakeRedisClient sets, plus:
+//
+//   - ContextTimeoutEnabled, so that context deadlines bound our own
+//     commands (PING, INFO).
+//   - MaxRetries 1 instead of 3.
+//
+// Inspector methods take no context and run under context.Background()
+// inside asynq, so only the socket timeouts bound them. Each command gets at
+// most 1+maxRetries attempts (with a backoff under 512ms between them). An
+// attempt waits up to read_timeout+1s for a pool connection (go-redis's
+// default PoolTimeout); on a fresh connection it dials within dial_timeout
+// (TLS included) and runs the HELLO/AUTH handshake; then each round trip
+// takes up to write_timeout + read_timeout. With the default timeouts a hung
+// Redis fails a command on a pooled connection within about
+// 2*(4s+3s+3s) = 20s, and an Inspector call within that times its command
+// count (three for GetQueueInfo); a refused connection fails at once.
+// Nothing cancels these calls early: a viewer that leaves only stops
+// waiting (see cached).
 func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 	tc, err := tlsConfig(cc.TLS)
 	if err != nil {
@@ -176,6 +205,7 @@ func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 		WriteTimeout:          cc.WriteTimeout,
 		TLSConfig:             tc,
 		ContextTimeoutEnabled: true,
+		MaxRetries:            maxRetries,
 	})
 	inspector := asynq.NewInspectorFromRedisClient(rc)
 	if logger == nil {
@@ -187,7 +217,6 @@ func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 		timeout:   cc.DialTimeout + cc.WriteTimeout + cc.ReadTimeout,
 		logger:    logger.With(slog.String("conn", cc.Name)),
 		inspector: inspector,
-		client:    asynq.NewClientFromRedisClient(rc),
 		redis:     rc,
 		pinger:    redisPinger{rc},
 		queues:    inspector,
@@ -209,11 +238,3 @@ func (c *Conn) Addr() string { return c.addr }
 // Inspector returns the connection's asynq Inspector. It shares the
 // Registry's Redis client: do not Close it.
 func (c *Conn) Inspector() *asynq.Inspector { return c.inspector }
-
-// Client returns the connection's asynq Client. It shares the Registry's
-// Redis client: do not Close it.
-func (c *Conn) Client() *asynq.Client { return c.client }
-
-// Redis returns the connection's Redis client. The Registry owns it: do not
-// Close it.
-func (c *Conn) Redis() redis.UniversalClient { return c.redis }

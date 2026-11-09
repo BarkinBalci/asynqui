@@ -73,6 +73,19 @@ func mustGet(t *testing.T, reg *conn.Registry, name string) *conn.Conn {
 	return c
 }
 
+// newClient returns an asynq Client for enqueuing test tasks: asynqui itself
+// never enqueues.
+func newClient(t *testing.T, cc config.Connection) *asynq.Client {
+	t.Helper()
+	c := asynq.NewClient(asynq.RedisClientOpt{Addr: cc.Addr, DB: cc.DB, Username: cc.Username, Password: cc.Password.Reveal()})
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return c
+}
+
 func enqueue(t *testing.T, c *asynq.Client, n int, taskType string, opts ...asynq.Option) {
 	t.Helper()
 	for range n {
@@ -96,11 +109,12 @@ func eventually(t *testing.T, what string, cond func() bool) {
 
 func TestIntegrationSummary(t *testing.T) {
 	_, addr := runRedis(t, redisImage)
-	reg := newRegistry(t, connection("main", addr, 0), connection("other", addr, 1))
+	mainConn := connection("main", addr, 0)
+	reg := newRegistry(t, mainConn, connection("other", addr, 1))
 	mc := mustGet(t, reg, "main")
 
 	// Pending tasks in two queues, and a scheduled one that is not pending.
-	client := mc.Client()
+	client := newClient(t, mainConn)
 	enqueue(t, client, 3, "email", asynq.Queue("default"))
 	enqueue(t, client, 2, "email", asynq.Queue("critical"))
 	enqueue(t, client, 1, "report", asynq.Queue("low"), asynq.ProcessIn(time.Hour))
@@ -167,9 +181,12 @@ func TestIntegrationInfo(t *testing.T) {
 		backend     conn.Backend
 		version     string // prefix
 		redisPrefix string
+		// Valkey writes server_mode unless extended-redis-compatibility
+		// is on, which it is not by default.
+		modeKey string
 	}{
-		{redisImage, conn.BackendRedis, "7.4.", "7.4."},
-		{"valkey/valkey:8.0-alpine", conn.BackendValkey, "8.0.", "7.2."},
+		{redisImage, conn.BackendRedis, "7.4.", "7.4.", "redis_mode"},
+		{"valkey/valkey:8.0-alpine", conn.BackendValkey, "8.0.", "7.2.", "server_mode"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.image, func(t *testing.T) {
@@ -192,8 +209,8 @@ func TestIntegrationInfo(t *testing.T) {
 				}
 			}
 			server, _ := info.Section("server")
-			if mode, _ := server.Get("redis_mode"); mode != "standalone" {
-				t.Errorf("redis_mode = %q", mode)
+			if mode, _ := server.Get(tt.modeKey); mode != "standalone" {
+				t.Errorf("%s = %q, want standalone", tt.modeKey, mode)
 			}
 			if !strings.HasPrefix(info.Raw, "# Server\r\n") {
 				t.Errorf("Raw does not start with the server section: %.40q", info.Raw)
@@ -274,9 +291,9 @@ func TestIntegrationACL(t *testing.T) {
 		})
 	}
 
-	// The asynq Client and Inspector authenticate too.
+	// The Inspector authenticates too.
 	alice := mustGet(t, reg, "alice")
-	enqueue(t, alice.Client(), 2, "email")
+	enqueue(t, newClient(t, withUser("alice", "alice", "s3cret")), 2, "email")
 	s, err := alice.Summary(t.Context())
 	if err != nil {
 		t.Fatal(err)

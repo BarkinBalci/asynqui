@@ -18,7 +18,7 @@ asynqui/
 │   └── flags.go               # flags + ASYNQUI_* env, precedence
 ├── internal/
 │   ├── config/                # YAML load, ${ENV} interpolation, defaults, validation
-│   ├── conn/                  # Registry: name → inspector/client/redis; health loop; per-connection cache
+│   ├── conn/                  # Registry: name → inspector/redis; health loop; per-connection cache
 │   ├── auth/                  # none | basic | proxy | oidc; session cookie
 │   ├── authz/                 # roles and per-connection policy: Role(user, conn), Can(...)
 │   └── web/
@@ -138,7 +138,6 @@ func addRoutes(mux *http.ServeMux, d deps) {
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTasksRun(d)))          // ids or all=1&state=
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTasksArchive(d)))
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTasksCancel(d)))
-	mux.Handle("POST /c/{conn}/schedulers/run", op(d, handleSchedulerRunNow(d)))   // form: id=…&id=…
 
 	// admin
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleTasksDelete(d)))
@@ -171,7 +170,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 
 | Need | Library |
 |---|---|
-| Queue data and actions | `github.com/hibiken/asynq`: Inspector for reads and actions, Client for scheduler "Run now" |
+| Queue data and actions | `github.com/hibiken/asynq`: Inspector for reads and actions |
 | PING, INFO | `github.com/redis/go-redis/v9` (already a dependency of asynq) |
 | HTML components | `github.com/a-h/templ`; codegen runs through `go tool -modfile=tools/go.mod templ` |
 | Config | `go.yaml.in/yaml/v3`, the maintained successor to the archived `gopkg.in/yaml.v3` |
@@ -180,7 +179,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 | Session cookie | `github.com/gorilla/securecookie` |
 | CSRF | stdlib `http.CrossOriginProtection` (Go 1.25+), based on `Sec-Fetch-Site`, so no tokens are needed |
 | Routing, logging, flags | stdlib `net/http`, `log/slog`, `flag` |
-| Coalescing | `golang.org/x/sync/singleflight` |
+| Coalescing | a small hand-rolled single-flight in `conn` (typed keys, panic recovery) |
 
 **Frontend** (vendored and embedded; no npm and no build step)
 
@@ -208,9 +207,9 @@ func addRoutes(mux *http.ServeMux, d deps) {
 
 ## Data access and Redis load
 
-- **`conn.Registry`:** one per process. It holds a `*asynq.Inspector`, an `*asynq.Client` and a `redis.UniversalClient` per connection, all sharing one go-redis client (one pool) and created at startup without Redis I/O.
-- **Timeouts:** each connection's `dial_timeout` (5s), `read_timeout` (3s) and `write_timeout` (3s) go to its Redis client. There is no global Redis timeout. Every call also runs under the request context.
-- **Per-connection cache:** each snapshot (Overview stats, queue list, servers, …) is cached for **1s** behind `singleflight`, keyed by connection and snapshot. N viewers polling the same connection cost at most one Redis round per second.
+- **`conn.Registry`:** one per process. It holds a `*asynq.Inspector` and a `redis.UniversalClient` per connection, sharing one go-redis client (one pool), all created at startup without Redis I/O. asynqui never enqueues, so it has no `asynq.Client`.
+- **Timeouts:** each connection's `dial_timeout` (5s), `read_timeout` (3s) and `write_timeout` (3s) go to its Redis client. There is no global Redis timeout. Our own commands (PING, INFO) also run under a context deadline; Inspector calls take no context, so only these socket timeouts bound them.
+- **Per-connection cache:** each snapshot (Overview stats, queue list, servers, …) is cached for **1s**, keyed by connection and snapshot, and concurrent fetches of it are shared. N viewers polling the same connection cost at most one Redis round per second.
 - **Health loop:** one goroutine per connection sends PING every 10s and stores the result (reachable, unreachable + error, or unknown before the first result). The Overview, sidebar and badges only read it. `handleRecheck` runs a check synchronously and stores it.
 - **Concurrency:** connections are fetched in parallel. A failing connection renders "Connection failed" and does not block the page.
 - **Overview cost:** `GetQueueInfo` per queue, plus `Servers()` per connection. Instance-wide INFO is fetched only by the Info page.

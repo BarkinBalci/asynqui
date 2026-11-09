@@ -3,6 +3,8 @@ package conn
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,7 +15,7 @@ import (
 func TestCachedTTL(t *testing.T) {
 	steps := []struct {
 		after       time.Duration // since the previous step
-		key         string
+		key         cacheKey[int32]
 		wantFetches int32
 	}{
 		{0, "a", 1},
@@ -139,6 +141,66 @@ func TestCachedCallerCanceled(t *testing.T) {
 		}
 		if n := fetches.Load(); n != 1 {
 			t.Errorf("%d fetches, want 1", n)
+		}
+	})
+}
+
+func TestCachedKeyTypes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// The same name with different value types is two keys.
+		c := newCache()
+		n, err := cached(t.Context(), c, cacheKey[int]("k"), time.Second, func(context.Context) (int, error) { return 1, nil })
+		if err != nil || n != 1 {
+			t.Fatalf("int key = %v, %v", n, err)
+		}
+		s, err := cached(t.Context(), c, cacheKey[string]("k"), time.Second, func(context.Context) (string, error) { return "one", nil })
+		if err != nil || s != "one" {
+			t.Fatalf("string key = %q, %v", s, err)
+		}
+	})
+}
+
+func TestCachedRecoversPanic(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCache()
+		var calls atomic.Int32
+		fetch := func(context.Context) (int, error) {
+			if calls.Add(1) == 1 {
+				panic("bad reply")
+			}
+			return 2, nil
+		}
+		_, err := cached(t.Context(), c, "k", time.Second, fetch)
+		if err == nil || !strings.Contains(err.Error(), "panic: bad reply") {
+			t.Fatalf("error = %v, want the panic", err)
+		}
+		// The panic is not cached and the key is usable again.
+		if v, err := cached(t.Context(), c, "k", time.Second, fetch); err != nil || v != 2 {
+			t.Fatalf("after the panic = %v, %v", v, err)
+		}
+	})
+}
+
+// Keys that are never asked for again (a deleted queue's, say) must not pile
+// up.
+func TestCacheSweepsExpiredEntries(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCache()
+		fetch := func(context.Context) ([]byte, error) { return make([]byte, 1024), nil }
+		for i := range 10000 {
+			if _, err := cached(t.Context(), c, cacheKey[[]byte](fmt.Sprintf("tasks:q%d", i)), time.Second, fetch); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(time.Hour)
+		if _, err := cached(t.Context(), c, "summary", time.Second, func(context.Context) (int, error) { return 1, nil }); err != nil {
+			t.Fatal(err)
+		}
+		c.mu.Lock()
+		n, flights := len(c.entries), len(c.flights)
+		c.mu.Unlock()
+		if n != 1 || flights != 0 {
+			t.Errorf("%d entries and %d flights after the others expired, want 1 and 0", n, flights)
 		}
 	})
 }

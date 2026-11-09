@@ -3,7 +3,6 @@ package conn
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -29,17 +28,27 @@ type Summary struct {
 	// Processed includes failed tasks.
 	ProcessedToday int
 	FailedToday    int
-	// OldestPending is the largest QueueInfo.Latency: how long the oldest
-	// pending task of any queue has waited. Zero when nothing is pending.
+	// OldestPending is the largest QueueInfo.Latency of the queues that are
+	// not paused: how long the oldest pending task of a running queue has
+	// waited. Zero when none is pending, or every queue is paused.
 	OldestPending time.Duration
 }
 
 // Summary returns the connection's totals, from the 1s cache when fresh.
+//
+// Any failing queue fails the whole Summary, including a queue deleted
+// between the listing and its read: GetQueueInfo then fails with an error
+// that does not wrap asynq.ErrQueueNotFound. Errors are not cached, so the
+// next poll recovers.
 func (c *Conn) Summary(ctx context.Context) (Summary, error) {
-	return cached(ctx, c.cache, "summary", cacheTTL, c.fetchSummary)
+	return cached(ctx, c.cache, summaryKey, cacheTTL, c.fetchSummary)
 }
 
-// fetchSummary lists the queues and reads them in parallel.
+// fetchSummary lists the queues and reads up to summaryConcurrency of them
+// at a time. After the first failure it starts no further reads.
+//
+// The Inspector takes no context: its calls are bounded only by the
+// go-redis socket timeouts (see newConn), and ctx is unused.
 //
 // Cost: GetQueueInfo sends three commands per queue (SISMEMBER, then two
 // Lua scripts), and the second cannot be skipped: asynq's rdb.CurrentStats
@@ -52,39 +61,47 @@ func (c *Conn) Summary(ctx context.Context) (Summary, error) {
 // Inspector has no cheaper per-queue read and its RDB is internal, so
 // avoiding it would mean copying asynq's key layout. The 1s cache keeps the
 // cost to one round per connection per second, whatever the viewer count.
-func (c *Conn) fetchSummary(ctx context.Context) (Summary, error) {
-	names, err := call(ctx, c.timeout, c.queues.Queues)
+func (c *Conn) fetchSummary(context.Context) (Summary, error) {
+	names, err := c.queues.Queues()
 	if err != nil {
 		return Summary{}, fmt.Errorf("list queues: %w", err)
 	}
+
 	infos := make([]*asynq.QueueInfo, len(names))
-	errs := make([]error, len(names))
+	var (
+		mu       sync.Mutex
+		firstErr error
+	)
+	failed := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return firstErr != nil
+	}
 	sem := make(chan struct{}, summaryConcurrency)
 	var wg sync.WaitGroup
 	for i, q := range names {
 		sem <- struct{}{}
+		if failed() {
+			<-sem
+			break
+		}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			infos[i], errs[i] = call(ctx, c.timeout, func() (*asynq.QueueInfo, error) {
-				return c.queues.GetQueueInfo(q)
-			})
+			qi, err := recovered(func() (*asynq.QueueInfo, error) { return c.queues.GetQueueInfo(q) })
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("queue %s: %w", q, err)
+				}
+				mu.Unlock()
+				return
+			}
+			infos[i] = qi
 		})
 	}
 	wg.Wait()
-
-	if slices.ContainsFunc(errs, func(err error) bool { return err != nil }) {
-		// A queue deleted after the listing fails GetQueueInfo, which does
-		// not wrap asynq.ErrQueueNotFound. Ignore the failures of queues
-		// that a second listing no longer has.
-		now, err := call(ctx, c.timeout, c.queues.Queues)
-		if err != nil {
-			return Summary{}, fmt.Errorf("list queues: %w", err)
-		}
-		for i, err := range errs {
-			if err != nil && slices.Contains(now, names[i]) {
-				return Summary{}, fmt.Errorf("queue %s: %w", names[i], err)
-			}
-		}
+	if firstErr != nil {
+		return Summary{}, firstErr
 	}
 
 	var s Summary
@@ -98,33 +115,9 @@ func (c *Conn) fetchSummary(ctx context.Context) (Summary, error) {
 		s.Retry += qi.Retry
 		s.ProcessedToday += qi.Processed
 		s.FailedToday += qi.Failed
-		s.OldestPending = max(s.OldestPending, qi.Latency)
+		if !qi.Paused {
+			s.OldestPending = max(s.OldestPending, qi.Latency)
+		}
 	}
 	return s, nil
-}
-
-// call runs fn, which cannot be canceled, and returns its result, or ctx's
-// error once ctx ends or timeout passes, whichever is first. The Inspector
-// takes no context, so this is how its calls get a deadline. An abandoned
-// fn keeps running in the background until the socket timeouts of its
-// Redis client stop it; its result is dropped.
-func call[T any](ctx context.Context, timeout time.Duration, fn func() (T, error)) (T, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	type result struct {
-		v   T
-		err error
-	}
-	ch := make(chan result, 1) // buffered, so an abandoned fn never blocks
-	go func() {
-		v, err := fn()
-		ch <- result{v, err}
-	}()
-	select {
-	case r := <-ch:
-		return r.v, r.err
-	case <-ctx.Done():
-		var zero T
-		return zero, ctx.Err()
-	}
 }

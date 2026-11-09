@@ -3,6 +3,9 @@ package conn
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -171,6 +174,161 @@ func TestCloseStopsHealthLoops(t *testing.T) {
 		time.Sleep(time.Minute)
 		if a.Load() != 3 {
 			t.Errorf("Start after Close ran checks")
+		}
+	})
+}
+
+// lockedBuffer collects log output from several goroutines.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func logTo(c *Conn) *lockedBuffer {
+	var buf lockedBuffer
+	c.logger = slog.New(slog.NewTextHandler(&buf, nil))
+	return &buf
+}
+
+// pingStep is the answer to one PING, by call order.
+type pingStep struct {
+	latency time.Duration
+	err     error
+}
+
+func steppedPinger(steps ...pingStep) pinger {
+	var n atomic.Int32
+	return pingFunc(func(context.Context) error {
+		i := int(n.Add(1)) - 1
+		if i >= len(steps) {
+			return nil
+		}
+		time.Sleep(steps[i].latency)
+		return steps[i].err
+	})
+}
+
+// Of two overlapping checks, the one that started last is kept, whether it
+// is the loop's or a Recheck's, and whichever finishes first.
+func TestOverlappingChecks(t *testing.T) {
+	errDial := errors.New("dial tcp: i/o timeout")
+	tests := []struct {
+		name    string
+		steps   []pingStep    // loop at 0s and 10s, Recheck at recheck
+		recheck time.Duration // when Retry now is clicked
+		at      time.Duration // when the stored health is read
+		want    State
+		checked time.Duration // the stored CheckedAt, from the start
+	}{
+		{
+			// The loop's check starts while Redis is down and hangs in dial
+			// until 9s; Redis is back when Retry now runs at 5s.
+			name:    "stale loop check after a newer Recheck",
+			steps:   []pingStep{{9 * time.Second, errDial}, {0, nil}},
+			recheck: 5 * time.Second,
+			at:      9500 * time.Millisecond,
+			want:    StateUp,
+			checked: 5 * time.Second,
+		},
+		{
+			// Retry now at 8s hangs until 17s; the loop's check at 10s
+			// sees Redis up.
+			name:    "stale Recheck after a newer loop check",
+			steps:   []pingStep{{0, nil}, {9 * time.Second, errDial}, {0, nil}},
+			recheck: 8 * time.Second,
+			at:      17500 * time.Millisecond,
+			want:    StateUp,
+			checked: 10 * time.Second,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c := testConn(t, "main", steppedPinger(tt.steps...))
+				c.timeout = 11 * time.Second
+				logs := logTo(c)
+				reg := newRegistry(nil, c)
+				start := time.Now()
+				reg.Start(t.Context())
+
+				time.Sleep(tt.recheck)
+				recheck := make(chan Health, 1)
+				go func() {
+					h, _ := c.Recheck(t.Context())
+					recheck <- h
+				}()
+				time.Sleep(tt.at - tt.recheck)
+				synctest.Wait()
+
+				want := Health{State: tt.want, CheckedAt: start.Add(tt.checked)}
+				if diff := cmp.Diff(want, c.Health(), cmpopts.EquateErrors()); diff != "" {
+					t.Errorf("stored health (-want +got):\n%s", diff)
+				}
+				if h := <-recheck; h != c.Health() {
+					t.Errorf("Recheck returned %+v, stored %+v", h, c.Health())
+				}
+				if strings.Contains(logs.String(), "unreachable") {
+					t.Errorf("a stale result was logged:\n%s", logs)
+				}
+				if err := reg.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+		})
+	}
+}
+
+func TestCheckAfterClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		var pings atomic.Int32
+		c := testConn(t, "main", pingFunc(func(context.Context) error {
+			pings.Add(1)
+			<-release
+			return errors.New("redis: client is closed")
+		}))
+		logs := logTo(c)
+		reg := newRegistry(nil, c)
+
+		// A Retry now in flight when Close runs.
+		inFlight := make(chan error, 1)
+		go func() {
+			_, err := reg.Recheck(t.Context(), "main")
+			inFlight <- err
+		}()
+		synctest.Wait()
+		if err := reg.Close(); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		if err := <-inFlight; !errors.Is(err, ErrClosed) {
+			t.Errorf("in-flight Recheck error = %v, want ErrClosed", err)
+		}
+
+		// One after Close does not PING at all.
+		if _, err := reg.Recheck(t.Context(), "main"); !errors.Is(err, ErrClosed) {
+			t.Errorf("Recheck after Close error = %v, want ErrClosed", err)
+		}
+		if n := pings.Load(); n != 1 {
+			t.Errorf("%d PINGs, want 1", n)
+		}
+		if got := c.Health(); got.State != StateUnknown {
+			t.Errorf("health = %+v, want still unknown", got)
+		}
+		if s := logs.String(); s != "" {
+			t.Errorf("logged after Close:\n%s", s)
 		}
 	})
 }

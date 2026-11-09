@@ -103,7 +103,7 @@ auth:
 
 # Roles: viewer < operator < admin, scoped per connection.
 #   viewer:   read everything
-#   operator: + pause/resume queues, run/archive/cancel tasks, scheduler Run now
+#   operator: + pause/resume queues, run/archive/cancel tasks
 #   admin:    + delete tasks and delete queues
 # A user's role on a connection is the highest of `default` and every matching
 # binding. Connections with no role are hidden from that user.

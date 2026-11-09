@@ -78,7 +78,7 @@ func (s InfoSection) Get(key string) (string, bool) {
 // Info returns the server's INFO (default sections), from the 1s cache
 // when fresh.
 func (c *Conn) Info(ctx context.Context) (*Info, error) {
-	return cached(ctx, c.cache, "info", cacheTTL, c.fetchInfo)
+	return cached(ctx, c.cache, infoKey, cacheTTL, c.fetchInfo)
 }
 
 func (c *Conn) fetchInfo(ctx context.Context) (*Info, error) {

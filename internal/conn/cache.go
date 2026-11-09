@@ -2,22 +2,36 @@ package conn
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/singleflight"
 )
 
 // cacheTTL is how long a fetched snapshot is served to every viewer.
 const cacheTTL = time.Second
 
-// cache holds one connection's recent snapshots by query key, and coalesces
-// concurrent fetches of the same key into one.
-type cache struct {
-	group singleflight.Group
+// sweepInterval is the most often a cache removes its expired entries.
+const sweepInterval = 10 * time.Second
 
+// cacheKey names one snapshot of a connection. Its type parameter is the
+// type of the snapshot, so two uses of a key can never disagree on it: keys
+// with the same name but different T are different keys.
+type cacheKey[T any] string
+
+// Cache keys.
+const (
+	summaryKey cacheKey[Summary] = "summary"
+	infoKey    cacheKey[*Info]   = "info"
+)
+
+// cache holds one connection's recent snapshots, and coalesces concurrent
+// fetches of the same key into one.
+type cache struct {
 	mu      sync.Mutex
-	entries map[string]cacheEntry
+	entries map[any]cacheEntry // by cacheKey[T]
+	flights map[any]*flight    // fetches in progress, by cacheKey[T]
+	// nextSweep is when expired entries are next removed.
+	nextSweep time.Time
 }
 
 type cacheEntry struct {
@@ -25,65 +39,92 @@ type cacheEntry struct {
 	expires time.Time
 }
 
+// flight is one fetch shared by every caller that asked for its key while
+// it ran. val and err are written before done is closed.
+type flight struct {
+	done chan struct{}
+	val  any
+	err  error
+}
+
 func newCache() *cache {
-	return &cache{entries: map[string]cacheEntry{}}
-}
-
-func (c *cache) get(key string) (any, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, ok := c.entries[key]
-	if !ok {
-		return nil, false
-	}
-	if !time.Now().Before(e.expires) {
-		delete(c.entries, key)
-		return nil, false
-	}
-	return e.val, true
-}
-
-func (c *cache) set(key string, val any, ttl time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries[key] = cacheEntry{val: val, expires: time.Now().Add(ttl)}
+	return &cache{entries: map[any]cacheEntry{}, flights: map[any]*flight{}}
 }
 
 // cached returns the value stored under key if it is younger than ttl.
-// Otherwise it calls fetch, shared with every concurrent caller of the same
-// key, and stores a successful result for ttl. Errors are not stored.
+// Otherwise it starts fetch, or joins the one already running for key, and
+// stores a successful result for ttl. Errors are not stored, so the next
+// call fetches again. A panic in fetch is returned as an error.
 //
-// fetch runs under ctx without its cancelation, so a viewer that goes away
-// does not fail the fetch for the others; fetch must bound its own calls.
-// A caller whose ctx ends stops waiting and gets ctx's error.
+// A served value is at most ttl plus its fetch time old: ttl counts from
+// when the fetch finished.
 //
-// Every use of a key must have the same T. The value is shared between
-// callers, so they must not modify it.
-func cached[T any](ctx context.Context, c *cache, key string, ttl time.Duration, fetch func(context.Context) (T, error)) (T, error) {
+// fetch runs in its own goroutine under ctx without its cancelation, so a
+// viewer that goes away does not fail the fetch for the others; fetch must
+// be bounded by its own timeouts. A caller whose ctx ends stops waiting and
+// gets ctx's error, while the fetch goes on and is stored for later callers.
+//
+// The value is shared between callers, who must not modify it.
+func cached[T any](ctx context.Context, c *cache, key cacheKey[T], ttl time.Duration, fetch func(context.Context) (T, error)) (T, error) {
 	var zero T
-	if v, ok := c.get(key); ok {
-		return v.(T), nil
+	c.mu.Lock()
+	if e, ok := c.entries[key]; ok && time.Now().Before(e.expires) {
+		c.mu.Unlock()
+		return e.val.(T), nil
 	}
-	fctx := context.WithoutCancel(ctx)
-	ch := c.group.DoChan(key, func() (any, error) {
-		// A flight that finished between our get and DoChan stored a value.
-		if v, ok := c.get(key); ok {
-			return v, nil
-		}
-		v, err := fetch(fctx)
-		if err != nil {
-			return nil, err
-		}
-		c.set(key, v, ttl)
-		return v, nil
-	})
+	f, ok := c.flights[key]
+	if !ok {
+		f = &flight{done: make(chan struct{})}
+		c.flights[key] = f
+		fctx := context.WithoutCancel(ctx)
+		go c.fly(key, f, ttl, func() (any, error) { return fetch(fctx) })
+	}
+	c.mu.Unlock()
+
 	select {
-	case r := <-ch:
-		if r.Err != nil {
-			return zero, r.Err
+	case <-f.done:
+		if f.err != nil {
+			return zero, f.err
 		}
-		return r.Val.(T), nil
+		return f.val.(T), nil
 	case <-ctx.Done():
 		return zero, ctx.Err()
 	}
+}
+
+// fly runs the fetch of flight f, stores a successful result under key and
+// releases the waiters.
+func (c *cache) fly(key any, f *flight, ttl time.Duration, fetch func() (any, error)) {
+	defer close(f.done)
+	f.val, f.err = recovered(fetch)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.flights, key)
+	if f.err != nil {
+		return
+	}
+	now := time.Now()
+	// Sweep expired entries at most once per sweepInterval, so keys that
+	// are not asked for again (a deleted queue's, say) do not pile up.
+	if !now.Before(c.nextSweep) {
+		for k, e := range c.entries {
+			if !now.Before(e.expires) {
+				delete(c.entries, k)
+			}
+		}
+		c.nextSweep = now.Add(sweepInterval)
+	}
+	c.entries[key] = cacheEntry{val: f.val, expires: now.Add(ttl)}
+}
+
+// recovered calls fn and returns a panic in it as an error, since nothing
+// up the stack of a background goroutine could recover it.
+func recovered[T any](fn func() (T, error)) (v T, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("conn: panic: %v", r)
+		}
+	}()
+	return fn()
 }

@@ -66,9 +66,13 @@ func (c *Conn) Health() Health {
 	return c.health
 }
 
-// Recheck runs a health check now and stores its result, which it returns.
+// Recheck runs a health check now, stores its result and returns the health
+// then stored: its own result, unless an overlapping check that started
+// later stored first.
+//
 // If ctx ends first it returns ctx's error and stores nothing, so a
-// canceled request never marks the connection down.
+// canceled request never marks the connection down. After Registry.Close
+// it returns ErrClosed without checking.
 func (c *Conn) Recheck(ctx context.Context) (Health, error) {
 	return c.check(ctx)
 }
@@ -79,7 +83,7 @@ func (c *Conn) healthLoop(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
-		_, _ = c.check(ctx) // only fails once ctx is done
+		_, _ = c.check(ctx) // only fails once ctx is done or Close ran
 		select {
 		case <-ctx.Done():
 			return
@@ -88,9 +92,14 @@ func (c *Conn) healthLoop(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// check sends one PING, bounded by the connection's timeouts, and stores the
-// result unless ctx ended first.
+// check sends one PING, bounded by c.timeout, and stores the result unless
+// ctx ended first or the registry closed. Of two overlapping checks, the
+// one that started last wins, whichever finishes first: it saw Redis more
+// recently. It returns the health stored after it.
 func (c *Conn) check(ctx context.Context) (Health, error) {
+	if c.closed.Load() {
+		return Health{}, ErrClosed
+	}
 	pctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	start := time.Now()
@@ -99,19 +108,23 @@ func (c *Conn) check(ctx context.Context) (Health, error) {
 	if ctx.Err() != nil {
 		return Health{}, ctx.Err()
 	}
+	if c.closed.Load() {
+		return Health{}, ErrClosed // Close ran meanwhile; the PING may have failed for it
+	}
 	h := Health{State: StateUp, CheckedAt: end, Latency: end.Sub(start)}
 	if err != nil {
 		h.State, h.Err = StateDown, err
 	}
 
 	c.mu.Lock()
-	prev := c.health
-	if h.CheckedAt.Before(prev.CheckedAt) {
-		// A concurrent check (Recheck racing the loop) finished later.
+	if start.Before(c.healthStarted) {
+		// Stale: a check that started later already stored its result.
+		h = c.health
 		c.mu.Unlock()
 		return h, nil
 	}
-	c.health = h
+	prev := c.health
+	c.health, c.healthStarted = h, start
 	c.mu.Unlock()
 
 	if h.State != prev.State {

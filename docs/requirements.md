@@ -136,8 +136,8 @@ authz:
 |---|---|---|---|
 | View every page | ✓ | ✓ | ✓ |
 | Pause / resume queue | | ✓ | ✓ |
-| Run / archive / cancel tasks (single, bulk, "all") | | ✓ | ✓ |
-| Scheduler entry "Run now" | | ✓ | ✓ |
+| Run / archive tasks (single, bulk, "all") | | ✓ | ✓ |
+| Cancel active tasks (single, bulk) | | ✓ | ✓ |
 | **Delete tasks** (single, bulk, "all") | | | ✓ |
 | **Delete queue** | | | ✓ |
 
@@ -224,7 +224,7 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - the user's role on that connection (chip)
   - address `host:port/db` (mono, muted)
   - Queues, Pending, Active and Retry
-  - Processed today, Failed today (red) and **Oldest pending**: the maximum `QueueInfo.Latency` across queues, as a duration, with no queue name
+  - Processed today, Failed today (red) and **Oldest pending**: the maximum `QueueInfo.Latency` across queues that are not paused (0 when all are paused), as a duration, with no queue name
   - footer: a "Healthy" badge and an "Open →" link
 - **Unreachable card:**
   - name, role chip and address
@@ -260,7 +260,7 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 
 | Tab | Column A (sortable) | Column B | Bulk actions | "All" actions |
 |---|---|---|---|---|
-| Active | Started | Running for | Cancel | Cancel all |
+| Active | Started | Running for | Cancel | — |
 | Pending | Enqueued | Retried | Archive, Delete | Archive all, Delete all |
 | Scheduled | Process at | In | Run now, Archive, Delete | Run all, Archive all, Delete all |
 | Retry | Next retry | Last error | Run now, Archive, Delete | Run all, Archive all, Delete all |
@@ -268,7 +268,6 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 | Completed | Completed at | Result kept until | Delete | Delete all |
 | Aggregating | — | — | — | — |
 
-- **Cancel all:** asynq has no bulk cancel. "Cancel all" lists the active tasks and calls `CancelProcessing` for each, reporting the count.
 - **Aggregating tab:** lists groups (`Groups(queue)`) with their sizes. Empty state: "No aggregating tasks".
 - **After an action:** an inline result notice ("Archived 12 tasks"). The table refreshes and the selection clears.
 
@@ -310,9 +309,8 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 - **Unknown ID:** shows "Server not found".
 
 ### 6.7 Schedulers `/c/{conn}/schedulers`
-- **Header:** "Schedulers", a "Filter entries" input, "N selected", and "Run now" (operator).
-- **Table:**
-  - checkbox
+- **Header:** "Schedulers" and a "Filter entries" input.
+- **Read-only table** (no checkboxes):
   - Entry ID (shortened, a row link)
   - Spec: cron spec in mono plus a muted human description, e.g. "every day at 06:00"
   - Task type
@@ -321,19 +319,12 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - Next run, Last run: relative, with absolute in the title
 - **Default sort:** Next run asc.
 - **Entry identity:** entries are identified by **entry ID**, which the scheduler regenerates on restart. Duplicate task types are allowed and shown as separate rows.
-- **Run now:**
-  - A confirmation dialog first.
-  - It enqueues a **one-off copy** of the entry's task (type, payload and options) via `asynq.Client`. It never touches the scheduler.
-  - The `TaskID` option is stripped, so each copy gets a fresh ID. `Unique` is kept; on `ErrDuplicateTask` the error is shown in a toast and nothing is enqueued.
-  - Result notice: "Enqueued task {shortId} in {queue}" with "View task →". For several entries: "Enqueued N tasks".
-  - These tasks do not appear in Enqueue history, because only the scheduler process writes it.
 
 ### 6.8 Scheduler entry `/c/{conn}/schedulers/{id}`
 - **Breadcrumb:** ends with the short entry ID.
 - **Header:**
   - the task type (h1)
   - the full entry ID (mono) with Copy ID
-  - "Run now" (operator, same behaviour as 6.7)
 - **Payload card:** JSON / Raw toggle and copy button.
 - **Enqueue history table:**
   - Enqueued at (sortable, default desc)
@@ -417,7 +408,7 @@ Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control:
 - Secrets (passwords, keys, client secret, cookies, tokens) are never logged.
 
 ### Redis load
-- Each connection has a cache with a **1s TTL** behind `singleflight`, per snapshot. Every viewer shares the same fetches, whatever the number of viewers or their refresh interval.
+- Each connection has a cache with a **1s TTL** that coalesces concurrent fetches, per snapshot. Every viewer shares the same fetches, whatever the number of viewers or their refresh interval.
 - Connections are fetched in parallel. One slow or failing connection never blocks a page.
 - Polling "Off" sends no polling requests at all.
 

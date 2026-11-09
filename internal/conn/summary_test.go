@@ -1,9 +1,9 @@
 package conn
 
 import (
-	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -13,35 +13,29 @@ import (
 	"github.com/hibiken/asynq"
 )
 
-// fakeQueues is a fake queueInspector. Each Queues call returns the next
-// listing (the last one repeats).
+// fakeQueues is a fake queueInspector.
 type fakeQueues struct {
-	listings [][]string
-	listErr  error
-	infos    map[string]*asynq.QueueInfo
-	errs     map[string]error
+	names   []string
+	listErr error
+	infos   map[string]*asynq.QueueInfo
+	errs    map[string]error
+	panics  map[string]bool
 	// delay is how long each GetQueueInfo takes.
 	delay time.Duration
 
 	mu       sync.Mutex
-	lists    int
+	calls    int
 	inFlight int
 	maxIn    int
 }
 
 func (f *fakeQueues) Queues() ([]string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.listErr != nil {
-		return nil, f.listErr
-	}
-	l := f.listings[min(f.lists, len(f.listings)-1)]
-	f.lists++
-	return l, nil
+	return f.names, f.listErr
 }
 
 func (f *fakeQueues) GetQueueInfo(q string) (*asynq.QueueInfo, error) {
 	f.mu.Lock()
+	f.calls++
 	f.inFlight++
 	f.maxIn = max(f.maxIn, f.inFlight)
 	f.mu.Unlock()
@@ -49,6 +43,9 @@ func (f *fakeQueues) GetQueueInfo(q string) (*asynq.QueueInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inFlight--
+	if f.panics[q] {
+		panic("unexpected reply")
+	}
 	if err := f.errs[q]; err != nil {
 		return nil, err
 	}
@@ -57,49 +54,62 @@ func (f *fakeQueues) GetQueueInfo(q string) (*asynq.QueueInfo, error) {
 
 func TestSummary(t *testing.T) {
 	errBoom := errors.New("boom")
-	infos := map[string]*asynq.QueueInfo{
-		"default":  {Queue: "default", Pending: 5, Active: 2, Retry: 1, Scheduled: 9, Archived: 4, Processed: 100, Failed: 3, Latency: 30 * time.Second},
-		"critical": {Queue: "critical", Pending: 1, Active: 1, Processed: 10, Failed: 1, Latency: 2 * time.Minute},
-		"low":      {Queue: "low", Retry: 2},
+	infos := func(pausedCritical, pausedDefault bool) map[string]*asynq.QueueInfo {
+		return map[string]*asynq.QueueInfo{
+			"default":  {Queue: "default", Pending: 5, Active: 2, Retry: 1, Scheduled: 9, Archived: 4, Processed: 100, Failed: 3, Latency: 30 * time.Second, Paused: pausedDefault},
+			"critical": {Queue: "critical", Pending: 1, Active: 1, Processed: 10, Failed: 1, Latency: 2 * time.Minute, Paused: pausedCritical},
+			"low":      {Queue: "low", Retry: 2},
+		}
+	}
+	all := []string{"default", "critical", "low"}
+	totals := Summary{Queues: 3, Pending: 6, Active: 3, Retry: 3, ProcessedToday: 110, FailedToday: 4}
+	with := func(oldest time.Duration) Summary {
+		s := totals
+		s.OldestPending = oldest
+		return s
 	}
 	tests := []struct {
 		name    string
 		fake    *fakeQueues
 		want    Summary
-		wantErr error
+		wantErr string
 	}{
 		{
 			name: "no queues",
-			fake: &fakeQueues{listings: [][]string{{}}},
+			fake: &fakeQueues{},
 			want: Summary{},
 		},
 		{
 			name: "sums and oldest pending",
-			fake: &fakeQueues{listings: [][]string{{"default", "critical", "low"}}, infos: infos},
-			want: Summary{Queues: 3, Pending: 6, Active: 3, Retry: 3, ProcessedToday: 110, FailedToday: 4, OldestPending: 2 * time.Minute},
+			fake: &fakeQueues{names: all, infos: infos(false, false)},
+			want: with(2 * time.Minute),
 		},
 		{
-			name: "queue deleted after the listing",
-			fake: &fakeQueues{
-				listings: [][]string{{"default", "critical"}, {"default"}},
-				infos:    infos,
-				errs:     map[string]error{"critical": errBoom},
-			},
-			want: Summary{Queues: 1, Pending: 5, Active: 2, Retry: 1, ProcessedToday: 100, FailedToday: 3, OldestPending: 30 * time.Second},
+			name: "paused queue counted but not in oldest pending",
+			fake: &fakeQueues{names: all, infos: infos(true, false)},
+			want: with(30 * time.Second),
 		},
 		{
-			name: "queue fails",
-			fake: &fakeQueues{
-				listings: [][]string{{"default", "critical"}},
-				infos:    infos,
-				errs:     map[string]error{"critical": errBoom},
-			},
-			wantErr: errBoom,
+			name: "every queue with pending tasks paused",
+			fake: &fakeQueues{names: all, infos: infos(true, true)},
+			want: with(0),
+		},
+		{
+			// Also what a queue deleted after the listing does: the next
+			// poll recovers.
+			name:    "queue fails",
+			fake:    &fakeQueues{names: all, infos: infos(false, false), errs: map[string]error{"critical": errBoom}},
+			wantErr: "queue critical: boom",
+		},
+		{
+			name:    "queue panics",
+			fake:    &fakeQueues{names: all, infos: infos(false, false), panics: map[string]bool{"low": true}},
+			wantErr: "queue low: conn: panic: unexpected reply",
 		},
 		{
 			name:    "listing fails",
 			fake:    &fakeQueues{listErr: errBoom},
-			wantErr: errBoom,
+			wantErr: "list queues: boom",
 		},
 	}
 	for _, tt := range tests {
@@ -107,8 +117,12 @@ func TestSummary(t *testing.T) {
 			c := testConn(t, "main", nil)
 			c.queues = tt.fake
 			got, err := c.Summary(t.Context())
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			var gotErr string
+			if err != nil {
+				gotErr = err.Error()
+			}
+			if gotErr != tt.wantErr {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
 			}
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("Summary (-want +got):\n%s", diff)
@@ -120,13 +134,11 @@ func TestSummary(t *testing.T) {
 func TestSummaryConcurrency(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		fake := &fakeQueues{infos: map[string]*asynq.QueueInfo{}, delay: time.Second}
-		var names []string
 		for i := range 3*summaryConcurrency + 1 {
 			q := fmt.Sprintf("q%02d", i)
-			names = append(names, q)
+			fake.names = append(fake.names, q)
 			fake.infos[q] = &asynq.QueueInfo{Queue: q, Pending: 1}
 		}
-		fake.listings = [][]string{names}
 		c := testConn(t, "main", nil)
 		c.queues = fake
 
@@ -135,8 +147,8 @@ func TestSummaryConcurrency(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Queues != len(names) || got.Pending != len(names) {
-			t.Errorf("Summary = %+v, want %d queues and pending", got, len(names))
+		if got.Queues != len(fake.names) || got.Pending != len(fake.names) {
+			t.Errorf("Summary = %+v, want %d queues and pending", got, len(fake.names))
 		}
 		if fake.maxIn != summaryConcurrency {
 			t.Errorf("%d GetQueueInfo calls in flight at most, want %d", fake.maxIn, summaryConcurrency)
@@ -147,23 +159,31 @@ func TestSummaryConcurrency(t *testing.T) {
 	})
 }
 
-func TestSummaryCallTimeout(t *testing.T) {
+// A hung Redis makes every GetQueueInfo fail after its socket timeouts. The
+// slots stay taken until the calls return, and after the first failure no
+// more queues are read, so the Summary fails after one round, not one per
+// summaryConcurrency queues.
+func TestSummaryHungRedis(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c := testConn(t, "main", nil)
-		c.timeout = 2 * time.Second
-		c.queues = &fakeQueues{
-			listings: [][]string{{"slow"}},
-			infos:    map[string]*asynq.QueueInfo{"slow": {}},
-			delay:    time.Minute, // longer than the timeout
+		fake := &fakeQueues{errs: map[string]error{}, delay: 12 * time.Second}
+		for i := range 80 {
+			q := fmt.Sprintf("q%02d", i)
+			fake.names = append(fake.names, q)
+			fake.errs[q] = errors.New("i/o timeout")
 		}
+		c := testConn(t, "main", nil)
+		c.queues = fake
+
 		start := time.Now()
 		_, err := c.Summary(t.Context())
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("error = %v, want context.DeadlineExceeded", err)
+		if err == nil || !strings.HasSuffix(err.Error(), "i/o timeout") {
+			t.Fatalf("error = %v, want the i/o timeout", err)
 		}
-		if took := time.Since(start); took != 2*time.Second {
-			t.Errorf("Summary returned after %v, want the 2s call timeout", took)
+		if took := time.Since(start); took != 12*time.Second {
+			t.Errorf("Summary failed after %v, want one round of 12s", took)
 		}
-		time.Sleep(time.Minute) // let the abandoned call finish
+		if fake.maxIn != summaryConcurrency || fake.calls != summaryConcurrency {
+			t.Errorf("%d calls, at most %d in flight; want %d and %d", fake.calls, fake.maxIn, summaryConcurrency, summaryConcurrency)
+		}
 	})
 }
