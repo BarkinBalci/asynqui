@@ -26,10 +26,11 @@ func securityHeaders(next http.Handler) http.Handler {
 }
 
 // logRequests logs one structured line per request, except probes under
-// /health/.
-func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
+// <base>/health/.
+func logRequests(logger *slog.Logger, base string, next http.Handler) http.Handler {
+	probes := base + "/health/"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/health/") {
+		if strings.HasPrefix(r.URL.Path, probes) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -50,6 +51,7 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 func recoverPanics(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &responseRecorder{ResponseWriter: w}
+		ctx := r.Context()
 		defer func() {
 			v := recover()
 			if v == nil {
@@ -58,7 +60,7 @@ func recoverPanics(logger *slog.Logger, next http.Handler) http.Handler {
 			if v == http.ErrAbortHandler { //nolint:errorlint // sentinel compared by identity, per net/http docs
 				panic(v)
 			}
-			logger.ErrorContext(r.Context(), "panic",
+			logger.ErrorContext(ctx, "panic",
 				slog.Any("panic", v),
 				slog.String("path", r.URL.Path),
 				slog.String("stack", string(debug.Stack())),

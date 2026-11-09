@@ -1,0 +1,97 @@
+package components
+
+import "github.com/BarkinBalci/asynqui/internal/web/format"
+
+templ SidebarNav(m Sidebar) {
+	<aside class="side">
+		<a class="brand" href={ templ.SafeURL(m.OverviewURL) }>
+			@Logo("28")
+			@Wordmark()
+		</a>
+		<nav class="nav" aria-label="Global">
+			if m.Section == SectionOverview {
+				<a class="on" href={ templ.SafeURL(m.OverviewURL) } aria-current="page">
+					@IconOverview("18")
+					Overview
+				</a>
+			} else {
+				<a href={ templ.SafeURL(m.OverviewURL) }>
+					@IconOverview("18")
+					Overview
+				</a>
+			}
+		</nav>
+		<div class="side-conns">
+			<div class="navlabel"><span>Connections</span><span class="num">{ format.Number(int64(len(m.Conns))) }</span></div>
+			<label class="side-filter">
+				<span class="sr-only">Filter connections</span>
+				<input type="search" placeholder="Filter connections" autocomplete="off" data-filter="#conn-list"/>
+			</label>
+			<nav id="conn-list" class="conn-list" aria-label="Connections">
+				for _, c := range m.Conns {
+					if c.Current {
+						<div class="conn-current" data-filter-text={ c.Name + " " + c.Addr }>
+							@connItem(c)
+							<div class="nav subnav">
+								@subItem(c.Sub.QueuesURL, m.Section == SectionQueues) {
+									@IconQueues("16")
+									Queues
+								}
+								@subItem(c.Sub.ServersURL, m.Section == SectionServers) {
+									@IconServers("16")
+									Servers
+								}
+								@subItem(c.Sub.SchedulersURL, m.Section == SectionSchedulers) {
+									@IconSchedulers("16")
+									Schedulers
+								}
+								@subItem(c.Sub.InfoURL, m.Section == SectionInfo) {
+									@IconDatabase("16")
+									@SectionName(SectionInfo, c.Sub.Valkey)
+								}
+							</div>
+						</div>
+					} else {
+						<div data-filter-text={ c.Name + " " + c.Addr }>
+							@connItem(c)
+						</div>
+					}
+				}
+			</nav>
+		</div>
+		@footer(m.Footer)
+	</aside>
+}
+
+templ connItem(c SidebarConn) {
+	<a class="citem" href={ templ.SafeURL(c.URL) }>
+		<span class="citem-name">
+			{ c.Name }
+			@StatusDot(c.Health)
+		</span>
+		<span class="citem-addr" title={ c.Addr }>{ c.Addr }</span>
+	</a>
+}
+
+templ subItem(url string, active bool) {
+	if active {
+		<a class="on" href={ templ.SafeURL(url) } aria-current="page">
+			{ children... }
+		</a>
+	} else {
+		<a href={ templ.SafeURL(url) }>
+			{ children... }
+		</a>
+	}
+}
+
+templ footer(f Footer) {
+	<div class="side-foot">
+		if f.UpdateAvailable {
+			<a class="version" href={ templ.SafeURL(f.ReleaseURL) } title="Release notes, update available">{ f.Version }<span class="dot dot-update"></span></a>
+		} else {
+			<a class="version" href={ templ.SafeURL(f.ReleaseURL) } title="Release notes">{ f.Version }</a>
+		}
+		<a href={ templ.SafeURL(f.SourceURL) } title="Source on GitHub">Source ↗</a>
+	</div>
+}

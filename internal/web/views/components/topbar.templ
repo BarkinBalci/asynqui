@@ -1,0 +1,134 @@
+package components
+
+// UpdatedID is the id of the "Updated …" time, refreshed out of band by
+// every polled fragment.
+const UpdatedID = "updated-at"
+
+templ TopBarView(m TopBar) {
+	<header class="top">
+		<nav class="crumbs" aria-label="Breadcrumb">
+			<ol>
+				for i, c := range m.Crumbs {
+					<li>
+						if i == len(m.Crumbs)-1 || c.URL == "" {
+							<span aria-current="page">
+								@CrumbLabel(c)
+							</span>
+						} else {
+							<a href={ templ.SafeURL(c.URL) }>
+								@CrumbLabel(c)
+							</a>
+						}
+					</li>
+				}
+			</ol>
+		</nav>
+		<div class="controls">
+			<span class="updated">
+				Updated{ " " }
+				@TimeID(UpdatedID, m.UpdatedAt, false)
+			</span>
+			<form class="seg" method="post" action={ templ.SafeURL(m.PrefsURL) } data-pref="refresh" role="group" aria-label="Auto refresh">
+				<input type="hidden" name="next" value={ m.Next }/>
+				for _, r := range Refreshes() {
+					@segButton("refresh", r.Value(), r == m.Refresh) {
+						@refreshLabel(r)
+					}
+				}
+			</form>
+			<form class="seg" method="post" action={ templ.SafeURL(m.PrefsURL) } data-pref="theme" role="group" aria-label="Theme">
+				<input type="hidden" name="next" value={ m.Next }/>
+				for _, t := range Themes() {
+					@themeButton(t, t == m.Theme)
+				}
+			</form>
+			@AccountMenu(m.Account)
+		</div>
+	</header>
+}
+
+templ segButton(name, value string, on bool) {
+	if on {
+		<button type="submit" class="on" name={ name } value={ value } aria-pressed="true">
+			{ children... }
+		</button>
+	} else {
+		<button type="submit" name={ name } value={ value } aria-pressed="false">
+			{ children... }
+		</button>
+	}
+}
+
+templ refreshLabel(r Refresh) {
+	switch r {
+		case RefreshOff:
+			Off
+		case Refresh2s:
+			2s
+		case Refresh5s:
+			5s
+		case Refresh10s:
+			10s
+	}
+}
+
+templ themeButton(t Theme, on bool) {
+	switch t {
+		case ThemeLight:
+			<button type="submit" class={ templ.KV("on", on) } name="theme" value={ t.Value() } aria-pressed={ ariaBool(on) } aria-label="Light theme" title="Light">
+				@IconThemeLight("16")
+			</button>
+		case ThemeDark:
+			<button type="submit" class={ templ.KV("on", on) } name="theme" value={ t.Value() } aria-pressed={ ariaBool(on) } aria-label="Dark theme" title="Dark">
+				@IconThemeDark("16")
+			</button>
+		default:
+			<button type="submit" class={ templ.KV("on", on) } name="theme" value={ t.Value() } aria-pressed={ ariaBool(on) } aria-label="System theme" title="System">
+				@IconThemeSystem("16")
+			</button>
+	}
+}
+
+func ariaBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// AccountMenu shows the user and their role with a Sign out menu. It renders
+// nothing when the account is hidden (auth none), and a plain label when
+// there is nothing to sign out of (proxy without logout_url).
+templ AccountMenu(a Account) {
+	if a.Visible {
+		if a.SignOut {
+			<details class="account" data-menu>
+				<summary class="account-btn" aria-label="Account menu">
+					{ a.User }
+					if a.Role != RoleNone {
+						<span class="account-role">
+							@RoleName(a.Role)
+						</span>
+					}
+					@IconChevron("14")
+				</summary>
+				<div class="account-menu">
+					<form method="post" action={ templ.SafeURL(a.LogoutURL) }>
+						<button type="submit" class="menu-item">Sign out</button>
+					</form>
+				</div>
+			</details>
+		} else {
+			<div class="account">
+				<span class="account-btn">
+					{ a.User }
+					if a.Role != RoleNone {
+						<span class="account-role">
+							@RoleName(a.Role)
+						</span>
+					}
+				</span>
+			</div>
+		}
+	}
+}

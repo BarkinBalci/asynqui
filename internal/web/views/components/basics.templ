@@ -1,0 +1,85 @@
+package components
+
+import (
+	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+)
+
+// Time renders t as <time datetime> with the absolute UTC text; app.js
+// rewrites it to relative local text with the absolute time in title.
+templ Time(t time.Time) {
+	<time datetime={ format.TimeAttr(t) }>{ format.TimeText(t) }</time>
+}
+
+// TimeID is Time with an element id, for out-of-band htmx updates.
+templ TimeID(id string, t time.Time, oob bool) {
+	if oob {
+		<time id={ id } datetime={ format.TimeAttr(t) } hx-swap-oob="true">{ format.TimeText(t) }</time>
+	} else {
+		<time id={ id } datetime={ format.TimeAttr(t) }>{ format.TimeText(t) }</time>
+	}
+}
+
+// StatusDot is a connection's health dot. Unknown is a muted dot.
+templ StatusDot(h Health) {
+	switch h {
+		case HealthUp:
+			<span class="dot dot-up" title="Reachable"></span>
+		case HealthDown:
+			<span class="dot dot-down" title="Unreachable"></span>
+		default:
+			<span class="dot dot-unknown" title="Checking"></span>
+	}
+}
+
+// HealthBadge is the Healthy or Unreachable badge; unknown has none.
+templ HealthBadge(h Health) {
+	switch h {
+		case HealthUp:
+			<span class="badge badge-ok"><span class="dot"></span>Healthy</span>
+		case HealthDown:
+			<span class="badge badge-danger"><span class="dot"></span>Unreachable</span>
+	}
+}
+
+// RoleName is the role as shown in chips and the account menu.
+templ RoleName(r Role) {
+	switch r {
+		case RoleViewer:
+			viewer
+		case RoleOperator:
+			operator
+		case RoleAdmin:
+			admin
+	}
+}
+
+// SectionName is a section's label in breadcrumbs and headings.
+templ SectionName(s Section, valkey bool) {
+	switch s {
+		case SectionOverview:
+			Overview
+		case SectionQueues:
+			Queues
+		case SectionServers:
+			Servers
+		case SectionSchedulers:
+			Schedulers
+		case SectionInfo:
+			if valkey {
+				Valkey info
+			} else {
+				Redis info
+			}
+	}
+}
+
+// CrumbLabel renders a breadcrumb's text.
+templ CrumbLabel(c Crumb) {
+	if c.Section != SectionNone {
+		@SectionName(c.Section, c.Valkey)
+	} else {
+		{ c.Text }
+	}
+}

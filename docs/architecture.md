@@ -83,7 +83,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	reg, err := conn.NewRegistry(cfg.Connections, logger)          // no Redis I/O; fails only on unreadable TLS files
 	defer reg.Close()                                             // stops the health loops, then closes the clients
 	srv := &http.Server{
-		Handler:     web.NewServer(logger, cfg, reg, authn, policy, &ready),
+		Handler:     handler, // web.NewServer(web.Deps{Logger, Config, Auth, Policy, Conns: reg, Ready, Version}); fails on a bad trusted origin
 		BaseContext: func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 		// ReadHeaderTimeout 10s, ReadTimeout 30s, WriteTimeout 60s, IdleTimeout 120s
 	}
@@ -118,6 +118,9 @@ func addRoutes(mux *http.ServeMux, d deps) {
 	mux.Handle("POST /login", handleLoginSubmit(d))            // basic form; oidc "Sign in with SSO" starts the flow
 	mux.Handle("GET /auth/callback", handleOIDCCallback(d))
 	mux.Handle("POST /logout", handleLogout(d))
+
+	// preferences: no-JS fallback of the theme and refresh controls (no auth)
+	mux.Handle("POST /prefs", handlePrefs(d))
 
 	// pages (viewer)
 	mux.Handle("GET /{$}", view(d, handleOverview(d)))

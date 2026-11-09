@@ -2,7 +2,6 @@ package web
 
 import (
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,7 +28,7 @@ func TestProbes(t *testing.T) {
 			if tt.draining {
 				ready.Drain()
 			}
-			h := NewServer(slog.New(slog.DiscardHandler), &ready)
+			h, _ := newTestServer(t, testOpts{ready: &ready})
 
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))

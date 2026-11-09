@@ -1,0 +1,89 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// LoginError says why the last sign-in failed; the page maps it to text.
+type LoginError int
+
+// Login errors, one per auth.Failure.
+const (
+	LoginOK LoginError = iota
+	LoginBadRequest
+	LoginInvalidCredentials
+	LoginTooManyAttempts
+	LoginSSOFailed
+	LoginSessionTooLarge
+	LoginInternal
+)
+
+// Login is the sign-in page. Basic shows the username/password form, SSO the
+// "Sign in with SSO" button; a deployment has exactly one of them.
+type Login struct {
+	Doc       views.Doc
+	ActionURL string
+	Next      string
+	Basic     bool
+	SSO       bool
+	Error     LoginError
+	Version   string
+}
+
+templ LoginPage(m Login) {
+	@views.Document(m.Doc, "Sign in") {
+		<div class="login">
+			<main class="login-card">
+				<div class="login-head">
+					@components.Logo("24")
+					@components.Wordmark()
+				</div>
+				if m.Basic {
+					<form class="login-form" method="post" action={ templ.SafeURL(m.ActionURL) }>
+						<input type="hidden" name="next" value={ m.Next }/>
+						<label class="field">
+							Username
+							<input type="text" name="username" autocomplete="username" required autofocus/>
+						</label>
+						<label class="field">
+							Password
+							<input type="password" name="password" autocomplete="current-password" required/>
+						</label>
+						@loginError(m.Error)
+						<button class="btn primary" type="submit">Sign in</button>
+					</form>
+				}
+				if m.SSO {
+					<form class="login-form" method="post" action={ templ.SafeURL(m.ActionURL) }>
+						<input type="hidden" name="next" value={ m.Next }/>
+						@loginError(m.Error)
+						<button class="btn" type="submit">Sign in with SSO</button>
+					</form>
+				}
+			</main>
+			<div class="login-version">{ m.Version }</div>
+		</div>
+	}
+}
+
+templ loginError(e LoginError) {
+	if e != LoginOK {
+		<div class="alert" role="alert">
+			switch e {
+				case LoginBadRequest:
+					Invalid request. Try again.
+				case LoginInvalidCredentials:
+					Invalid username or password.
+				case LoginTooManyAttempts:
+					Too many attempts. Try again later.
+				case LoginSSOFailed:
+					Single sign-on failed.
+				case LoginSessionTooLarge:
+					Sign-in failed: too many groups for a session cookie.
+				default:
+					Sign-in failed. Try again.
+			}
+		</div>
+	}
+}

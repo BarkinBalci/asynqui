@@ -1,0 +1,61 @@
+package pages
+
+import (
+	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// Overview is the "All connections" page.
+type Overview struct {
+	Layout views.Layout
+	Cards  []components.ConnCard
+	// PollURL is fetched with HX-Request to refresh the cards.
+	PollURL string
+}
+
+// Unreachable counts the cards whose connection is down.
+func (m Overview) Unreachable() int {
+	n := 0
+	for _, c := range m.Cards {
+		if c.Health == components.HealthDown {
+			n++
+		}
+	}
+	return n
+}
+
+templ OverviewPage(m Overview) {
+	@views.Page(m.Layout, "All connections") {
+		@overviewRegion(m)
+	}
+}
+
+// OverviewFragment is the polled region alone, plus an out-of-band update
+// of the top bar's "Updated" time.
+templ OverviewFragment(m Overview, updatedAt time.Time) {
+	@overviewRegion(m)
+	@components.TimeID(components.UpdatedID, updatedAt, true)
+}
+
+templ overviewRegion(m Overview) {
+	<div id="overview" class="content-region" data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="outerHTML">
+		<div class="page-head">
+			<h1 class="h1">All connections</h1>
+			if n := m.Unreachable(); n > 0 {
+				<span class="badge badge-danger"><span class="dot"></span>{ format.Number(int64(n)) } unreachable</span>
+			}
+		</div>
+		if len(m.Cards) == 0 {
+			<p class="empty">No connections</p>
+		} else {
+			<section class="conn-grid" aria-label="Connections">
+				for _, c := range m.Cards {
+					@components.ConnCardView(c)
+				}
+			</section>
+		}
+	</div>
+}

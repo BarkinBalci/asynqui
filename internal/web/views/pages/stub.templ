@@ -1,0 +1,91 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// NotImplemented is a placeholder for pages that later milestones build.
+// The heading is the last breadcrumb.
+type NotImplemented struct {
+	Layout views.Layout
+}
+
+templ NotImplementedPage(m NotImplemented) {
+	@views.Page(m.Layout, pageTitle(m.Layout)) {
+		<div class="page-head">
+			<h1 class="h1">
+				if n := len(m.Layout.TopBar.Crumbs); n > 0 {
+					@components.CrumbLabel(m.Layout.TopBar.Crumbs[n-1])
+				}
+			</h1>
+		</div>
+		<p class="lead">Not implemented yet.</p>
+	}
+}
+
+// ErrorKind is an error page's cause.
+type ErrorKind int
+
+// Error pages.
+const (
+	ErrorNotFound ErrorKind = iota
+	ErrorForbidden
+	ErrorInternal
+)
+
+// Error is a full-page error inside the app shell.
+type Error struct {
+	Layout views.Layout
+	Kind   ErrorKind
+}
+
+templ ErrorPage(m Error) {
+	@views.Page(m.Layout, errorTitle(m.Kind)) {
+		<div class="page-head">
+			<h1 class="h1">{ errorTitle(m.Kind) }</h1>
+		</div>
+	}
+}
+
+// errorTitle is copy, kept in this templ file with the rest of the page.
+func errorTitle(k ErrorKind) string {
+	switch k {
+	case ErrorForbidden:
+		return "Forbidden"
+	case ErrorInternal:
+		return "Something went wrong"
+	}
+	return "Not found"
+}
+
+// pageTitle is the document title of a placeholder page: the last
+// breadcrumb's text, or the app name for a section crumb.
+func pageTitle(l views.Layout) string {
+	n := len(l.TopBar.Crumbs)
+	if n == 0 {
+		return "asynqui"
+	}
+	c := l.TopBar.Crumbs[n-1]
+	if c.Text != "" {
+		return c.Text
+	}
+	return sectionTitle(c.Section, c.Valkey)
+}
+
+func sectionTitle(s components.Section, valkey bool) string {
+	switch s {
+	case components.SectionQueues:
+		return "Queues"
+	case components.SectionServers:
+		return "Servers"
+	case components.SectionSchedulers:
+		return "Schedulers"
+	case components.SectionInfo:
+		if valkey {
+			return "Valkey info"
+		}
+		return "Redis info"
+	}
+	return "Overview"
+}

@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BarkinBalci/asynqui/internal/auth"
 	"github.com/BarkinBalci/asynqui/internal/config"
 	"github.com/BarkinBalci/asynqui/internal/web"
 )
@@ -74,14 +75,42 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 			slog.String("addr", cfg.Server.Addr), slog.String("authz_default", string(cfg.Authz.Default)))
 	}
 
-	// Auth initialisation and OIDC discovery are added here, before Listen,
-	// as their packages land.
+	policy, err := newPolicy(cfg.Authz)
+	if err != nil {
+		return err
+	}
+	authOpts, err := authOptions(cfg, policy.Groups(), logger)
+	if err != nil {
+		return err
+	}
+	authn, err := auth.New(ctx, authOpts) // OIDC discovery happens here
+	if err != nil {
+		return err
+	}
+	if cfg.UpdateCheck {
+		// TODO: the GitHub release check (24h cache, fails silently).
+		logger.Info("update check not implemented yet")
+	} else {
+		logger.Info("update check disabled")
+	}
 	shutdownDelay := cfg.Server.ShutdownDelay
 
 	var ready web.Readiness
+	handler, err := web.NewServer(web.Deps{
+		Logger:  logger,
+		Config:  cfg,
+		Auth:    authn,
+		Policy:  policy,
+		Conns:   newUnknownHealth(cfg.Connections), // TODO(M2 merge): conn.Registry adapter
+		Ready:   &ready,
+		Version: version,
+	})
+	if err != nil {
+		return err
+	}
 	httpServer := &http.Server{
 		Addr:              cfg.Server.Addr,
-		Handler:           web.NewServer(logger, &ready),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
