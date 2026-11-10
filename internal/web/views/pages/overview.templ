@@ -1,9 +1,6 @@
 package pages
 
 import (
-	"time"
-
-	"github.com/BarkinBalci/asynqui/internal/web/format"
 	"github.com/BarkinBalci/asynqui/internal/web/views"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
@@ -27,35 +24,53 @@ func (m Overview) Unreachable() int {
 	return n
 }
 
+templ overviewTitle() {
+	All connections
+}
+
+// OverviewPage is the full page. The card grid polls but swaps nothing
+// itself (hx-swap none): the response replaces each card, the heading badge,
+// the Updated time and the sidebar list out of band, by id, so focus and the
+// rest of the page survive. hx-disinherit keeps the cards' own forms from
+// inheriting the grid's htmx attributes.
 templ OverviewPage(m Overview) {
-	@views.Page(m.Layout, "All connections") {
-		@overviewRegion(m)
-	}
-}
-
-// OverviewFragment is the polled region alone, plus an out-of-band update
-// of the top bar's "Updated" time.
-templ OverviewFragment(m Overview, updatedAt time.Time) {
-	@overviewRegion(m)
-	@components.TimeID(components.UpdatedID, updatedAt, true)
-}
-
-templ overviewRegion(m Overview) {
-	<div id="overview" class="content-region" data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="outerHTML">
+	@views.Page(m.Layout, overviewTitle()) {
 		<div class="page-head">
-			<h1 class="h1">All connections</h1>
-			if n := m.Unreachable(); n > 0 {
-				<span class="badge badge-danger"><span class="dot"></span>{ format.Number(int64(n)) } unreachable</span>
-			}
+			<h1 class="h1">
+				@overviewTitle()
+			</h1>
+			@components.UnreachableBadge(m.Unreachable(), false)
 		</div>
 		if len(m.Cards) == 0 {
 			<p class="empty">No connections</p>
 		} else {
-			<section class="conn-grid" aria-label="Connections">
+			<section class="conn-grid" aria-label="Connections" data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-disinherit="*">
 				for _, c := range m.Cards {
-					@components.ConnCardView(c)
+					@components.ConnCardView(c, false)
 				}
 			</section>
 		}
-	</div>
+	}
+}
+
+// OverviewPoll answers a poll: every card plus the heading badge, the
+// Updated time and the sidebar connection list, all out of band.
+templ OverviewPoll(m Overview) {
+	for _, c := range m.Cards {
+		@components.ConnCardView(c, true)
+	}
+	@overviewExtras(m)
+}
+
+// RecheckResult answers "Retry now": the card itself (the request's swap
+// target) plus the same out-of-band updates as a poll.
+templ RecheckResult(m Overview, card components.ConnCard) {
+	@components.ConnCardView(card, false)
+	@overviewExtras(m)
+}
+
+templ overviewExtras(m Overview) {
+	@components.UnreachableBadge(m.Unreachable(), true)
+	@components.TimeID(components.UpdatedID, m.Layout.TopBar.UpdatedAt, true)
+	@components.SidebarConnList(m.Layout.Sidebar, true)
 }

@@ -56,7 +56,7 @@ This document is the source of truth for behaviour. When this file and the canva
   - no identity, or rejected identity headers, `proxy`: 401.
   - Probes and `/static/` need no identity.
 - **Return-to (`next`):** accepted only if it is a same-origin relative path under `base_path` (starts with `<base>/`, not `//`, no scheme or host), at most 1 KB, with no backslash, control character or encoded `.`, `/` or `\` (`%2e`, `%2f`, `%5c`). The path is cleaned (`path.Clean`, keeping a trailing slash) before the prefix check, and the cleaned, re-encoded URL is what is used; fragments are dropped. Anything else falls back to `<base>/`. For htmx requests it comes from `HX-Current-URL` (path and query only), or is `<base>/` without one. Challenges send `Cache-Control: no-store`.
-- **Logout:** `POST /logout`. `basic` and `oidc` clear the session cookie and redirect to the login page (OIDC: local logout only). `proxy` redirects to `auth.proxy.logout_url`.
+- **Logout:** `basic` and `oidc`: Sign out posts to `POST /logout`, which clears the session cookie and redirects to the login page (OIDC: local logout only). `proxy`: Sign out is a plain link straight to `auth.proxy.logout_url`, with no server round trip. (A form whose response redirects to another origin would be blocked by the CSP `form-action 'self'`, §7.)
 - **Sign out visibility:** shown for `basic` and `oidc`; for `proxy` only when `logout_url` is set; never for `none`.
 
 ### `none`
@@ -84,7 +84,7 @@ This document is the source of truth for behaviour. When this file and the canva
 - Header stripping and network isolation are the deployer's job: see [deployment.md](deployment.md).
 
 ### `oidc`
-- Authorization-code flow with **PKCE (S256)**. "Sign in with SSO" posts to `POST /login`, which redirects to the IdP. The IdP returns to `GET /auth/callback`.
+- Authorization-code flow with **PKCE (S256)**. "Sign in with SSO" is a link to `GET /login/sso?next=…`, which sets the flow cookie and redirects to the IdP. The IdP returns to `GET /auth/callback`. It is a navigation, not a form post, because the CSP `form-action 'self'` (§7) also applies to a form's redirects; the state, nonce and PKCE verifier in the flow cookie are what protect the flow.
 - **Flow cookie:** state, nonce, PKCE verifier and `next` are kept in an encrypted cookie `asynqui_oidc`: 10 minute lifetime, `Path=<base>/auth/callback`, `HttpOnly`, `SameSite=Lax`, `Secure` per `cookie_secure`. It is deleted by a callback whose `state` matches; a forged callback leaves it, so it cannot cancel a login in progress.
 - **ID token:** verified with go-oidc's Verifier (issuer, audience = `client_id`, expiry, RS256 and other asymmetric algorithms only) and the nonce. `sub` must be non-empty; `azp` must equal `client_id` when present or when `aud` has several entries; `iat` may be at most 5 minutes in the future.
 - **Username:** the `username_claim` (default `email`). When it is `email`, `email_verified` must be `true` (the boolean, or the string `"true"` as Amazon Cognito sends it), otherwise login fails. Userinfo claims are used only when the userinfo `sub` is present and equals the ID token's.
@@ -104,7 +104,8 @@ This document is the source of truth for behaviour. When this file and the canva
 
 ### Login page
 - The username/password form appears only for `basic`.
-- The "Sign in with SSO" button appears only for `oidc`.
+- The "Sign in with SSO" link (styled as a button) appears only for `oidc`.
+- A user who is already signed in is redirected from the login page to `next`, or to `<base>/`.
 - The version is shown under the card.
 
 ## 4. Authorization
@@ -396,11 +397,16 @@ Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control:
 - **Base path:** `server.base_path` applies to every route, including `/health/*` and `/static/`, to cookie paths and to every redirect. Requests outside it get 404.
 - **Server timeouts:** read header 10s, read 30s, write 60s, idle 120s.
 - **Security headers** on every response:
-  - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'`. There is no `unsafe-inline` or `unsafe-eval`, so templates have no inline `<script>`, `<style>` or `style=""`.
+  - `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'`. There is no `unsafe-inline` or `unsafe-eval`, so templates have no inline `<script>`, `<style>` or `style=""`.
+  - `form-action 'self'` also covers the redirects of a form submission, so no form may lead off-origin: SSO sign-in and proxy sign-out are links (§3).
   - `X-Content-Type-Options: nosniff`
   - `Referrer-Policy: same-origin`
+  - `Cross-Origin-Opener-Policy: same-origin`
+  - `Permissions-Policy` turning off camera, microphone, geolocation, payment, USB and the other device features the UI never uses. Clipboard write stays allowed for the copy buttons.
+- **Errors:** unknown paths get 404. Error responses are never cached (`Cache-Control: no-store`). For a signed-in page request they are a page inside the layout (breadcrumb `Overview / Not found`); for htmx and non-GET requests plain text; without an identity a standalone page with no sidebar, so connection names are never shown to strangers.
+- **Preference cookies** (`asynqui_theme`, `asynqui_refresh`): `Path=<base_path>`, one year, `SameSite=Lax`, `Secure` per `auth.session.cookie_secure`, readable by `app.js`.
 - **CSRF:** `http.CrossOriginProtection` on every unsafe method. Extra allowed origins come from `server.trusted_origins` (each is passed to `AddTrustedOrigin`; an invalid origin fails startup). The proxy must preserve the `Host` header ([deployment.md](deployment.md)).
-- **Panics:** recovered, logged with the stack, answered with 500 unless the response has already started.
+- **Panics and render failures:** recovered, logged (panics with the stack), answered with 500 "Something went wrong" unless the response has already started.
 
 ### Logging
 - Structured JSON via `log/slog` to stdout. Level from §7 "Precedence".

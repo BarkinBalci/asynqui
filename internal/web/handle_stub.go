@@ -37,7 +37,7 @@ func handleStub(d *deps, p stubPage) http.Handler {
 // already sit behind their op/admin wrapper, so authorization is enforced.
 func handleActionStub() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
+		plainError(w, http.StatusNotImplemented)
 	})
 }
 

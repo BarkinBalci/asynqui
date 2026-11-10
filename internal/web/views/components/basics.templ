@@ -12,24 +12,22 @@ templ Time(t time.Time) {
 	<time datetime={ format.TimeAttr(t) }>{ format.TimeText(t) }</time>
 }
 
-// TimeID is Time with an element id, for out-of-band htmx updates.
+// TimeID is Time with an element id. With oob it replaces the element of
+// the same id when it arrives in an htmx response.
 templ TimeID(id string, t time.Time, oob bool) {
-	if oob {
-		<time id={ id } datetime={ format.TimeAttr(t) } hx-swap-oob="true">{ format.TimeText(t) }</time>
-	} else {
-		<time id={ id } datetime={ format.TimeAttr(t) }>{ format.TimeText(t) }</time>
-	}
+	<time id={ id } datetime={ format.TimeAttr(t) } { oobAttr(oob)... }>{ format.TimeText(t) }</time>
 }
 
-// StatusDot is a connection's health dot. Unknown is a muted dot.
+// StatusDot is a connection's health dot, with its state as text for
+// screen readers. Unknown is a muted dot.
 templ StatusDot(h Health) {
 	switch h {
 		case HealthUp:
-			<span class="dot dot-up" title="Reachable"></span>
+			<span class="dot dot-up" title="Reachable"><span class="sr-only">Reachable</span></span>
 		case HealthDown:
-			<span class="dot dot-down" title="Unreachable"></span>
+			<span class="dot dot-down" title="Unreachable"><span class="sr-only">Unreachable</span></span>
 		default:
-			<span class="dot dot-unknown" title="Checking"></span>
+			<span class="dot dot-unknown" title="Checking"><span class="sr-only">Checking</span></span>
 	}
 }
 
@@ -41,6 +39,16 @@ templ HealthBadge(h Health) {
 		case HealthDown:
 			<span class="badge badge-danger"><span class="dot"></span>Unreachable</span>
 	}
+}
+
+// UnreachableBadge is the Overview heading's "N unreachable" badge. Its
+// wrapper is always rendered, empty when n is 0, so polling can replace it.
+templ UnreachableBadge(n int, oob bool) {
+	<span id={ UnreachableID } { oobAttr(oob)... }>
+		if n > 0 {
+			<span class="badge badge-danger"><span class="dot"></span>{ format.Number(int64(n)) } unreachable</span>
+		}
+	</span>
 }
 
 // RoleName is the role as shown in chips and the account menu.
@@ -55,7 +63,8 @@ templ RoleName(r Role) {
 	}
 }
 
-// SectionName is a section's label in breadcrumbs and headings.
+// SectionName is the one place a section's label is written: sidebar,
+// breadcrumbs, headings and document titles all render it.
 templ SectionName(s Section, valkey bool) {
 	switch s {
 		case SectionOverview:
@@ -77,9 +86,19 @@ templ SectionName(s Section, valkey bool) {
 
 // CrumbLabel renders a breadcrumb's text.
 templ CrumbLabel(c Crumb) {
-	if c.Section != SectionNone {
+	if c.Label != nil {
+		@c.Label
+	} else if c.Section != SectionNone {
 		@SectionName(c.Section, c.Valkey)
 	} else {
 		{ c.Text }
 	}
+}
+
+// oobAttr marks an element for an htmx out-of-band swap by id.
+func oobAttr(oob bool) templ.Attributes {
+	if oob {
+		return templ.Attributes{"hx-swap-oob": "true"}
+	}
+	return nil
 }

@@ -64,6 +64,7 @@ func mustNew(t *testing.T, o Options) *Authenticator {
 func app(a *Authenticator) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST /login", a.LoginHandler(nil))
+	mux.Handle("GET /login/sso", a.SSOHandler(nil))
 	mux.Handle("GET /auth/callback", a.CallbackHandler(nil))
 	mux.Handle("POST /logout", a.LogoutHandler())
 	mux.HandleFunc("GET /whoami", func(w http.ResponseWriter, r *http.Request) {

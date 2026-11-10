@@ -115,7 +115,8 @@ func addRoutes(mux *http.ServeMux, d deps) {
 
 	// auth
 	mux.Handle("GET /login", handleLogin(d))
-	mux.Handle("POST /login", handleLoginSubmit(d))            // basic form; oidc "Sign in with SSO" starts the flow
+	mux.Handle("POST /login", handleLoginSubmit(d))            // basic form
+	mux.Handle("GET /login/sso", handleSSO(d))                 // oidc "Sign in with SSO" link: starts the flow
 	mux.Handle("GET /auth/callback", handleOIDCCallback(d))
 	mux.Handle("POST /logout", handleLogout(d))
 
@@ -148,6 +149,9 @@ func addRoutes(mux *http.ServeMux, d deps) {
 
 	// assets
 	mux.Handle("GET /static/", handleStatic())
+
+	// everything else: 404 through renderError
+	mux.Handle("/", handleNotFound(d))
 }
 ```
 
@@ -215,6 +219,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **Per-connection cache:** each snapshot (Overview stats, queue list, servers, …) is cached for **1s**, keyed by connection and snapshot, and concurrent fetches of it are shared. N viewers polling the same connection cost at most one Redis round per second.
 - **Health loop:** one goroutine per connection sends PING every 10s and stores the result (reachable, unreachable + error, or unknown before the first result). The Overview, sidebar and badges only read it. `handleRecheck` runs a check synchronously and stores it.
 - **Concurrency:** connections are fetched in parallel. A failing connection renders "Connection failed" and does not block the page.
+- **Page budget:** the Overview waits at most 1.5s for summaries (`context.WithTimeout`). A card that misses it renders as "Checking"; the fetch goes on in conn's cache, so the next poll has it. If a reachable connection's Summary fails, the card and the sidebar both show it down.
 - **Overview cost:** `GetQueueInfo` per queue, plus `Servers()` per connection. Instance-wide INFO is fetched only by the Info page.
 
 ## Frontend conventions
@@ -225,6 +230,8 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **Forms:** actions are `<form method="post">`, enhanced with `hx-post`. Destructive and "all" actions go through a confirmation dialog.
 - **htmx config** (set in `app.js`, before any request): `htmx.config.allowEval = false`, `htmx.config.includeIndicatorStyles = false` (it would inject an inline `<style>`). No `hx-on` or `js:` attributes.
 - **Polling:** `hx-trigger="every 5s [document.visibilityState === 'visible']"` cannot be used, because trigger filters need eval. `app.js` owns visibility gating instead: it starts the interval timers, skips ticks while `document.hidden`, and fires one refresh on `visibilitychange` to visible. With "Off", no timer runs.
+- **Polled regions keep focus:** a poll never replaces a whole region. The Overview grid has `hx-swap="none"`, and the response replaces each card, the heading badge, the Updated time and the sidebar list out of band by id (`hx-swap-oob`). htmx refocuses the element with the same id after a swap, so every focusable element in a polled region has a stable id; ids use one prefix per element kind (`card-`, `open-`, `retry-`, `nav-`), so connection names cannot make them collide.
+- **No cross-origin forms:** the CSP `form-action 'self'` also applies to a form's redirects, so anything that leaves the origin (SSO, proxy sign out) is a link.
 - **Time:** the `time` component renders `<time datetime="RFC3339 UTC">` with the absolute UTC text from `format`. `app.js` rewrites it to local relative text with the absolute local time in `title`, and re-renders relative text on each tick.
 - **Assets:** served with content-hashed filenames and `Cache-Control: immutable`. `//go:embed files` (without `all:`), so dotfiles are never embedded.
 

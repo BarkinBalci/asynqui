@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 
 	"github.com/BarkinBalci/asynqui/internal/auth"
 	"github.com/BarkinBalci/asynqui/internal/authz"
 	"github.com/BarkinBalci/asynqui/internal/config"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web"
 )
 
@@ -89,29 +89,65 @@ func authOptions(cfg *config.Config, sessionGroups []string, logger *slog.Logger
 	return o, nil
 }
 
-// unknownHealth is a stand-in connection source until the conn registry
-// lands: it lists the configured connections and reports every one as
-// unknown, so the Overview shows "Checking" cards.
-//
-// TODO(M2 merge): replace with an adapter over conn.Registry.
-type unknownHealth struct {
-	conns []web.Connection
+// registrySource adapts the connection registry to the web layer's
+// ConnectionSource, which web declares as its consumer contract.
+type registrySource struct {
+	reg *conn.Registry
 }
 
-func newUnknownHealth(cs []config.Connection) unknownHealth {
-	out := make([]web.Connection, len(cs))
-	for i, c := range cs {
-		out[i] = web.Connection{Name: c.Name, Addr: c.Addr + "/" + strconv.Itoa(c.DB)}
+func (s registrySource) Connections() []web.Connection {
+	all := s.reg.All()
+	out := make([]web.Connection, len(all))
+	for i, c := range all {
+		out[i] = web.Connection{Name: c.Name(), Addr: c.Addr(), Health: webHealth(c.Health())}
 	}
-	return unknownHealth{conns: out}
+	return out
 }
 
-func (u unknownHealth) Connections() []web.Connection { return u.conns }
-
-func (unknownHealth) Summary(context.Context, string) (web.Summary, error) {
-	return web.Summary{}, errNoRegistry
+func (s registrySource) Summary(ctx context.Context, name string) (web.Summary, error) {
+	c, ok := s.reg.Get(name)
+	if !ok {
+		return web.Summary{}, conn.ErrNotFound
+	}
+	sum, err := c.Summary(ctx)
+	if err != nil {
+		return web.Summary{}, err
+	}
+	return web.Summary{
+		Queues:         sum.Queues,
+		Pending:        sum.Pending,
+		Active:         sum.Active,
+		Retry:          sum.Retry,
+		ProcessedToday: sum.ProcessedToday,
+		FailedToday:    sum.FailedToday,
+		OldestPending:  sum.OldestPending,
+	}, nil
 }
 
-func (unknownHealth) Recheck(context.Context, string) web.Health { return web.Health{} }
+// Recheck runs a check now. When it does not finish (the request ended, or
+// the registry is closing) nothing was stored, and the health is the cached
+// one.
+func (s registrySource) Recheck(ctx context.Context, name string) web.Health {
+	c, ok := s.reg.Get(name)
+	if !ok {
+		return web.Health{}
+	}
+	h, err := c.Recheck(ctx)
+	if err != nil {
+		return webHealth(c.Health())
+	}
+	return webHealth(h)
+}
 
-var errNoRegistry = errors.New("connection registry not wired yet")
+func webHealth(h conn.Health) web.Health {
+	out := web.Health{Err: h.Err, CheckedAt: h.CheckedAt}
+	switch h.State {
+	case conn.StateUp:
+		out.State = web.HealthUp
+	case conn.StateDown:
+		out.State = web.HealthDown
+	default:
+		out.State = web.HealthUnknown
+	}
+	return out
+}

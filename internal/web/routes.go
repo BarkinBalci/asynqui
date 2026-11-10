@@ -20,7 +20,8 @@ func addRoutes(mux *http.ServeMux, d *deps) {
 
 	// auth
 	mux.Handle("GET /login", handleLogin(d))
-	mux.Handle("POST /login", d.auth.LoginHandler(d.loginFailed)) // basic form; oidc "Sign in with SSO" starts the flow
+	mux.Handle("POST /login", d.auth.LoginHandler(d.loginFailed))  // basic form
+	mux.Handle("GET /login/sso", d.auth.SSOHandler(d.loginFailed)) // oidc "Sign in with SSO" link: starts the flow
 	mux.Handle("GET /auth/callback", d.auth.CallbackHandler(d.loginFailed))
 	mux.Handle("POST /logout", d.auth.LogoutHandler())
 
@@ -46,7 +47,6 @@ func addRoutes(mux *http.ServeMux, d *deps) {
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleActionStub())) // ids or all=1&state=
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleActionStub()))
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleActionStub()))
-	mux.Handle("POST /c/{conn}/schedulers/run", op(d, handleActionStub())) // form: id=…&id=…
 
 	// admin
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleActionStub()))
@@ -54,4 +54,7 @@ func addRoutes(mux *http.ServeMux, d *deps) {
 
 	// assets
 	mux.Handle("GET /static/", http.StripPrefix("/static", d.assets))
+
+	// everything else
+	mux.Handle("/", handleNotFound(d))
 }

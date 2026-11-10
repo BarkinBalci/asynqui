@@ -8,11 +8,20 @@ import (
 	"time"
 )
 
-// contentSecurityPolicy allows only same-origin resources: no inline scripts,
-// inline styles or eval, and no framing.
-const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; " +
+// contentSecurityPolicy denies everything by default and allows only
+// same-origin scripts, styles, images, fonts and fetches: no inline scripts,
+// inline styles or eval, no frames in either direction, and forms post only
+// to this origin. Flows that leave the origin (SSO, proxy sign out) are
+// links, not forms, because form-action also applies to a form's redirects.
+const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; " +
 	"img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; " +
-	"base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
+	"frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+
+// permissionsPolicy turns off powerful features the UI never uses.
+// clipboard-write stays allowed for the copy buttons.
+const permissionsPolicy = "accelerometer=(), autoplay=(), camera=(), display-capture=(), " +
+	"geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), " +
+	"publickey-credentials-get=(), serial=(), usb=(), xr-spatial-tracking=()"
 
 // securityHeaders sets the headers every response carries.
 func securityHeaders(next http.Handler) http.Handler {
@@ -21,6 +30,8 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", contentSecurityPolicy)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Permissions-Policy", permissionsPolicy)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -48,7 +59,13 @@ func logRequests(logger *slog.Logger, base string, next http.Handler) http.Handl
 
 // recoverPanics turns a handler panic into a 500 and logs it with the stack.
 // If the handler already sent the header, the response is left as is.
-func recoverPanics(logger *slog.Logger, next http.Handler) http.Handler {
+// Otherwise internal writes the 500; nil writes plain text.
+func recoverPanics(logger *slog.Logger, internal http.HandlerFunc, next http.Handler) http.Handler {
+	if internal == nil {
+		internal = func(w http.ResponseWriter, _ *http.Request) {
+			plainError(w, http.StatusInternalServerError)
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &responseRecorder{ResponseWriter: w}
 		ctx := r.Context()
@@ -66,7 +83,7 @@ func recoverPanics(logger *slog.Logger, next http.Handler) http.Handler {
 				slog.String("stack", string(debug.Stack())),
 			)
 			if !rec.wroteHeader {
-				http.Error(rec, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				internal(rec, r)
 			}
 		}()
 		next.ServeHTTP(rec, r)

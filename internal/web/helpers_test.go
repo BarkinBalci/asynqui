@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -25,6 +26,9 @@ type fakeConns struct {
 	conns     []Connection
 	summaries map[string]Summary
 	errs      map[string]error
+	// block makes Summary of these names wait until ctx ends, like a slow
+	// Redis behind conn's cache.
+	block     map[string]bool
 	recheck   map[string]Health // result of Recheck by name
 	rechecked []string
 }
@@ -35,11 +39,18 @@ func (f *fakeConns) Connections() []Connection {
 	return append([]Connection(nil), f.conns...)
 }
 
-func (f *fakeConns) Summary(_ context.Context, name string) (Summary, error) {
-	if err := f.errs[name]; err != nil {
+func (f *fakeConns) Summary(ctx context.Context, name string) (Summary, error) {
+	f.mu.Lock()
+	block, err, s := f.block[name], f.errs[name], f.summaries[name]
+	f.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return Summary{}, ctx.Err()
+	}
+	if err != nil {
 		return Summary{}, err
 	}
-	return f.summaries[name], nil
+	return s, nil
 }
 
 func (f *fakeConns) Recheck(_ context.Context, name string) Health {
@@ -77,22 +88,30 @@ type testOpts struct {
 	authz    config.Authz
 	conns    *fakeConns
 	// proxyLogout sets auth.proxy.logout_url.
-	proxyLogout string
-	ready       *Readiness
+	proxyLogout  string
+	ready        *Readiness
+	cookieSecure bool
+	budget       time.Duration
+	// idp is the fake OIDC provider for provider oidc.
+	idp *httptest.Server
 }
 
 const (
 	proxyPeer     = "192.0.2.10"
 	testUser      = "alice"
 	testPassword  = "correct horse"
-	testHashKey   = "0000000000000000000000000000000000000000000000000000000000000001"
-	testBlockKey  = "0000000000000000000000000000000000000000000000000000000000000002"
 	fixedNowEpoch = 1794098512 // 2026-11-08T00:01:52Z
 )
 
 func fixedNow() time.Time { return time.Unix(fixedNowEpoch, 0).UTC() }
 
 func newTestServer(t *testing.T, o testOpts) (http.Handler, *fakeConns) {
+	t.Helper()
+	_, h, c := newTestDeps(t, o)
+	return h, c
+}
+
+func newTestDeps(t *testing.T, o testOpts) (*deps, http.Handler, *fakeConns) {
 	t.Helper()
 	if o.provider == "" {
 		o.provider = config.ProviderNone
@@ -109,10 +128,15 @@ func newTestServer(t *testing.T, o testOpts) (http.Handler, *fakeConns) {
 	cfg := &config.Config{
 		Server:  config.Server{BasePath: o.basePath},
 		Refresh: config.Refresh{Default: "5s"},
+		Auth:    config.Auth{Session: config.Session{CookieSecure: o.cookieSecure}},
 		Authz:   o.authz,
 	}
 	policy := mustPolicy(t, o.authz)
 	opts := auth.Options{Provider: auth.Kind(o.provider), BasePath: o.basePath}
+	session := auth.SessionOptions{
+		KeyPair:  auth.KeyPair{HashKey: []byte(strings.Repeat("h", 32)), BlockKey: []byte(strings.Repeat("b", 32))},
+		Insecure: true,
+	}
 	switch o.provider {
 	case config.ProviderProxy:
 		opts.Proxy = auth.ProxyOptions{TrustedProxies: []string{proxyPeer}, LogoutURL: o.proxyLogout}
@@ -122,29 +146,61 @@ func newTestServer(t *testing.T, o testOpts) (http.Handler, *fakeConns) {
 			t.Fatal(err)
 		}
 		opts.Basic = auth.BasicOptions{Users: []auth.BasicUser{{Username: testUser, PasswordHash: string(hash)}}}
-		opts.Session = auth.SessionOptions{
-			KeyPair:  auth.KeyPair{HashKey: []byte(testHashKey[:32]), BlockKey: []byte(testBlockKey[:32])},
-			Insecure: true,
+		opts.Session = session
+	case config.ProviderOIDC:
+		if o.idp == nil {
+			o.idp = fakeIDP(t)
+		}
+		opts.Session = session
+		opts.OIDC = auth.OIDCOptions{
+			Issuer:      o.idp.URL,
+			ClientID:    "asynqui",
+			RedirectURL: "https://asynqui.example.com" + o.basePath + "/auth/callback",
+			HTTPClient:  o.idp.Client(),
 		}
 	}
 	authn, err := auth.New(t.Context(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := NewServer(Deps{
-		Logger:  slog.New(slog.DiscardHandler),
-		Config:  cfg,
-		Auth:    authn,
-		Policy:  policy,
-		Conns:   o.conns,
-		Ready:   o.ready,
-		Version: "0.1.0",
-		Now:     fixedNow,
+	d, h, err := newServer(Deps{
+		Logger:        slog.New(slog.DiscardHandler),
+		Config:        cfg,
+		Auth:          authn,
+		Policy:        policy,
+		Conns:         o.conns,
+		Ready:         o.ready,
+		Version:       "0.1.0",
+		Now:           fixedNow,
+		SummaryBudget: o.budget,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h, o.conns
+	return d, h, o.conns
+}
+
+// fakeIDP serves OIDC discovery only: enough for auth.New and for starting
+// the flow. The callback is covered by package auth.
+func fakeIDP(t *testing.T) *httptest.Server {
+	t.Helper()
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                                srv.URL,
+			"authorization_endpoint":                srv.URL + "/authorize",
+			"token_endpoint":                        srv.URL + "/token",
+			"jwks_uri":                              srv.URL + "/jwks",
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 func mustPolicy(t *testing.T, a config.Authz) *authz.Policy {
@@ -176,6 +232,7 @@ type request struct {
 	htmx    bool
 	cookies []*http.Cookie
 	form    string
+	header  map[string]string
 }
 
 func do(t *testing.T, h http.Handler, rq request) *httptest.ResponseRecorder {
@@ -183,13 +240,7 @@ func do(t *testing.T, h http.Handler, rq request) *httptest.ResponseRecorder {
 	if rq.method == "" {
 		rq.method = http.MethodGet
 	}
-	var body *strings.Reader
-	if rq.form != "" {
-		body = strings.NewReader(rq.form)
-	} else {
-		body = strings.NewReader("")
-	}
-	r := httptest.NewRequest(rq.method, rq.path, body)
+	r := httptest.NewRequest(rq.method, rq.path, strings.NewReader(rq.form))
 	if rq.form != "" {
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -200,6 +251,9 @@ func do(t *testing.T, h http.Handler, rq request) *httptest.ResponseRecorder {
 	if rq.htmx {
 		r.Header.Set("HX-Request", "true")
 		r.Header.Set("HX-Current-URL", "http://example.com/")
+	}
+	for k, v := range rq.header {
+		r.Header.Set(k, v)
 	}
 	for _, c := range rq.cookies {
 		r.AddCookie(c)
@@ -217,3 +271,5 @@ func parse(t *testing.T, rec *httptest.ResponseRecorder) *goquery.Document {
 	}
 	return doc
 }
+
+func text(s *goquery.Selection) string { return strings.Join(strings.Fields(s.Text()), " ") }

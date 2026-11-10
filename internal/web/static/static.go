@@ -163,6 +163,7 @@ func (a *Assets) Path(name string) string {
 func (a *Assets) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f, ok := a.byHashed[strings.TrimPrefix(r.URL.Path, "/")]
 	if !ok {
+		w.Header().Set("Cache-Control", "no-store")
 		http.NotFound(w, r)
 		return
 	}

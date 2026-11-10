@@ -21,6 +21,7 @@ import (
 
 	"github.com/BarkinBalci/asynqui/internal/auth"
 	"github.com/BarkinBalci/asynqui/internal/config"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web"
 )
 
@@ -93,6 +94,16 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	} else {
 		logger.Info("update check disabled")
 	}
+	// No Redis I/O here: a Redis that is down never fails startup.
+	reg, err := conn.NewRegistry(cfg.Connections, logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := reg.Close(); err != nil {
+			logger.Warn("close connections", slog.Any("error", err))
+		}
+	}()
 	shutdownDelay := cfg.Server.ShutdownDelay
 
 	var ready web.Readiness
@@ -101,7 +112,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		Config:  cfg,
 		Auth:    authn,
 		Policy:  policy,
-		Conns:   newUnknownHealth(cfg.Connections), // TODO(M2 merge): conn.Registry adapter
+		Conns:   registrySource{reg: reg},
 		Ready:   &ready,
 		Version: version,
 	})
@@ -133,6 +144,8 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		}
 	}()
 	logger.Info("listening", slog.String("addr", ln.Addr().String()), slog.String("version", version))
+	// Health loops keep running while the instance drains; Close stops them.
+	reg.Start(context.WithoutCancel(ctx))
 
 	select {
 	case err := <-errc:

@@ -1,9 +1,5 @@
 package components
 
-// UpdatedID is the id of the "Updated …" time, refreshed out of band by
-// every polled fragment.
-const UpdatedID = "updated-at"
-
 templ TopBarView(m TopBar) {
 	<header class="top">
 		<nav class="crumbs" aria-label="Breadcrumb">
@@ -31,7 +27,7 @@ templ TopBarView(m TopBar) {
 			<form class="seg" method="post" action={ templ.SafeURL(m.PrefsURL) } data-pref="refresh" role="group" aria-label="Auto refresh">
 				<input type="hidden" name="next" value={ m.Next }/>
 				for _, r := range Refreshes() {
-					@segButton("refresh", r.Value(), r == m.Refresh) {
+					@segButton("refresh", r.Value(), r == m.Refresh, nil) {
 						@refreshLabel(r)
 					}
 				}
@@ -47,16 +43,23 @@ templ TopBarView(m TopBar) {
 	</header>
 }
 
-templ segButton(name, value string, on bool) {
-	if on {
-		<button type="submit" class="on" name={ name } value={ value } aria-pressed="true">
-			{ children... }
-		</button>
-	} else {
-		<button type="submit" name={ name } value={ value } aria-pressed="false">
-			{ children... }
-		</button>
+// segButton is one button of a segmented control: a submit button, so the
+// control works without JS; app.js applies it in place.
+templ segButton(name, value string, on bool, extra templ.Attributes) {
+	<button type="submit" name={ name } value={ value } aria-pressed={ ariaBool(on) } { segAttrs(on, extra)... }>
+		{ children... }
+	</button>
+}
+
+func segAttrs(on bool, extra templ.Attributes) templ.Attributes {
+	a := templ.Attributes{}
+	for k, v := range extra {
+		a[k] = v
 	}
+	if on {
+		a["class"] = "on"
+	}
+	return a
 }
 
 templ refreshLabel(r Refresh) {
@@ -75,17 +78,17 @@ templ refreshLabel(r Refresh) {
 templ themeButton(t Theme, on bool) {
 	switch t {
 		case ThemeLight:
-			<button type="submit" class={ templ.KV("on", on) } name="theme" value={ t.Value() } aria-pressed={ ariaBool(on) } aria-label="Light theme" title="Light">
+			@segButton("theme", t.Value(), on, templ.Attributes{"aria-label": "Light theme", "title": "Light"}) {
 				@IconThemeLight("16")
-			</button>
+			}
 		case ThemeDark:
-			<button type="submit" class={ templ.KV("on", on) } name="theme" value={ t.Value() } aria-pressed={ ariaBool(on) } aria-label="Dark theme" title="Dark">
+			@segButton("theme", t.Value(), on, templ.Attributes{"aria-label": "Dark theme", "title": "Dark"}) {
 				@IconThemeDark("16")
-			</button>
+			}
 		default:
-			<button type="submit" class={ templ.KV("on", on) } name="theme" value={ t.Value() } aria-pressed={ ariaBool(on) } aria-label="System theme" title="System">
+			@segButton("theme", t.Value(), on, templ.Attributes{"aria-label": "System theme", "title": "System"}) {
 				@IconThemeSystem("16")
-			</button>
+			}
 	}
 }
 
@@ -101,34 +104,37 @@ func ariaBool(b bool) string {
 // there is nothing to sign out of (proxy without logout_url).
 templ AccountMenu(a Account) {
 	if a.Visible {
-		if a.SignOut {
+		if a.SignOutURL != "" {
 			<details class="account" data-menu>
-				<summary class="account-btn" aria-label="Account menu">
-					{ a.User }
-					if a.Role != RoleNone {
-						<span class="account-role">
-							@RoleName(a.Role)
-						</span>
-					}
+				<summary class="account-btn">
+					@accountLabel(a)
 					@IconChevron("14")
 				</summary>
 				<div class="account-menu">
-					<form method="post" action={ templ.SafeURL(a.LogoutURL) }>
-						<button type="submit" class="menu-item">Sign out</button>
-					</form>
+					if a.SignOutExternal {
+						<a class="menu-item" href={ templ.SafeURL(a.SignOutURL) }>Sign out</a>
+					} else {
+						<form method="post" action={ templ.SafeURL(a.SignOutURL) }>
+							<button type="submit" class="menu-item">Sign out</button>
+						</form>
+					}
 				</div>
 			</details>
 		} else {
 			<div class="account">
 				<span class="account-btn">
-					{ a.User }
-					if a.Role != RoleNone {
-						<span class="account-role">
-							@RoleName(a.Role)
-						</span>
-					}
+					@accountLabel(a)
 				</span>
 			</div>
 		}
+	}
+}
+
+templ accountLabel(a Account) {
+	{ a.User }
+	if a.Role != RoleNone {
+		<span class="account-role">
+			@RoleName(a.Role)
+		</span>
 	}
 }

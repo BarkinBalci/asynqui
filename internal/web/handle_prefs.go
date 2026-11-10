@@ -2,9 +2,6 @@ package web
 
 import (
 	"net/http"
-	"net/url"
-	"path"
-	"strings"
 	"time"
 
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
@@ -59,13 +56,14 @@ func parseRefresh(s string) (components.Refresh, bool) {
 }
 
 // handlePrefs is the no-JS fallback of the theme and refresh controls: a
-// form post sets the cookie and redirects back. Preferences are not
-// sensitive, so no identity is needed. Unknown values are ignored.
+// form post sets the cookie and redirects back to next (checked with
+// auth SafeNext, like the login's). Preferences are not sensitive, so no
+// identity is needed. Unknown values are ignored.
 func handlePrefs(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 		if err := r.ParseForm(); err != nil {
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			plainError(w, http.StatusBadRequest)
 			return
 		}
 		if t, ok := parseTheme(r.PostForm.Get("theme")); ok {
@@ -74,38 +72,20 @@ func handlePrefs(d *deps) http.Handler {
 		if v, ok := parseRefresh(r.PostForm.Get("refresh")); ok {
 			d.setPref(w, refreshCookie, v.Value())
 		}
-		http.Redirect(w, r, d.localPath(r.PostForm.Get("next")), http.StatusSeeOther) //nolint:gosec // G710: localPath keeps it under base_path.
+		http.Redirect(w, r, d.auth.SafeNext(r.PostForm.Get("next")), http.StatusSeeOther) //nolint:gosec // G710: SafeNext keeps it under base_path.
 	})
 }
 
+// setPref writes a preference cookie. It is readable by app.js on purpose
+// (app.js writes the same cookies); it holds no secret. Secure follows
+// auth.session.cookie_secure.
 func (d *deps) setPref(w http.ResponseWriter, name, value string) {
-	// Readable by app.js on purpose; it holds no secret.
-	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: preference cookie, not a credential.
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: preference cookie, not a credential; HttpOnly would hide it from app.js.
 		Name:     name,
 		Value:    value,
 		Path:     d.cookiePath(),
 		MaxAge:   int(prefsMaxAge / time.Second),
+		Secure:   d.secureCookies,
 		SameSite: http.SameSiteLaxMode,
 	})
-}
-
-// localPath returns next if it is a local path under base_path, else the
-// app root, so the redirect can never leave the app.
-func (d *deps) localPath(next string) string {
-	root := d.url()
-	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") ||
-		strings.ContainsAny(next, "\\\x00\r\n\t") {
-		return root
-	}
-	u, err := url.Parse(next)
-	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" {
-		return root
-	}
-	if clean := path.Clean(u.Path); clean != u.Path && clean+"/" != u.Path {
-		return root // dot segments
-	}
-	if d.base != "" && u.Path != d.base && !strings.HasPrefix(u.Path, d.base+"/") {
-		return root
-	}
-	return (&url.URL{Path: u.Path, RawPath: u.RawPath, RawQuery: u.RawQuery}).String()
 }

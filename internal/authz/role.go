@@ -54,15 +54,14 @@ type Action int
 // Actions checked by the server. Every capability in the requirements'
 // authorization table has one.
 const (
-	ActionView              Action = iota + 1 // every page and fragment
-	ActionPauseQueue                          // pause a queue
-	ActionResumeQueue                         // resume a queue
-	ActionRunTask                             // run tasks (single, bulk, all)
-	ActionArchiveTask                         // archive tasks (single, bulk, all)
-	ActionCancelTask                          // cancel active tasks (single, bulk, all)
-	ActionRunSchedulerEntry                   // scheduler entry "Run now"
-	ActionDeleteTask                          // delete tasks (single, bulk, all)
-	ActionDeleteQueue                         // delete a queue
+	ActionView        Action = iota + 1 // every page and fragment
+	ActionPauseQueue                    // pause a queue
+	ActionResumeQueue                   // resume a queue
+	ActionRunTask                       // run tasks (single, bulk, all)
+	ActionArchiveTask                   // archive tasks (single, bulk, all)
+	ActionCancelTask                    // cancel active tasks (single, bulk, all)
+	ActionDeleteTask                    // delete tasks (single, bulk, all)
+	ActionDeleteQueue                   // delete a queue
 )
 
 // MinRole returns the lowest role allowed to perform a. An unknown action
@@ -72,8 +71,7 @@ func MinRole(a Action) (Role, bool) {
 	case ActionView:
 		return RoleViewer, true
 	case ActionPauseQueue, ActionResumeQueue,
-		ActionRunTask, ActionArchiveTask, ActionCancelTask,
-		ActionRunSchedulerEntry:
+		ActionRunTask, ActionArchiveTask, ActionCancelTask:
 		return RoleOperator, true
 	case ActionDeleteTask, ActionDeleteQueue:
 		return RoleAdmin, true

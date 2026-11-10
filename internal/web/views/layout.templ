@@ -5,8 +5,9 @@ import "github.com/BarkinBalci/asynqui/internal/web/views/components"
 // Document is the HTML skeleton. data-theme is rendered by the server from
 // the theme cookie, so there is no flash before app.js runs. Scripts are
 // external and deferred: htmx first, then app.js, which configures htmx
-// before it initialises.
-templ Document(d Doc, title string) {
+// before it initialises. title is a component so page names come from the
+// same templ copy as headings and breadcrumbs.
+templ Document(d Doc, title templ.Component) {
 	<!DOCTYPE html>
 	<html lang="en" data-theme={ d.Theme.Value() } data-refresh={ d.Refresh.Value() } data-base={ d.CookiePath }>
 		<head>
@@ -14,26 +15,30 @@ templ Document(d Doc, title string) {
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="color-scheme" content="light dark"/>
 			<meta name="referrer" content="same-origin"/>
-			<title>{ title } – asynqui</title>
+			<title>
+				@title
+				{ " – asynqui" }
+			</title>
 			<link rel="icon" href={ templ.SafeURL(d.Assets.Icon) } type="image/svg+xml"/>
 			<link rel="stylesheet" href={ templ.SafeURL(d.Assets.CSS) }/>
 			<script src={ d.Assets.HTMX } defer></script>
 			<script src={ d.Assets.JS } defer></script>
 		</head>
 		<body>
+			<a class="skip-link" href={ templ.SafeURL("#" + components.ContentID) }>Skip to content</a>
 			{ children... }
 		</body>
 	</html>
 }
 
 // Page is the app shell: sidebar, top bar and the page content.
-templ Page(l Layout, title string) {
+templ Page(l Layout, title templ.Component) {
 	@Document(l.Doc, title) {
 		<div class="app">
 			@components.SidebarNav(l.Sidebar)
 			<div class="main">
 				@components.TopBarView(l.TopBar)
-				<main class="content" id="content">
+				<main class="content" id={ components.ContentID } tabindex="-1">
 					{ children... }
 				</main>
 			</div>

@@ -144,7 +144,7 @@ func TestSafeNext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		a := &Authenticator{basePath: tt.base}
-		got := a.safeNext(tt.next)
+		got := a.SafeNext(tt.next)
 		if got != tt.want {
 			t.Errorf("base %q safeNext(%q) = %q, want %q", tt.base, tt.next, got, tt.want)
 		}

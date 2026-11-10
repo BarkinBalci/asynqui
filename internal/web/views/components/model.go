@@ -4,7 +4,11 @@
 // UI text.
 package components
 
-import "time"
+import (
+	"time"
+
+	"github.com/a-h/templ"
+)
 
 // Health is a connection's last health check.
 type Health int
@@ -154,7 +158,10 @@ type Crumb struct {
 	Section Section
 	// Valkey labels SectionInfo "Valkey info".
 	Valkey bool
-	URL    string
+	// Label, when set, renders the crumb's copy (e.g. an error page title)
+	// instead of Text or Section.
+	Label templ.Component
+	URL   string
 }
 
 // Account is the account menu. It is hidden when Visible is false
@@ -163,9 +170,12 @@ type Account struct {
 	Visible bool
 	User    string
 	Role    Role
-	// SignOut shows the Sign out item, posting to LogoutURL.
-	SignOut   bool
-	LogoutURL string
+	// SignOutURL is where Sign out goes; empty hides it. For basic and oidc
+	// it is POST <base>/logout. With SignOutExternal (proxy) it is
+	// logout_url, reached by a plain link: the CSP form-action directive
+	// would block a form whose response redirects cross-origin.
+	SignOutURL      string
+	SignOutExternal bool
 }
 
 // ConnCard is one Overview card.
@@ -187,6 +197,42 @@ type ConnCard struct {
 	RecheckURL    string
 }
 
-// ElementID is the card's HTML id, the target of "Retry now". Connection
-// names are restricted to [a-z0-9._-], so they are valid in an id.
-func (c ConnCard) ElementID() string { return "conn-" + c.Name }
+// Element ids. Connection names match [a-z0-9][a-z0-9._-]*, so they are
+// valid in ids, and each kind of element has its own prefix, so ids cannot
+// collide whatever the names. Polled regions are swapped by id, and htmx
+// refocuses the element with the same id after a swap, so every focusable
+// element in a polled region has a stable id.
+const (
+	UpdatedID     = "updated-at"
+	UnreachableID = "overview-unreachable"
+	SidebarListID = "sidebar-conns"
+	ContentID     = "content"
+)
+
+// CardID is the id of a connection's Overview card.
+func CardID(name string) string { return "card-" + name }
+
+// CardOpenID is the id of a card's "Open →" link.
+func CardOpenID(name string) string { return "open-" + name }
+
+// CardRetryID is the id of a card's "Retry now" button.
+func CardRetryID(name string) string { return "retry-" + name }
+
+// NavConnID is the id of a connection's sidebar link.
+func NavConnID(name string) string { return "nav-" + name }
+
+// SubNavID is the id of a sub-nav link of the current connection. There is
+// one current connection, so the section alone makes it unique.
+func SubNavID(s Section) string {
+	switch s {
+	case SectionQueues:
+		return "subnav-queues"
+	case SectionServers:
+		return "subnav-servers"
+	case SectionSchedulers:
+		return "subnav-schedulers"
+	case SectionInfo:
+		return "subnav-info"
+	}
+	return "subnav"
+}

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/a-h/templ"
 
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
@@ -15,7 +16,7 @@ func TestDocumentThemeAttribute(t *testing.T) {
 		t.Run(th.Value(), func(t *testing.T) {
 			var b strings.Builder
 			d := Doc{Theme: th, Refresh: components.Refresh2s, CookiePath: "/asynq", Assets: Assets{CSS: "/a.css", JS: "/a.js", HTMX: "/h.js", Icon: "/i.svg"}}
-			if err := Document(d, "T").Render(context.Background(), &b); err != nil {
+			if err := Document(d, templ.Raw("T")).Render(context.Background(), &b); err != nil {
 				t.Fatal(err)
 			}
 			doc, err := goquery.NewDocumentFromReader(strings.NewReader(b.String()))
@@ -39,6 +40,12 @@ func TestDocumentThemeAttribute(t *testing.T) {
 			})
 			if strings.Join(srcs, " ") != "/h.js /a.js" {
 				t.Errorf("scripts = %v", srcs)
+			}
+			if got := strings.Join(strings.Fields(doc.Find("title").Text()), " "); got != "T – asynqui" {
+				t.Errorf("title = %q", got)
+			}
+			if href, _ := doc.Find("body > a.skip-link").First().Attr("href"); href != "#content" {
+				t.Errorf("skip link = %q", href)
 			}
 		})
 	}

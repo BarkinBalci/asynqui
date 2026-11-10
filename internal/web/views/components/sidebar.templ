@@ -3,86 +3,95 @@ package components
 import "github.com/BarkinBalci/asynqui/internal/web/format"
 
 templ SidebarNav(m Sidebar) {
-	<aside class="side">
+	<aside class="side" aria-label="Sidebar">
 		<a class="brand" href={ templ.SafeURL(m.OverviewURL) }>
 			@Logo("28")
 			@Wordmark()
 		</a>
 		<nav class="nav" aria-label="Global">
-			if m.Section == SectionOverview {
-				<a class="on" href={ templ.SafeURL(m.OverviewURL) } aria-current="page">
-					@IconOverview("18")
-					Overview
-				</a>
-			} else {
-				<a href={ templ.SafeURL(m.OverviewURL) }>
-					@IconOverview("18")
-					Overview
-				</a>
+			@navLink(m.OverviewURL, "", m.Section == SectionOverview) {
+				@IconOverview("18")
+				@SectionName(SectionOverview, false)
 			}
 		</nav>
 		<div class="side-conns">
 			<div class="navlabel"><span>Connections</span><span class="num">{ format.Number(int64(len(m.Conns))) }</span></div>
 			<label class="side-filter">
 				<span class="sr-only">Filter connections</span>
-				<input type="search" placeholder="Filter connections" autocomplete="off" data-filter="#conn-list"/>
+				<input id="sidebar-filter" type="search" placeholder="Filter connections" autocomplete="off" data-filter={ "#" + SidebarListID }/>
 			</label>
-			<nav id="conn-list" class="conn-list" aria-label="Connections">
-				for _, c := range m.Conns {
-					if c.Current {
-						<div class="conn-current" data-filter-text={ c.Name + " " + c.Addr }>
-							@connItem(c)
-							<div class="nav subnav">
-								@subItem(c.Sub.QueuesURL, m.Section == SectionQueues) {
-									@IconQueues("16")
-									Queues
-								}
-								@subItem(c.Sub.ServersURL, m.Section == SectionServers) {
-									@IconServers("16")
-									Servers
-								}
-								@subItem(c.Sub.SchedulersURL, m.Section == SectionSchedulers) {
-									@IconSchedulers("16")
-									Schedulers
-								}
-								@subItem(c.Sub.InfoURL, m.Section == SectionInfo) {
-									@IconDatabase("16")
-									@SectionName(SectionInfo, c.Sub.Valkey)
-								}
-							</div>
-						</div>
-					} else {
-						<div data-filter-text={ c.Name + " " + c.Addr }>
-							@connItem(c)
-						</div>
-					}
-				}
-			</nav>
+			@SidebarConnList(m, false)
 		</div>
 		@footer(m.Footer)
 	</aside>
 }
 
+// SidebarConnList is the connection list alone; the Overview poll replaces
+// it out of band so its status dots follow the cards.
+templ SidebarConnList(m Sidebar, oob bool) {
+	<nav id={ SidebarListID } class="conn-list" aria-label="Connections" { oobAttr(oob)... }>
+		for _, c := range m.Conns {
+			if c.Current {
+				<div class="conn-current" data-filter-text={ c.Name + " " + c.Addr }>
+					@connItem(c)
+					<div class="nav subnav">
+						@subItem(c.Sub.QueuesURL, SectionQueues, m.Section, c.Sub.Valkey) {
+							@IconQueues("16")
+						}
+						@subItem(c.Sub.ServersURL, SectionServers, m.Section, c.Sub.Valkey) {
+							@IconServers("16")
+						}
+						@subItem(c.Sub.SchedulersURL, SectionSchedulers, m.Section, c.Sub.Valkey) {
+							@IconSchedulers("16")
+						}
+						@subItem(c.Sub.InfoURL, SectionInfo, m.Section, c.Sub.Valkey) {
+							@IconDatabase("16")
+						}
+					</div>
+				</div>
+			} else {
+				<div data-filter-text={ c.Name + " " + c.Addr }>
+					@connItem(c)
+				</div>
+			}
+		}
+	</nav>
+}
+
 templ connItem(c SidebarConn) {
-	<a class="citem" href={ templ.SafeURL(c.URL) }>
+	<a id={ NavConnID(c.Name) } class="citem" href={ templ.SafeURL(c.URL) }>
 		<span class="citem-name">
-			{ c.Name }
+			{ c.Name }{ " " }
 			@StatusDot(c.Health)
 		</span>
 		<span class="citem-addr" title={ c.Addr }>{ c.Addr }</span>
 	</a>
 }
 
-templ subItem(url string, active bool) {
-	if active {
-		<a class="on" href={ templ.SafeURL(url) } aria-current="page">
-			{ children... }
-		</a>
-	} else {
-		<a href={ templ.SafeURL(url) }>
-			{ children... }
-		</a>
+templ subItem(url string, s, active Section, valkey bool) {
+	@navLink(url, SubNavID(s), s == active) {
+		{ children... }
+		@SectionName(s, valkey)
 	}
+}
+
+// navLink is a nav item; the active one is tinted and marked current.
+templ navLink(url, id string, active bool) {
+	<a href={ templ.SafeURL(url) } { navAttrs(id, active)... }>
+		{ children... }
+	</a>
+}
+
+func navAttrs(id string, active bool) templ.Attributes {
+	a := templ.Attributes{}
+	if id != "" {
+		a["id"] = id
+	}
+	if active {
+		a["class"] = "on"
+		a["aria-current"] = "page"
+	}
+	return a
 }
 
 templ footer(f Footer) {

@@ -14,6 +14,7 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/config"
 	"github.com/BarkinBalci/asynqui/internal/web/static"
 	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
 // Source and release links shown in the sidebar footer.
@@ -22,8 +23,13 @@ const (
 	releasesURL = sourceURL + "/releases"
 )
 
+// defaultSummaryBudget bounds how long the Overview waits for connection
+// summaries. Cards that miss it render as "Checking"; their fetches go on
+// in conn's cache, so the next poll usually has them.
+const defaultSummaryBudget = 1500 * time.Millisecond
+
 // Deps are the dependencies of NewServer. Every field is required except
-// Now and Version.
+// Version, Now and SummaryBudget.
 type Deps struct {
 	Logger *slog.Logger
 	Config *config.Config
@@ -36,6 +42,9 @@ type Deps struct {
 	Version string
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
+	// SummaryBudget bounds the Overview's wait for summaries. Zero means
+	// 1.5s.
+	SummaryBudget time.Duration
 }
 
 // deps is what handlers share: the validated Deps plus everything derived
@@ -48,47 +57,63 @@ type deps struct {
 	ready   *Readiness
 	version string
 	now     func() time.Time
+	budget  time.Duration
 	base    string // "" or "/asynq"
 	refresh string // default refresh choice from config
-	assets  *static.Assets
-	urls    views.Assets
+	// secureCookies follows auth.session.cookie_secure for the preference
+	// cookies too.
+	secureCookies bool
+	assets        *static.Assets
+	urls          views.Assets
 }
 
 // NewServer returns the root handler with every route and the global
 // middleware applied. It fails on an invalid trusted origin or a missing
 // dependency.
 func NewServer(d Deps) (http.Handler, error) {
+	_, h, err := newServer(d)
+	return h, err
+}
+
+// newServer is NewServer that also returns the handlers' shared deps, for
+// tests.
+func newServer(d Deps) (*deps, http.Handler, error) {
 	if d.Logger == nil || d.Config == nil || d.Auth == nil || d.Policy == nil || d.Conns == nil || d.Ready == nil {
-		return nil, errors.New("web: missing dependency")
+		return nil, nil, errors.New("web: missing dependency")
 	}
 	assets, err := static.Embedded()
 	if err != nil {
-		return nil, fmt.Errorf("web: %w", err)
+		return nil, nil, fmt.Errorf("web: %w", err)
 	}
 	cop := http.NewCrossOriginProtection()
 	for _, o := range d.Config.Server.TrustedOrigins {
 		if err := cop.AddTrustedOrigin(o); err != nil {
-			return nil, fmt.Errorf("web: server.trusted_origins: %w", err)
+			return nil, nil, fmt.Errorf("web: server.trusted_origins: %w", err)
 		}
 	}
 
 	dd := &deps{
-		logger:  d.Logger,
-		auth:    d.Auth,
-		policy:  d.Policy,
-		conns:   d.Conns,
-		ready:   d.Ready,
-		version: d.Version,
-		now:     d.Now,
-		base:    strings.TrimRight(d.Config.Server.BasePath, "/"),
-		refresh: d.Config.Refresh.Default,
-		assets:  assets,
+		logger:        d.Logger,
+		auth:          d.Auth,
+		policy:        d.Policy,
+		conns:         d.Conns,
+		ready:         d.Ready,
+		version:       d.Version,
+		now:           d.Now,
+		budget:        d.SummaryBudget,
+		base:          strings.TrimRight(d.Config.Server.BasePath, "/"),
+		refresh:       d.Config.Refresh.Default,
+		secureCookies: d.Config.Auth.Session.CookieSecure,
+		assets:        assets,
 	}
 	if dd.version == "" {
 		dd.version = "dev"
 	}
 	if dd.now == nil {
 		dd.now = time.Now
+	}
+	if dd.budget <= 0 {
+		dd.budget = defaultSummaryBudget
 	}
 	dd.urls = views.Assets{
 		CSS:  dd.static("app.css"),
@@ -109,9 +134,9 @@ func NewServer(d Deps) (http.Handler, error) {
 	}
 	h = cop.Handler(h)
 	h = securityHeaders(h)
-	h = recoverPanics(d.Logger, h)
+	h = recoverPanics(d.Logger, dd.internalError, h)
 	h = logRequests(d.Logger, dd.base, h)
-	return h, nil
+	return dd, h, nil
 }
 
 // url builds every link, redirect and form action: base_path plus each
@@ -129,6 +154,20 @@ func (d *deps) url(segments ...string) string {
 	return b.String()
 }
 
+// urlQuery is url(segments...) with a query string; empty values are
+// dropped, and no query is added when nothing is left.
+func (d *deps) urlQuery(q url.Values, segments ...string) string {
+	for k, vs := range q {
+		if len(vs) == 0 || (len(vs) == 1 && vs[0] == "") {
+			delete(q, k)
+		}
+	}
+	if len(q) == 0 {
+		return d.url(segments...)
+	}
+	return d.url(segments...) + "?" + q.Encode()
+}
+
 // static returns the hashed URL of a static file such as "vendor/htmx.min.js".
 func (d *deps) static(name string) string {
 	return d.url(append([]string{"static"}, strings.Split(d.assets.Path(name), "/")...)...)
@@ -140,4 +179,10 @@ func (d *deps) cookiePath() string {
 		return "/"
 	}
 	return d.base
+}
+
+// internalError answers a panic or a failed render with the standalone
+// error page (the shell itself may be what failed).
+func (d *deps) internalError(w http.ResponseWriter, r *http.Request) {
+	d.errorDocument(w, r, http.StatusInternalServerError, pages.ErrorInternal)
 }

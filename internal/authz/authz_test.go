@@ -42,18 +42,17 @@ func TestParseRole(t *testing.T) {
 func TestMatrix(t *testing.T) {
 	type row struct{ none, viewer, operator, admin bool }
 	matrix := map[Action]row{
-		ActionView:              {false, true, true, true},
-		ActionPauseQueue:        {false, false, true, true},
-		ActionResumeQueue:       {false, false, true, true},
-		ActionRunTask:           {false, false, true, true},
-		ActionArchiveTask:       {false, false, true, true},
-		ActionCancelTask:        {false, false, true, true},
-		ActionRunSchedulerEntry: {false, false, true, true},
-		ActionDeleteTask:        {false, false, false, true},
-		ActionDeleteQueue:       {false, false, false, true},
-		Action(0):               {false, false, false, false},
-		ActionDeleteQueue + 1:   {false, false, false, false},
-		Action(999):             {false, false, false, false},
+		ActionView:            {false, true, true, true},
+		ActionPauseQueue:      {false, false, true, true},
+		ActionResumeQueue:     {false, false, true, true},
+		ActionRunTask:         {false, false, true, true},
+		ActionArchiveTask:     {false, false, true, true},
+		ActionCancelTask:      {false, false, true, true},
+		ActionDeleteTask:      {false, false, false, true},
+		ActionDeleteQueue:     {false, false, false, true},
+		Action(0):             {false, false, false, false},
+		ActionDeleteQueue + 1: {false, false, false, false},
+		Action(999):           {false, false, false, false},
 	}
 	for a, want := range matrix {
 		got := row{
@@ -85,7 +84,6 @@ func TestMinRole(t *testing.T) {
 		{ActionRunTask, RoleOperator, true},
 		{ActionArchiveTask, RoleOperator, true},
 		{ActionCancelTask, RoleOperator, true},
-		{ActionRunSchedulerEntry, RoleOperator, true},
 		{ActionDeleteTask, RoleAdmin, true},
 		{ActionDeleteQueue, RoleAdmin, true},
 		{Action(0), RoleNone, false},
@@ -246,18 +244,18 @@ func TestCan(t *testing.T) {
 	)
 	actions := []Action{
 		ActionView, ActionPauseQueue, ActionResumeQueue, ActionRunTask, ActionArchiveTask,
-		ActionCancelTask, ActionRunSchedulerEntry, ActionDeleteTask, ActionDeleteQueue,
+		ActionCancelTask, ActionDeleteTask, ActionDeleteQueue,
 	}
 	tests := []struct {
 		user string
 		conn string
 		want []bool // per action, in the order above
 	}{
-		{"nobody", "c", []bool{false, false, false, false, false, false, false, false, false}},
-		{"v", "c", []bool{true, false, false, false, false, false, false, false, false}},
-		{"o", "c", []bool{true, true, true, true, true, true, true, false, false}},
-		{"a", "c", []bool{true, true, true, true, true, true, true, true, true}},
-		{"a", "other", []bool{false, false, false, false, false, false, false, false, false}},
+		{"nobody", "c", []bool{false, false, false, false, false, false, false, false}},
+		{"v", "c", []bool{true, false, false, false, false, false, false, false}},
+		{"o", "c", []bool{true, true, true, true, true, true, false, false}},
+		{"a", "c", []bool{true, true, true, true, true, true, true, true}},
+		{"a", "other", []bool{false, false, false, false, false, false, false, false}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.user+"@"+tt.conn, func(t *testing.T) {

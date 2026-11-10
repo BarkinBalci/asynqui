@@ -10,13 +10,18 @@ import (
 	"github.com/a-h/templ"
 )
 
-func render(t *testing.T, c templ.Component) *goquery.Document {
+func renderString(t *testing.T, c templ.Component) string {
 	t.Helper()
 	var b strings.Builder
 	if err := c.Render(context.Background(), &b); err != nil {
 		t.Fatal(err)
 	}
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(b.String()))
+	return b.String()
+}
+
+func render(t *testing.T, c templ.Component) *goquery.Document {
+	t.Helper()
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(renderString(t, c)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +47,7 @@ func TestConnCardStates(t *testing.T) {
 				return c
 			},
 			wantHealth: "up", wantBadge: "Healthy",
-			present: []string{".stats-4", ".stats-3", ".conn-foot a.conn-open"},
+			present: []string{".stats-4", ".stats-3", ".conn-foot a#open-main.conn-open"},
 			absent:  []string{".conn-error", ".conn-checking", "form"},
 		},
 		{
@@ -52,8 +57,10 @@ func TestConnCardStates(t *testing.T) {
 				return c
 			},
 			wantHealth: "down", wantBadge: "Unreachable",
-			present: []string{".conn-error .conn-error-text", `form[method=post][action="/c/main/recheck"][hx-post="/c/main/recheck"]`},
-			absent:  []string{".stat", ".conn-checking", "a.conn-open"},
+			present: []string{".conn-error .conn-error-text",
+				`form[method=post][action="/c/main/recheck"][hx-post="/c/main/recheck"][hx-target="closest article"][hx-swap=outerHTML]`,
+				"button#retry-main"},
+			absent: []string{".stat", ".conn-checking", "a.conn-open"},
 		},
 		{
 			name:       "unknown",
@@ -65,10 +72,13 @@ func TestConnCardStates(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			doc := render(t, ConnCardView(tt.card(base)))
-			card := doc.Find("article.conn-card#conn-main")
+			doc := render(t, ConnCardView(tt.card(base), false))
+			card := doc.Find("article.conn-card#card-main")
 			if h, _ := card.Attr("data-health"); h != tt.wantHealth {
 				t.Errorf("data-health = %q", h)
+			}
+			if _, oob := card.Attr("hx-swap-oob"); oob {
+				t.Error("in-place card marked out of band")
 			}
 			if got := text(card.Find("h2")); got != "main" {
 				t.Errorf("title = %q", got)
@@ -94,10 +104,14 @@ func TestConnCardStates(t *testing.T) {
 			}
 		})
 	}
+	doc := render(t, ConnCardView(ConnCard{Name: "main"}, true))
+	if v, _ := doc.Find("article#card-main").Attr("hx-swap-oob"); v != "true" {
+		t.Error("oob card lacks hx-swap-oob")
+	}
 }
 
 func TestConnCardFormatsNumbers(t *testing.T) {
-	doc := render(t, ConnCardView(ConnCard{Name: "x", Health: HealthUp, Processed: 482190, OldestPending: 65 * time.Second}))
+	doc := render(t, ConnCardView(ConnCard{Name: "x", Health: HealthUp, Processed: 482190, OldestPending: 65 * time.Second}, false))
 	vals := map[string]string{}
 	doc.Find(".stat").Each(func(_ int, s *goquery.Selection) { vals[text(s.Find(".stat-l"))] = text(s.Find(".stat-v")) })
 	if vals["Processed today"] != "482,190" || vals["Oldest pending"] != "1m 05s" || vals["Retry"] != "0" {
@@ -105,16 +119,71 @@ func TestConnCardFormatsNumbers(t *testing.T) {
 	}
 }
 
+// TestIDPrefixesDistinct: every generated id kind has its own prefix, so a
+// connection name can never make two kinds collide.
+func TestIDPrefixesDistinct(t *testing.T) {
+	ids := map[string]string{
+		"card": CardID("x"), "open": CardOpenID("x"), "retry": CardRetryID("x"), "nav": NavConnID("x"),
+	}
+	fixed := []string{UpdatedID, UnreachableID, SidebarListID, ContentID, "sidebar-filter",
+		SubNavID(SectionQueues), SubNavID(SectionServers), SubNavID(SectionSchedulers), SubNavID(SectionInfo)}
+	prefixes := map[string]string{}
+	for kind, id := range ids {
+		p := strings.TrimSuffix(id, "x")
+		for other, q := range prefixes {
+			if strings.HasPrefix(p, q) || strings.HasPrefix(q, p) {
+				t.Errorf("prefixes %s %q and %s %q overlap", kind, p, other, q)
+			}
+		}
+		prefixes[kind] = p
+		for _, f := range fixed {
+			if strings.HasPrefix(f, p) {
+				t.Errorf("fixed id %q starts with the %s prefix %q", f, kind, p)
+			}
+		}
+	}
+}
+
+func TestStatusDotText(t *testing.T) {
+	for h, want := range map[Health]string{HealthUp: "Reachable", HealthDown: "Unreachable", HealthUnknown: "Checking"} {
+		doc := render(t, StatusDot(h))
+		dot := doc.Find(".dot")
+		if got := text(dot.Find(".sr-only")); got != want {
+			t.Errorf("health %d: sr text %q, want %q", h, got, want)
+		}
+		if title, _ := dot.Attr("title"); title != want {
+			t.Errorf("health %d: title %q", h, title)
+		}
+	}
+}
+
+func TestUnreachableBadge(t *testing.T) {
+	doc := render(t, UnreachableBadge(0, true))
+	w := doc.Find("#" + UnreachableID)
+	if w.Length() != 1 || w.Children().Length() != 0 {
+		t.Error("empty badge wrapper missing or not empty")
+	}
+	if v, _ := w.Attr("hx-swap-oob"); v != "true" {
+		t.Error("oob wrapper lacks hx-swap-oob")
+	}
+	doc = render(t, UnreachableBadge(1204, false))
+	if got := text(doc.Find("#" + UnreachableID + " .badge-danger")); got != "1,204 unreachable" {
+		t.Errorf("badge = %q", got)
+	}
+}
+
 func TestAccountMenu(t *testing.T) {
 	tests := []struct {
-		name        string
-		a           Account
-		wantAny     bool
-		wantSignOut bool
+		name     string
+		a        Account
+		wantAny  bool
+		wantForm bool
+		wantLink string
 	}{
-		{"hidden (auth none)", Account{}, false, false},
-		{"no sign out", Account{Visible: true, User: "jdoe", Role: RoleViewer}, true, false},
-		{"sign out", Account{Visible: true, User: "jdoe", Role: RoleOperator, SignOut: true, LogoutURL: "/logout"}, true, true},
+		{"hidden (auth none)", Account{}, false, false, ""},
+		{"no sign out", Account{Visible: true, User: "jdoe", Role: RoleViewer}, true, false, ""},
+		{"sign out form", Account{Visible: true, User: "jdoe", Role: RoleOperator, SignOutURL: "/logout"}, true, true, ""},
+		{"sign out link", Account{Visible: true, User: "jdoe", Role: RoleOperator, SignOutURL: "https://sso.example/out", SignOutExternal: true}, true, false, "https://sso.example/out"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -122,11 +191,22 @@ func TestAccountMenu(t *testing.T) {
 			if got := doc.Find(".account").Length() > 0; got != tt.wantAny {
 				t.Fatalf("rendered = %v", got)
 			}
-			if got := doc.Find(`form[method=post][action="/logout"] button`).Length() > 0; got != tt.wantSignOut {
-				t.Errorf("sign out = %v", got)
+			if got := doc.Find(`form[method=post][action="/logout"] button`).Length() > 0; got != tt.wantForm {
+				t.Errorf("sign out form = %v", got)
+			}
+			if tt.wantLink != "" {
+				if href, _ := doc.Find("a.menu-item").Attr("href"); href != tt.wantLink {
+					t.Errorf("sign out link = %q", href)
+				}
+				if doc.Find("form").Length() != 0 {
+					t.Error("external sign out must not be a form")
+				}
 			}
 			if tt.wantAny && !strings.HasPrefix(text(doc.Find(".account-btn")), "jdoe ") {
 				t.Errorf("label = %q", text(doc.Find(".account-btn")))
+			}
+			if doc.Find("summary[aria-label]").Length() != 0 {
+				t.Error("summary has an aria-label hiding its visible text")
 			}
 		})
 	}
@@ -153,9 +233,15 @@ func TestSidebarActiveState(t *testing.T) {
 			t.Errorf("count = %q", got)
 		}
 		for name, cls := range map[string]string{"main": "dot-up", "analytics": "dot-down", "local": "dot-unknown"} {
-			if doc.Find(`a[href="/c/`+name+`"] .dot.`+cls).Length() != 1 {
+			if doc.Find(`a#nav-`+name+`[href="/c/`+name+`"] .dot.`+cls).Length() != 1 {
 				t.Errorf("%s lacks %s", name, cls)
 			}
+		}
+		if doc.Find(`aside[aria-label]`).Length() != 1 {
+			t.Error("sidebar landmark has no name")
+		}
+		if f, _ := doc.Find("input#sidebar-filter").Attr("data-filter"); f != "#"+SidebarListID {
+			t.Errorf("filter target = %q", f)
 		}
 	})
 	t.Run("connection sub-page", func(t *testing.T) {
@@ -164,30 +250,43 @@ func TestSidebarActiveState(t *testing.T) {
 			t.Error("Overview active")
 		}
 		cur := doc.Find(".conn-current")
-		if cur.Length() != 1 || text(cur.Find(".citem-name")) != "main" {
-			t.Fatalf("current = %q", text(cur))
+		if cur.Length() != 1 || text(cur.Find(".citem-name")) != "main Reachable" {
+			t.Fatalf("current = %q", text(cur.Find(".citem-name")))
 		}
-		if got := text(cur.Find(".subnav a.on[aria-current=page]")); got != "Schedulers" {
+		if got := text(cur.Find(".subnav a#subnav-schedulers.on[aria-current=page]")); got != "Schedulers" {
 			t.Errorf("active sub-item = %q", got)
 		}
 		if doc.Find("[aria-current]").Length() != 1 {
 			t.Error("more than one aria-current")
 		}
-		if !strings.Contains(text(cur.Find(".subnav")), "Valkey info") {
-			t.Error("Valkey label missing")
+		if got := text(cur.Find("a#subnav-info")); got != "Valkey info" {
+			t.Errorf("info label = %q", got)
 		}
 		if v, _ := cur.Attr("data-filter-text"); v != "main m:6379/0" {
 			t.Errorf("filter text = %q", v)
+		}
+	})
+	t.Run("list out of band", func(t *testing.T) {
+		doc := render(t, SidebarConnList(Sidebar{Conns: conns(false)}, true))
+		if v, _ := doc.Find("nav#" + SidebarListID).Attr("hx-swap-oob"); v != "true" {
+			t.Error("oob list lacks hx-swap-oob")
 		}
 	})
 }
 
 func TestTopBar(t *testing.T) {
 	at := time.Date(2026, 11, 8, 0, 11, 52, 0, time.UTC)
-	doc := render(t, TopBarView(TopBar{
-		Crumbs:    []Crumb{{Section: SectionOverview, URL: "/"}, {Text: "main", URL: "/c/main"}, {Section: SectionInfo, Valkey: true, URL: "/c/main/info"}},
+	html := renderString(t, TopBarView(TopBar{
+		Crumbs: []Crumb{
+			{Section: SectionOverview, URL: "/"}, {Text: "main", URL: "/c/main"},
+			{Section: SectionInfo, Valkey: true, URL: "/c/main/info"},
+		},
 		UpdatedAt: at, Theme: ThemeDark, Refresh: RefreshOff, PrefsURL: "/prefs", Next: "/c/main/info",
 	}))
+	if strings.Contains(html, `class=""`) {
+		t.Error("empty class attribute")
+	}
+	doc, _ := goquery.NewDocumentFromReader(strings.NewReader(html))
 	var crumbs []string
 	doc.Find(".crumbs li").Each(func(_ int, s *goquery.Selection) { crumbs = append(crumbs, text(s)) })
 	if got := strings.Join(crumbs, " / "); got != "Overview / main / Valkey info" {
@@ -209,7 +308,17 @@ func TestTopBar(t *testing.T) {
 	if n := doc.Find(`form[data-pref] button[aria-pressed=true]`).Length(); n != 2 {
 		t.Errorf("pressed buttons = %d", n)
 	}
+	if n := doc.Find(`form[data-pref=theme] button[aria-label][title]`).Length(); n != 3 {
+		t.Errorf("labeled theme buttons = %d", n)
+	}
 	if doc.Find(".account").Length() != 0 {
 		t.Error("account shown without Visible")
+	}
+}
+
+func TestCrumbLabelComponent(t *testing.T) {
+	doc := render(t, CrumbLabel(Crumb{Label: templ.Raw("Not found"), Text: "ignored"}))
+	if got := text(doc.Find("body")); got != "Not found" {
+		t.Errorf("label = %q", got)
 	}
 }

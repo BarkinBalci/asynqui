@@ -17,7 +17,10 @@ func TestSecurityHeaders(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	csp := rec.Header().Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'self'", "frame-ancestors 'none'"} {
+	for _, want := range []string{
+		"default-src 'none'", "script-src 'self'", "style-src 'self'", "form-action 'self'",
+		"frame-src 'none'", "frame-ancestors 'none'", "base-uri 'none'", "object-src 'none'",
+	} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP %q lacks %q", csp, want)
 		}
@@ -32,6 +35,18 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Referrer-Policy"); got != "same-origin" {
 		t.Errorf("Referrer-Policy = %q, want same-origin", got)
+	}
+	if got := rec.Header().Get("Cross-Origin-Opener-Policy"); got != "same-origin" {
+		t.Errorf("Cross-Origin-Opener-Policy = %q, want same-origin", got)
+	}
+	pp := rec.Header().Get("Permissions-Policy")
+	for _, want := range []string{"camera=()", "microphone=()", "geolocation=()", "payment=()"} {
+		if !strings.Contains(pp, want) {
+			t.Errorf("Permissions-Policy %q lacks %q", pp, want)
+		}
+	}
+	if strings.Contains(pp, "clipboard-write") {
+		t.Errorf("Permissions-Policy %q blocks the copy buttons", pp)
 	}
 }
 
@@ -65,7 +80,7 @@ func TestRecoverPanics(t *testing.T) {
 			var logs bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&logs, nil))
 			rec := httptest.NewRecorder()
-			recoverPanics(logger, tt.handler).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+			recoverPanics(logger, nil, tt.handler).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
 
 			if rec.Code != tt.wantStatus || rec.Body.String() != tt.wantBody {
 				t.Errorf("got %d %q, want %d %q", rec.Code, rec.Body.String(), tt.wantStatus, tt.wantBody)
@@ -78,7 +93,7 @@ func TestRecoverPanics(t *testing.T) {
 }
 
 func TestRecoverPanicsRepanicsAbortHandler(t *testing.T) {
-	h := recoverPanics(slog.New(slog.DiscardHandler), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := recoverPanics(slog.New(slog.DiscardHandler), nil, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic(http.ErrAbortHandler)
 	}))
 	defer func() {

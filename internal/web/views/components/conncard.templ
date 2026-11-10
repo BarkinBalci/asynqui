@@ -4,8 +4,9 @@ import "github.com/BarkinBalci/asynqui/internal/web/format"
 
 // ConnCardView is one Overview card: reachable with its counters,
 // unreachable with the error and "Retry now", or unknown ("Checking").
-templ ConnCardView(c ConnCard) {
-	<article id={ c.ElementID() } class="card conn-card" data-health={ healthValue(c.Health) }>
+// With oob it replaces the card of the same id in an htmx response.
+templ ConnCardView(c ConnCard, oob bool) {
+	<article id={ CardID(c.Name) } class="card conn-card" data-health={ healthValue(c.Health) } { oobAttr(oob)... }>
 		<div class="conn-head">
 			<div class="conn-title">
 				<h2 class="card-title">{ c.Name }</h2>
@@ -46,7 +47,7 @@ templ ConnCardView(c ConnCard) {
 				</div>
 				<div class="conn-foot">
 					@HealthBadge(c.Health)
-					<a class="conn-open" href={ templ.SafeURL(c.OpenURL) }>Open →</a>
+					<a id={ CardOpenID(c.Name) } class="conn-open" href={ templ.SafeURL(c.OpenURL) }>Open →</a>
 				</div>
 			case HealthDown:
 				<div class="conn-error">
@@ -59,7 +60,7 @@ templ ConnCardView(c ConnCard) {
 				<div class="conn-foot">
 					@HealthBadge(c.Health)
 					<form method="post" action={ templ.SafeURL(c.RecheckURL) } hx-post={ c.RecheckURL } hx-target="closest article" hx-swap="outerHTML">
-						<button type="submit" class="btn retry">Retry now</button>
+						<button id={ CardRetryID(c.Name) } type="submit" class="btn retry">Retry now</button>
 					</form>
 				</div>
 			default:

@@ -52,12 +52,12 @@ func (d *deps) require(need authz.Role, h http.Handler) http.Handler {
 			c, found := lookup(d.conns, name)
 			role, visible := d.policy.RoleFor(subject(id), name)
 			if !found || !visible {
-				d.renderError(w, r, http.StatusNotFound, pages.ErrorNotFound, a)
+				d.renderError(w, r, http.StatusNotFound, pages.ErrorNotFound)
 				return
 			}
 			a.conn, a.role = c, role
 			if role < need {
-				d.renderError(w, r, http.StatusForbidden, pages.ErrorForbidden, a)
+				d.renderError(w, r, http.StatusForbidden, pages.ErrorForbidden)
 				return
 			}
 		}

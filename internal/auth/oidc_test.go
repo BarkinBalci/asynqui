@@ -215,7 +215,7 @@ func (f *fakeIDP) options(base string) Options {
 	}
 }
 
-// flow drives POST /login and GET /auth/callback. tamper may change the
+// flow drives GET /login/sso and GET /auth/callback. tamper may change the
 // callback query and cookies before the callback is sent.
 type flowResult struct {
 	start    resp
@@ -224,9 +224,9 @@ type flowResult struct {
 
 func (f *fakeIDP) flow(t *testing.T, h http.Handler, next string, tamper func(q url.Values, flow **http.Cookie)) flowResult {
 	t.Helper()
-	start := do(t, h, req{method: http.MethodPost, target: "/login", form: url.Values{"next": {next}}})
+	start := do(t, h, req{target: "/login/sso?" + url.Values{"next": {next}}.Encode()})
 	if start.status != http.StatusSeeOther {
-		t.Fatalf("POST /login = %d %s", start.status, start.body)
+		t.Fatalf("GET /login/sso = %d %s", start.status, start.body)
 	}
 	flow := start.cookies[flowCookie]
 	if flow == nil {
@@ -283,6 +283,60 @@ func TestOIDCSuccess(t *testing.T) {
 	if out.status != http.StatusSeeOther || out.header.Get("Location") != "/login" ||
 		out.cookies[sessionCookie] == nil || out.cookies[sessionCookie].MaxAge >= 0 {
 		t.Errorf("logout = %d %q %+v", out.status, out.header.Get("Location"), out.cookies[sessionCookie])
+	}
+}
+
+// TestOIDCStartEntryPoints: the UI links to GET /login/sso, and POST /login
+// still starts the flow for clients that post. Both store next only after
+// SafeNext and redirect to the IdP with PKCE.
+func TestOIDCStartEntryPoints(t *testing.T) {
+	idp := newFakeIDP(t)
+	h := app(mustNew(t, idp.options("")))
+	for name, rq := range map[string]req{
+		"GET /login/sso": {target: "/login/sso?next=" + url.QueryEscape("https://evil.example/")},
+		"POST /login":    {method: http.MethodPost, target: "/login", form: url.Values{"next": {"//evil.example/"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := do(t, h, rq)
+			loc, err := url.Parse(res.header.Get("Location"))
+			if res.status != http.StatusSeeOther || err != nil || !strings.HasPrefix(loc.String(), idp.srv.URL) {
+				t.Fatalf("%s = %d %q", name, res.status, res.header.Get("Location"))
+			}
+			if loc.Query().Get("code_challenge_method") != "S256" || loc.Query().Get("state") == "" {
+				t.Errorf("authorize URL lacks PKCE or state: %s", loc)
+			}
+			if res.cookies[flowCookie] == nil {
+				t.Error("no flow cookie")
+			}
+			code, state := idp.authorize(loc.String())
+			cb := do(t, h, req{
+				target:  "/auth/callback?" + url.Values{"code": {code}, "state": {state}}.Encode(),
+				cookies: []*http.Cookie{res.cookies[flowCookie]},
+			})
+			if cb.status != http.StatusSeeOther || cb.header.Get("Location") != "/" {
+				t.Errorf("unsafe next not dropped: %d %q", cb.status, cb.header.Get("Location"))
+			}
+		})
+	}
+}
+
+func TestSSOHandlerOtherProviders(t *testing.T) {
+	for _, o := range []Options{
+		{Provider: KindNone},
+		{Provider: KindBasic, Session: testSession(), Basic: BasicOptions{Users: []BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", 4)}}}},
+		{Provider: KindProxy, Proxy: ProxyOptions{TrustedProxies: []string{"10.0.0.1"}, LogoutURL: "https://sso.example/out"}},
+	} {
+		a := mustNew(t, o)
+		if res := do(t, app(a), req{target: "/login/sso"}); res.status != http.StatusNotFound {
+			t.Errorf("%s: GET /login/sso = %d, want 404", o.Provider, res.status)
+		}
+		want := ""
+		if o.Provider == KindProxy {
+			want = "https://sso.example/out"
+		}
+		if got := a.ProxyLogoutURL(); got != want {
+			t.Errorf("%s: ProxyLogoutURL = %q, want %q", o.Provider, got, want)
+		}
 	}
 }
 
@@ -347,6 +401,7 @@ func TestOIDCFailures(t *testing.T) {
 			var reasons []Failure
 			mux := http.NewServeMux()
 			mux.Handle("POST /login", a.LoginHandler(nil))
+			mux.Handle("GET /login/sso", a.SSOHandler(nil))
 			mux.Handle("GET /auth/callback", a.CallbackHandler(func(w http.ResponseWriter, _ *http.Request, status int, reason Failure) {
 				reasons = append(reasons, reason)
 				w.WriteHeader(status)
@@ -481,6 +536,7 @@ func TestOIDCSessionTooLarge(t *testing.T) {
 	var reasons []Failure
 	mux := http.NewServeMux()
 	mux.Handle("POST /login", a.LoginHandler(nil))
+	mux.Handle("GET /login/sso", a.SSOHandler(nil))
 	mux.Handle("GET /auth/callback", a.CallbackHandler(func(w http.ResponseWriter, _ *http.Request, status int, reason Failure) {
 		reasons = append(reasons, reason)
 		w.WriteHeader(status)

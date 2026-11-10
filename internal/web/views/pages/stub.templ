@@ -6,21 +6,25 @@ import (
 )
 
 // NotImplemented is a placeholder for pages that later milestones build.
-// The heading is the last breadcrumb.
+// The heading and title are the last breadcrumb.
 type NotImplemented struct {
 	Layout views.Layout
 }
 
 templ NotImplementedPage(m NotImplemented) {
-	@views.Page(m.Layout, pageTitle(m.Layout)) {
+	@views.Page(m.Layout, lastCrumb(m.Layout)) {
 		<div class="page-head">
 			<h1 class="h1">
-				if n := len(m.Layout.TopBar.Crumbs); n > 0 {
-					@components.CrumbLabel(m.Layout.TopBar.Crumbs[n-1])
-				}
+				@lastCrumb(m.Layout)
 			</h1>
 		</div>
 		<p class="lead">Not implemented yet.</p>
+	}
+}
+
+templ lastCrumb(l views.Layout) {
+	if n := len(l.TopBar.Crumbs); n > 0 {
+		@components.CrumbLabel(l.TopBar.Crumbs[n-1])
 	}
 }
 
@@ -34,58 +38,55 @@ const (
 	ErrorInternal
 )
 
-// Error is a full-page error inside the app shell.
+// Error is a full-page error inside the app shell, for signed-in users.
+// The handler ends the breadcrumbs with an ErrorCrumb.
 type Error struct {
 	Layout views.Layout
 	Kind   ErrorKind
 }
 
 templ ErrorPage(m Error) {
-	@views.Page(m.Layout, errorTitle(m.Kind)) {
+	@views.Page(m.Layout, ErrorTitle(m.Kind)) {
 		<div class="page-head">
-			<h1 class="h1">{ errorTitle(m.Kind) }</h1>
+			<h1 class="h1">
+				@ErrorTitle(m.Kind)
+			</h1>
 		</div>
 	}
 }
 
-// errorTitle is copy, kept in this templ file with the rest of the page.
-func errorTitle(k ErrorKind) string {
+// ErrorDocument is a standalone error page without the app shell: for
+// requests without an identity (the sidebar would list connections) and
+// for failures before or while the shell renders (panics, render errors).
+templ ErrorDocument(d views.Doc, kind ErrorKind, homeURL string) {
+	@views.Document(d, ErrorTitle(kind)) {
+		<div class="login">
+			<main class="login-card" id={ components.ContentID } tabindex="-1">
+				<div class="login-head">
+					@components.Logo("24")
+					@components.Wordmark()
+				</div>
+				<div class="login-form">
+					<h1 class="h1">
+						@ErrorTitle(kind)
+					</h1>
+					<a href={ templ.SafeURL(homeURL) }>
+						@components.SectionName(components.SectionOverview, false)
+					</a>
+				</div>
+			</main>
+		</div>
+	}
+}
+
+// ErrorTitle is an error page's heading, title and last breadcrumb.
+templ ErrorTitle(k ErrorKind) {
 	switch k {
-	case ErrorForbidden:
-		return "Forbidden"
-	case ErrorInternal:
-		return "Something went wrong"
+		case ErrorForbidden:
+			Forbidden
+		case ErrorInternal:
+			Something went wrong
+		default:
+			Not found
 	}
-	return "Not found"
-}
-
-// pageTitle is the document title of a placeholder page: the last
-// breadcrumb's text, or the app name for a section crumb.
-func pageTitle(l views.Layout) string {
-	n := len(l.TopBar.Crumbs)
-	if n == 0 {
-		return "asynqui"
-	}
-	c := l.TopBar.Crumbs[n-1]
-	if c.Text != "" {
-		return c.Text
-	}
-	return sectionTitle(c.Section, c.Valkey)
-}
-
-func sectionTitle(s components.Section, valkey bool) string {
-	switch s {
-	case components.SectionQueues:
-		return "Queues"
-	case components.SectionServers:
-		return "Servers"
-	case components.SectionSchedulers:
-		return "Schedulers"
-	case components.SectionInfo:
-		if valkey {
-			return "Valkey info"
-		}
-		return "Redis info"
-	}
-	return "Overview"
 }

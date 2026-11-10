@@ -24,33 +24,83 @@ func isFragment(r *http.Request) bool {
 }
 
 // render writes c as an HTML response. It renders into a buffer first, so a
-// template error becomes a clean 500 instead of a truncated page.
+// template error becomes a clean error page instead of a truncated one.
 func (d *deps) render(w http.ResponseWriter, r *http.Request, status int, c templ.Component) {
+	body, err := d.renderBytes(r, c)
+	if err != nil {
+		d.internalError(w, r)
+		return
+	}
+	writeHTML(w, status, body)
+}
+
+func (d *deps) renderBytes(r *http.Request, c templ.Component) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := c.Render(r.Context(), &buf); err != nil {
 		d.logger.ErrorContext(r.Context(), "render", slog.String("path", r.URL.Path), slog.Any("error", err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		return nil, err
 	}
+	return buf.Bytes(), nil
+}
+
+func writeHTML(w http.ResponseWriter, status int, body []byte) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Add("Vary", "HX-Request")
 	w.WriteHeader(status)
-	_, _ = w.Write(buf.Bytes())
+	_, _ = w.Write(body) //nolint:gosec // G705: body is templ output, escaped by templ.
 }
 
-// renderError answers with an error page inside the app shell, or with
-// plain text for htmx and non-GET requests.
-func (d *deps) renderError(w http.ResponseWriter, r *http.Request, status int, kind pages.ErrorKind, a access) {
+// plainError is a plain-text error that is never cached.
+func plainError(w http.ResponseWriter, status int) {
+	w.Header().Set("Cache-Control", "no-store")
+	http.Error(w, http.StatusText(status), status)
+}
+
+// renderError answers with an error page: inside the app shell for a
+// signed-in GET, as plain text for htmx and non-GET requests (a fragment
+// swap must not receive a whole page), and as the standalone error page
+// without an identity, so the sidebar never lists connections to strangers.
+func (d *deps) renderError(w http.ResponseWriter, r *http.Request, status int, kind pages.ErrorKind) {
 	if isFragment(r) || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
-		http.Error(w, http.StatusText(status), status)
+		plainError(w, status)
 		return
 	}
+	id, ok := auth.IdentityFrom(r.Context())
+	if !ok {
+		d.errorDocument(w, r, status, kind)
+		return
+	}
+	a := accessFrom(r.Context())
+	a.id = id
+	crumb := components.Crumb{Label: pages.ErrorTitle(kind)}
 	d.render(w, r, status, pages.ErrorPage(pages.Error{
-		Layout: d.layout(r, a, components.SectionNone, nil),
+		Layout: d.layout(r, a, components.SectionNone, []components.Crumb{crumb}),
 		Kind:   kind,
 	}))
+}
+
+// errorDocument writes the standalone error page. If even that fails to
+// render, the answer is plain text.
+func (d *deps) errorDocument(w http.ResponseWriter, r *http.Request, status int, kind pages.ErrorKind) {
+	if isFragment(r) || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		plainError(w, status)
+		return
+	}
+	body, err := d.renderBytes(r, pages.ErrorDocument(d.doc(r), kind, d.url()))
+	if err != nil {
+		plainError(w, status)
+		return
+	}
+	writeHTML(w, status, body)
+}
+
+// handleNotFound is the catch-all route.
+func handleNotFound(d *deps) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		d.renderError(w, r, http.StatusNotFound, pages.ErrorNotFound)
+	})
 }
 
 // doc builds the document-level view model: theme, refresh, assets.
@@ -66,7 +116,14 @@ func (d *deps) doc(r *http.Request) views.Doc {
 // layout builds the app shell for a page in section. crumbs after
 // "Overview" are passed in; the Overview crumb is always first.
 func (d *deps) layout(r *http.Request, a access, section components.Section, crumbs []components.Crumb) views.Layout {
-	visible := d.visible(a.id)
+	return d.layoutWith(r, a, section, crumbs, d.visible(a.id), nil)
+}
+
+// layoutWith is layout with the visible connections given, and health
+// overrides for the sidebar (the Overview passes what its cards found, so
+// a connection whose Summary failed shows down in both places).
+func (d *deps) layoutWith(r *http.Request, a access, section components.Section, crumbs []components.Crumb,
+	visible []visibleConn, health map[string]components.Health) views.Layout {
 	side := components.Sidebar{
 		OverviewURL: d.url(),
 		Section:     section,
@@ -76,11 +133,15 @@ func (d *deps) layout(r *http.Request, a access, section components.Section, cru
 	names := make([]string, 0, len(visible))
 	for _, c := range visible {
 		names = append(names, c.Name)
+		h, ok := health[c.Name]
+		if !ok {
+			h = healthView(c.Health.State)
+		}
 		sc := components.SidebarConn{
 			Name:   c.Name,
 			Addr:   c.Addr,
 			URL:    d.url("c", c.Name),
-			Health: healthView(c.Health.State),
+			Health: h,
 		}
 		if c.Name == a.conn.Name {
 			sc.Current = true
@@ -117,16 +178,16 @@ func (d *deps) layout(r *http.Request, a access, section components.Section, cru
 }
 
 func (d *deps) account(id auth.Identity, role authz.Role) components.Account {
-	if d.auth.Kind() == auth.KindNone {
+	a := components.Account{Visible: true, User: id.Name, Role: roleView(role)}
+	switch d.auth.Kind() {
+	case auth.KindNone:
 		return components.Account{}
+	case auth.KindProxy:
+		a.SignOutURL, a.SignOutExternal = d.auth.ProxyLogoutURL(), true
+	case auth.KindBasic, auth.KindOIDC:
+		a.SignOutURL = d.url("logout")
 	}
-	return components.Account{
-		Visible:   true,
-		User:      id.Name,
-		Role:      roleView(role),
-		SignOut:   d.auth.SignOutVisible(),
-		LogoutURL: d.url("logout"),
-	}
+	return a
 }
 
 func (d *deps) footer() components.Footer {

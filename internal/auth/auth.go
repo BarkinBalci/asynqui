@@ -147,6 +147,15 @@ func New(ctx context.Context, o Options) (*Authenticator, error) {
 // between the form and the SSO button.
 func (a *Authenticator) Kind() Kind { return a.kind }
 
+// ProxyLogoutURL is auth.proxy.logout_url, or "" for other providers. The
+// account menu links straight to it, so no form posts cross-origin.
+func (a *Authenticator) ProxyLogoutURL() string {
+	if a.kind != KindProxy {
+		return ""
+	}
+	return a.proxy.logoutURL
+}
+
 // SignOutVisible reports whether the account menu offers Sign out: always
 // for basic and oidc, for proxy only with a logout URL, never for none.
 func (a *Authenticator) SignOutVisible() bool {
@@ -223,12 +232,12 @@ func (a *Authenticator) Challenge(w http.ResponseWriter, r *http.Request) {
 	case htmx:
 		// The request URL is a fragment; return to the page shown.
 		if u, err := url.Parse(r.Header.Get("HX-Current-URL")); err == nil && u.Path != "" {
-			next = a.safeNext(u.RequestURI())
+			next = a.SafeNext(u.RequestURI())
 		}
 	case r.Method == http.MethodGet || r.Method == http.MethodHead:
 		// RequestURI is the original request target, unaffected by
 		// http.StripPrefix, so it still carries the base path.
-		next = a.safeNext(r.RequestURI)
+		next = a.SafeNext(r.RequestURI)
 	}
 	target := a.basePath + "/login"
 	if next != a.root() {
@@ -245,8 +254,8 @@ func (a *Authenticator) Challenge(w http.ResponseWriter, r *http.Request) {
 // LoginHandler serves POST /login. For basic it checks the "username" and
 // "password" form fields (at most 5 attempts per minute per client IP and
 // per username), sets the session and redirects to "next". For oidc it
-// starts the authorization code flow (the "Sign in with SSO" button posts
-// here). Other providers get 404. fail may be nil, which writes a
+// also starts the authorization code flow, for clients that post; the UI
+// links to SSOHandler instead. Other providers get 404. fail may be nil, which writes a
 // plain-text error.
 func (a *Authenticator) LoginHandler(fail FailFunc) http.Handler {
 	fail = failFunc(fail)
@@ -262,7 +271,7 @@ func (a *Authenticator) LoginHandler(fail FailFunc) http.Handler {
 			fail(w, r, http.StatusBadRequest, FailBadRequest)
 			return
 		}
-		next := a.safeNext(r.PostForm.Get("next"))
+		next := a.SafeNext(r.PostForm.Get("next"))
 		if a.kind == KindOIDC {
 			if err := a.oidc.start(w, r, a.jar, next); err != nil {
 				a.logger.ErrorContext(r.Context(), "oidc start failed", slog.Any("error", err))
@@ -304,7 +313,29 @@ func (a *Authenticator) basicLogin(w http.ResponseWriter, r *http.Request, next 
 	if !a.startSession(w, r, id, version, fail) {
 		return
 	}
-	http.Redirect(w, r, next, http.StatusSeeOther) //nolint:gosec // G710: next passed safeNext.
+	http.Redirect(w, r, next, http.StatusSeeOther) //nolint:gosec // G710: next passed SafeNext.
+}
+
+// SSOHandler serves GET /login/sso for oidc: the "Sign in with SSO" link.
+// It starts the authorization code flow and redirects to the IdP, returning
+// afterwards to the ?next= path if it passes SafeNext. A GET is safe here:
+// it only sets a fresh flow cookie, and the state, nonce and PKCE verifier
+// in it bind the callback to this browser. Being a navigation rather than a
+// form post, it is not subject to the CSP form-action directive, which would
+// block a form that redirects to the IdP. Other providers get 404.
+func (a *Authenticator) SSOHandler(fail FailFunc) http.Handler {
+	fail = failFunc(fail)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.kind != KindOIDC {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		if err := a.oidc.start(w, r, a.jar, a.SafeNext(r.URL.Query().Get("next"))); err != nil {
+			a.logger.ErrorContext(r.Context(), "oidc start failed", slog.Any("error", err))
+			fail(w, r, http.StatusInternalServerError, FailSSO)
+		}
+	})
 }
 
 // CallbackHandler serves GET /auth/callback for oidc; other providers get
@@ -330,7 +361,7 @@ func (a *Authenticator) CallbackHandler(fail FailFunc) http.Handler {
 		if !a.startSession(w, r, id, "", fail) {
 			return
 		}
-		http.Redirect(w, r, a.safeNext(next), http.StatusSeeOther) //nolint:gosec // G710: safeNext keeps it a local path.
+		http.Redirect(w, r, a.SafeNext(next), http.StatusSeeOther) //nolint:gosec // G710: SafeNext keeps it a local path.
 	})
 }
 
@@ -378,10 +409,11 @@ func failFunc(f FailFunc) FailFunc {
 
 func (a *Authenticator) root() string { return a.basePath + "/" }
 
-// safeNext returns next, cleaned and re-serialized, if it is a same-origin
+// SafeNext returns next, cleaned and re-serialized, if it is a same-origin
 // relative path under the base path, and the app root otherwise, so a
-// login link cannot redirect off-site or escape the base path.
-func (a *Authenticator) safeNext(next string) string {
+// login link (or any other return-to parameter) cannot redirect off-site
+// or escape the base path.
+func (a *Authenticator) SafeNext(next string) string {
 	root := a.root()
 	if next == "" || len(next) > maxNextBytes || !strings.HasPrefix(next, "/") ||
 		strings.HasPrefix(next, "//") || strings.ContainsAny(next, "\\\x00\r\n\t") {

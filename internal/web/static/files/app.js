@@ -11,10 +11,12 @@
 
 	// htmx must never eval, run swapped-in scripts or inject an inline
 	// <style> (the CSP forbids all three).
+	// historyCacheSize 0: no page snapshots (with data) in localStorage.
 	if (window.htmx) {
 		htmx.config.allowEval = false;
 		htmx.config.allowScriptTags = false;
 		htmx.config.includeIndicatorStyles = false;
+		htmx.config.historyCacheSize = 0;
 	}
 
 	function setCookie(name, value) {
@@ -162,8 +164,20 @@
 	}, 1000);
 
 	// ---- copy buttons ----
-	// <button data-copy="text"> copies its value; the full ID, never the
-	// shortened text shown.
+	// <button data-copy="text" hidden> copies its value: the full ID, never
+	// the shortened text shown. Copy buttons are rendered hidden and shown
+	// only where the Clipboard API exists (secure contexts), so no button
+	// does nothing.
+	function revealCopy(scope) {
+		if (!navigator.clipboard) {
+			return;
+		}
+		var buttons = scope.querySelectorAll("[data-copy][hidden]");
+		for (var i = 0; i < buttons.length; i++) {
+			buttons[i].hidden = false;
+		}
+	}
+
 	document.addEventListener("click", function (e) {
 		var b = e.target.closest("[data-copy]");
 		if (!b || !navigator.clipboard) {
@@ -199,34 +213,52 @@
 	});
 
 	// ---- menus ----
-	// <details data-menu> closes on an outside click or Escape.
-	function closeMenus(except) {
+	// <details data-menu> closes on an outside click or Escape. Escape
+	// returns focus to the menu's summary when focus was inside the menu.
+	function closeMenus(except, restoreFocus) {
 		var open = document.querySelectorAll("details[data-menu][open]");
 		for (var i = 0; i < open.length; i++) {
-			if (open[i] !== except) {
-				open[i].removeAttribute("open");
+			if (open[i] === except) {
+				continue;
+			}
+			var hadFocus = open[i].contains(document.activeElement);
+			open[i].removeAttribute("open");
+			if (restoreFocus && hadFocus) {
+				open[i].querySelector("summary").focus();
 			}
 		}
 	}
 
 	document.addEventListener("click", function (e) {
-		closeMenus(e.target.closest("details[data-menu]"));
+		closeMenus(e.target.closest("details[data-menu]"), false);
 	});
 	document.addEventListener("keydown", function (e) {
 		if (e.key === "Escape") {
-			closeMenus(null);
+			closeMenus(null, true);
 		}
 	});
 
-	// ---- after htmx swaps ----
-	document.addEventListener("htmx:afterSettle", function () {
-		renderTimes(document);
-		var filters = document.querySelectorAll("input[data-filter]");
-		for (var i = 0; i < filters.length; i++) {
-			applyFilter(filters[i]);
+	// ---- after htmx swaps (including out-of-band ones) ----
+	var afterSwapQueued = false;
+	function afterSwap() {
+		if (afterSwapQueued) {
+			return;
 		}
-	});
+		afterSwapQueued = true;
+		setTimeout(function () {
+			afterSwapQueued = false;
+			renderTimes(document);
+			revealCopy(document);
+			var filters = document.querySelectorAll("input[data-filter]");
+			for (var i = 0; i < filters.length; i++) {
+				applyFilter(filters[i]);
+			}
+		}, 0);
+	}
+	document.addEventListener("htmx:afterSettle", afterSwap);
+	document.addEventListener("htmx:oobAfterSwap", afterSwap);
 
 	renderTimes(document);
+	revealCopy(document);
 	schedule();
 })();
