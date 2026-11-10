@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,79 @@ type fakeConns struct {
 	block     map[string]bool
 	recheck   map[string]Health // result of Recheck by name
 	rechecked []string
+
+	// queues and history by connection; queueErrs and historyErrs fail
+	// those reads.
+	queues      map[string][]Queue
+	queueErrs   map[string]error
+	history     map[string][]DailyStat
+	historyErrs map[string]error
+	// historyAsked records the queue and days of each History call.
+	historyAsked []string
+	// actErrs fails actions on a queue; acted records "verb conn/queue".
+	actErrs map[string]error
+	acted   []string
+}
+
+func (f *fakeConns) Queues(ctx context.Context, name string) ([]Queue, error) {
+	f.mu.Lock()
+	block, err, qs := f.block[name], f.queueErrs[name], f.queues[name]
+	f.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return qs, err
+}
+
+func (f *fakeConns) History(_ context.Context, name, queue string, days int) ([]DailyStat, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.historyAsked = append(f.historyAsked, queue+"/"+strconv.Itoa(days))
+	if err := f.historyErrs[name]; err != nil {
+		return nil, err
+	}
+	h := f.history[name]
+	return h[max(len(h)-days, 0):], nil
+}
+
+func (f *fakeConns) act(verb, name, queue string, apply func(*Queue)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.acted = append(f.acted, verb+" "+name+"/"+queue)
+	if err := f.actErrs[queue]; err != nil {
+		return err
+	}
+	qs := f.queues[name]
+	for i := range qs {
+		if qs[i].Name == queue {
+			if apply == nil {
+				f.queues[name] = append(qs[:i:i], qs[i+1:]...)
+				return nil
+			}
+			apply(&qs[i])
+			return nil
+		}
+	}
+	return ErrQueueNotFound
+}
+
+func (f *fakeConns) PauseQueue(_ context.Context, name, queue string) error {
+	return f.act("pause", name, queue, func(q *Queue) { q.Paused = true })
+}
+
+func (f *fakeConns) ResumeQueue(_ context.Context, name, queue string) error {
+	return f.act("resume", name, queue, func(q *Queue) { q.Paused = false })
+}
+
+func (f *fakeConns) DeleteQueue(_ context.Context, name, queue string) error {
+	return f.act("delete", name, queue, nil)
+}
+
+func (f *fakeConns) actions() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.acted...)
 }
 
 func (f *fakeConns) Connections() []Connection {
@@ -77,7 +151,32 @@ func defaultConns() *fakeConns {
 		summaries: map[string]Summary{
 			"main": {Queues: 7, Pending: 1284, Active: 46, Retry: 37, ProcessedToday: 482190, FailedToday: 1204, OldestPending: 4*time.Minute + 12*time.Second},
 		},
+		queues:  map[string][]Queue{"main": defaultQueues()},
+		history: map[string][]DailyStat{"main": testHistory(90)},
+		actErrs: map[string]error{},
 	}
+}
+
+// defaultQueues are main's queues, sorted by name as the source returns
+// them.
+func defaultQueues() []Queue {
+	return []Queue{
+		{Name: "critical", Size: 58, Pending: 12, Active: 9, Scheduled: 30, Retry: 7, ProcessedToday: 98402, FailedToday: 211, Latency: 400 * time.Millisecond, MemoryUsage: 3 << 20},
+		{Name: "default", Size: 1402, Pending: 880, Active: 22, Scheduled: 480, Retry: 12, Archived: 8, ProcessedToday: 231775, FailedToday: 540, Latency: 12600 * time.Millisecond, MemoryUsage: 41 << 20},
+		{Name: "image-resize", Paused: true, Size: 111, Archived: 111, Latency: time.Hour, MemoryUsage: 22 << 20},
+		{Name: "low", Size: 160, Pending: 8, Scheduled: 105, Retry: 2, Archived: 45, ProcessedToday: 10365, FailedToday: 8, Latency: 48 * time.Second, MemoryUsage: 9 << 20},
+	}
+}
+
+// testHistory is days of counters ending on fixedNow's day: day i (from
+// the oldest) processed 1000+i, failed i%7.
+func testHistory(days int) []DailyStat {
+	out := make([]DailyStat, days)
+	end := fixedNow().Truncate(24 * time.Hour)
+	for i := range out {
+		out[i] = DailyStat{Date: end.AddDate(0, 0, i-days+1), Processed: 1000 + i, Failed: i % 7}
+	}
+	return out
 }
 
 // testOpts configures newTestServer. The zero value is auth none, default

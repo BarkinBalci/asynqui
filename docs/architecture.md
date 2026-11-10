@@ -27,6 +27,7 @@ asynqui/
 │       ├── handle_*.go        # one file per area: queues, tasks, servers, schedulers, info, auth, health
 │       ├── middleware.go
 │       ├── format/            # the only place numbers, dates and durations are formatted
+│       ├── chart/             # SVG chart geometry: nice axis scales, path data (no text)
 │       ├── views/             # .templ: layout.templ, components/, pages/ (+ generated *_templ.go, committed)
 │       └── static/            # files/: css, htmx, app.js, fonts, logo; //go:embed files
 ├── tools/go.mod               # templ and golangci-lint, run with go tool -modfile=tools/go.mod
@@ -41,12 +42,13 @@ asynqui/
 
 ```
 cmd/asynqui → web → conn, auth, authz → config
+                 ↘ chart
                  ↘ views → format
 ```
 
 - Nothing imports `web`.
 - `views` imports only its own components and `web/format`.
-- `format` and `config` import no other internal package.
+- `format`, `chart` and `config` import no other internal package.
 
 ## Rules
 
@@ -115,7 +117,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 
 	// auth
 	mux.Handle("GET /login", handleLogin(d))
-	mux.Handle("POST /login", handleLoginSubmit(d))            // basic form
+	mux.Handle("POST /login", handleLoginSubmit(d))            // basic form; 404 for every other provider
 	mux.Handle("GET /login/sso", handleSSO(d))                 // oidc "Sign in with SSO" link: starts the flow
 	mux.Handle("GET /auth/callback", handleOIDCCallback(d))
 	mux.Handle("POST /logout", handleLogout(d))
@@ -125,7 +127,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 
 	// pages (viewer)
 	mux.Handle("GET /{$}", view(d, handleOverview(d)))
-	mux.Handle("GET /c/{conn}", view(d, handleQueues(d)))
+	mux.Handle("GET /c/{conn}", view(d, handleQueues(d)))                        // ?sort=size&dir=desc&range=14d&queue=
 	mux.Handle("GET /c/{conn}/queues/{queue}", view(d, handleQueue(d)))           // ?state=pending&page=2&size=20&sort=
 	mux.Handle("GET /c/{conn}/queues/{queue}/tasks/{id}", view(d, handleTask(d)))
 	mux.Handle("GET /c/{conn}/servers", view(d, handleServers(d)))
@@ -133,19 +135,18 @@ func addRoutes(mux *http.ServeMux, d deps) {
 	mux.Handle("GET /c/{conn}/schedulers", view(d, handleSchedulers(d)))
 	mux.Handle("GET /c/{conn}/schedulers/{id}", view(d, handleSchedulerEntry(d)))
 	mux.Handle("GET /c/{conn}/info", view(d, handleRedisInfo(d)))
-	mux.Handle("GET /c/{conn}/throughput", view(d, handleThroughput(d)))          // chart fragment: ?range=7d&queue=
 	mux.Handle("POST /c/{conn}/recheck", view(d, handleRecheck(d)))              // Overview "Retry now"
 
 	// actions (operator)
-	mux.Handle("POST /c/{conn}/queues/pause", op(d, handlePause(d)))               // form: queue=a&queue=b
-	mux.Handle("POST /c/{conn}/queues/resume", op(d, handleResume(d)))
+	mux.Handle("POST /c/{conn}/queues/pause", op(d, handleQueueAction(d, pages.VerbPause)))  // form: queue=a&queue=b&next=
+	mux.Handle("POST /c/{conn}/queues/resume", op(d, handleQueueAction(d, pages.VerbResume)))
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTasksRun(d)))          // ids or all=1&state=
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTasksArchive(d)))
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTasksCancel(d)))
 
 	// admin
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleTasksDelete(d)))
-	mux.Handle("POST /c/{conn}/queues/delete", admin(d, handleQueuesDelete(d)))
+	mux.Handle("POST /c/{conn}/queues/delete", admin(d, handleQueueAction(d, pages.VerbDelete))) // + confirm=1
 
 	// assets
 	mux.Handle("GET /static/", handleStatic())
@@ -191,11 +192,12 @@ func addRoutes(mux *http.ServeMux, d deps) {
 **Frontend** (vendored and embedded; no npm and no build step)
 
 - **htmx 2.x:** one vendored file.
-- **Charts:** server-rendered SVG from templ. Fall back to uPlot only if hover tooltips can't be done well in SVG plus a little JS.
+- **Charts:** server-rendered SVG from templ, with no chart library. `web/chart` computes the scales and path data. The SVG stretches to its box (`preserveAspectRatio="none"`, non-scaling strokes); axis labels are HTML at fixed fractions of the height (every axis has three equal steps of a round size); colours come from CSS classes; each day has a hover band with a native `<title>` tooltip; a visually hidden table carries the same data.
 - **Fonts:** Inter and JetBrains Mono, self-hosted (OFL).
 - **`app.js`:** one small file for:
   - copy to clipboard
-  - Gmail-style select-all
+  - row selection: the "N selected" toolbar, enabling its buttons, select-all (and Gmail-style "select all N" for tasks)
+  - confirmation dialogs (`<dialog>`)
   - the theme toggle
   - polling timers, paused while the tab is hidden
   - local-time rendering of `<time>` elements
@@ -220,7 +222,8 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **Health loop:** one goroutine per connection sends PING every 10s and stores the result (reachable, unreachable + error, or unknown before the first result). The Overview, sidebar and badges only read it. `handleRecheck` runs a check synchronously and stores it.
 - **Concurrency:** connections are fetched in parallel. A failing connection renders "Connection failed" and does not block the page.
 - **Page budget:** the Overview waits at most 1.5s for summaries (`context.WithTimeout`). A card that misses it renders as "Checking"; the fetch goes on in conn's cache, so the next poll has it. If a reachable connection's Summary fails, the card and the sidebar both show it down.
-- **Overview cost:** `GetQueueInfo` per queue, plus `Servers()` per connection. Instance-wide INFO is fetched only by the Info page.
+- **Overview cost:** `GetQueueInfo` per queue (one snapshot, shared with the Connection page's table), plus `Servers()` per connection. Instance-wide INFO is fetched only by the Info page.
+- **Connection page cost:** the same queue snapshot, plus `History` per queue for the chart (one snapshot per queue and range). The page waits at most 5s for them; a miss renders "Checking". A successful pause, resume or delete drops the connection's cached snapshots, so the next read shows it.
 
 ## Frontend conventions
 
@@ -231,6 +234,9 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **htmx config** (set in `app.js`, before any request): `htmx.config.allowEval = false`, `htmx.config.includeIndicatorStyles = false` (it would inject an inline `<style>`). No `hx-on` or `js:` attributes.
 - **Polling:** `hx-trigger="every 5s [document.visibilityState === 'visible']"` cannot be used, because trigger filters need eval. `app.js` owns visibility gating instead: it starts the interval timers, skips ticks while `document.hidden`, and fires one refresh on `visibilitychange` to visible. With "Off", no timer runs.
 - **Polled regions keep focus:** a poll never replaces a whole region. The Overview grid has `hx-swap="none"`, and the response replaces each card, the heading badge, the Updated time and the sidebar list out of band by id (`hx-swap-oob`). htmx refocuses the element with the same id after a swap, so every focusable element in a polled region has a stable id; ids use one prefix per element kind (`card-`, `open-`, `retry-`, `nav-`), so connection names cannot make them collide.
+- **Connection page polling:** a hidden `#queues-poll` element polls the page URL with `hx-swap="none"`. The answer replaces, out of band, the poll element itself (so its URL follows the sort and chart state), the health badge, the table region, the chart card, the Updated time and the sidebar list. Sort links, range links and the queue picker fetch the same answer and push their URL, so all state is in the query (`?sort=&dir=&range=&queue=`) and bookmarkable. The toolbar, filter input and dialog sit outside the swapped regions.
+- **Selection survives polls without server state:** row checkboxes (and select-all) carry `hx-preserve` and a stable id (`qsel-` plus the hex of the queue name), so htmx keeps the very same elements, checked state included, when it swaps in a new table; `app.js` only recomputes the toolbar after each swap. The checkboxes belong to an empty action form through their `form` attribute, so the table need not sit inside a form.
+- **Actions:** toolbar buttons submit that form (`formaction`, plus `hx-post` with `hx-swap="none"`). The htmx answer is the poll answer plus error toasts appended to `#toasts` out of band; without JS it is a redirect back, or the page with the toasts. A delete opens a `<dialog>` whose confirm button posts `confirm=1`; without JS the first post answers with a confirmation page.
 - **No cross-origin forms:** the CSP `form-action 'self'` also applies to a form's redirects, so anything that leaves the origin (SSO, proxy sign out) is a link.
 - **Time:** the `time` component renders `<time datetime="RFC3339 UTC">` with the absolute UTC text from `format`. `app.js` rewrites it to local relative text with the absolute local time in `title`, and re-renders relative text on each tick.
 - **Assets:** served with content-hashed filenames and `Cache-Control: immutable`. `//go:embed files` (without `all:`), so dotfiles are never embedded.

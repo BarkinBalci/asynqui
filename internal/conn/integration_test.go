@@ -302,3 +302,128 @@ func TestIntegrationACL(t *testing.T) {
 		t.Errorf("Summary = %+v, want 1 queue with 2 pending", s)
 	}
 }
+
+func TestIntegrationQueues(t *testing.T) {
+	_, addr := runRedis(t, redisImage)
+	cc := connection("main", addr, 0)
+	reg := newRegistry(t, cc)
+	c := mustGet(t, reg, "main")
+	client := newClient(t, cc)
+
+	enqueue(t, client, 3, "email", asynq.Queue("default"))
+	enqueue(t, client, 1, "report", asynq.Queue("low"), asynq.ProcessIn(time.Hour))
+
+	// A worker processes one task of "work" and fails one of "flaky".
+	mux := asynq.NewServeMux()
+	mux.HandleFunc("ok", func(context.Context, *asynq.Task) error { return nil })
+	mux.HandleFunc("fail", func(context.Context, *asynq.Task) error { return errors.New("boom") })
+	srv := asynq.NewServer(asynq.RedisClientOpt{Addr: addr}, asynq.Config{
+		Concurrency:     2,
+		Queues:          map[string]int{"work": 1, "flaky": 1},
+		RetryDelayFunc:  func(int, error, *asynq.Task) time.Duration { return time.Hour },
+		LogLevel:        asynq.FatalLevel,
+		ShutdownTimeout: time.Second,
+	})
+	if err := srv.Start(mux); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Shutdown)
+	enqueue(t, client, 1, "ok", asynq.Queue("work"))
+	enqueue(t, client, 1, "fail", asynq.Queue("flaky"), asynq.MaxRetry(3))
+	eventually(t, "a processed and a failed task", func() bool {
+		qs, err := c.Queues(t.Context())
+		if err != nil || len(qs) != 4 {
+			return false
+		}
+		by := map[string]conn.Queue{}
+		for _, q := range qs {
+			by[q.Name] = q
+		}
+		return by["work"].ProcessedToday == 1 && by["flaky"].FailedToday == 1 && by["flaky"].Retry == 1
+	})
+
+	qs, err := c.Queues(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, q := range qs {
+		names = append(names, q.Name)
+	}
+	if diff := cmp.Diff([]string{"default", "flaky", "low", "work"}, names); diff != "" {
+		t.Errorf("queue names (-want +got):\n%s", diff)
+	}
+	def := qs[0]
+	if def.Pending != 3 || def.Size != 3 || def.Paused || def.MemoryUsage <= 0 || def.Latency <= 0 {
+		t.Errorf("default = %+v", def)
+	}
+	if low := qs[2]; low.Scheduled != 1 || low.Size != 1 {
+		t.Errorf("low = %+v", low)
+	}
+
+	hist, err := c.History(t.Context(), "", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	today := hist[len(hist)-1]
+	if len(hist) != 7 || today.Processed != 2 || today.Failed != 1 || !today.Date.Equal(time.Now().UTC().Truncate(24*time.Hour)) {
+		t.Errorf("history = %+v", hist)
+	}
+	one, err := c.History(t.Context(), "flaky", 7)
+	if err != nil || one[6].Processed != 1 || one[6].Failed != 1 {
+		t.Errorf("flaky history = %+v, %v", one, err)
+	}
+	if _, err := c.History(t.Context(), "nope", 7); !errors.Is(err, conn.ErrQueueNotFound) {
+		t.Errorf("unknown queue history: %v", err)
+	}
+
+	// Pause and resume show at once: the action drops the cache.
+	paused := func() bool {
+		qs, err := c.Queues(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return qs[0].Paused
+	}
+	if err := c.PauseQueue(t.Context(), "default"); err != nil {
+		t.Fatal(err)
+	}
+	if !paused() {
+		t.Error("default not paused right after PauseQueue")
+	}
+	if err := c.PauseQueue(t.Context(), "default"); err == nil {
+		t.Error("pausing a paused queue succeeded")
+	}
+	if err := c.UnpauseQueue(t.Context(), "default"); err != nil {
+		t.Fatal(err)
+	}
+	if paused() {
+		t.Error("default still paused after UnpauseQueue")
+	}
+	if err := c.PauseQueue(t.Context(), "nope"); !errors.Is(err, conn.ErrQueueNotFound) {
+		t.Errorf("pause unknown: %v", err)
+	}
+
+	// Delete refuses a queue with tasks, then deletes an emptied one.
+	if err := c.DeleteQueue(t.Context(), "default"); !errors.Is(err, conn.ErrQueueNotEmpty) {
+		t.Errorf("delete non-empty: %v", err)
+	}
+	if err := c.DeleteQueue(t.Context(), "nope"); !errors.Is(err, conn.ErrQueueNotFound) {
+		t.Errorf("delete unknown: %v", err)
+	}
+	if _, err := c.Inspector().DeleteAllScheduledTasks("low"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteQueue(t.Context(), "low"); err != nil {
+		t.Fatal(err)
+	}
+	qs, err = c.Queues(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range qs {
+		if q.Name == "low" {
+			t.Error("low still listed after DeleteQueue")
+		}
+	}
+}

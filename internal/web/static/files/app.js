@@ -1,13 +1,15 @@
 // asynqui client script: htmx configuration, theme and auto-refresh
-// controls, visibility-gated polling, local times, copy buttons and the
-// sidebar filter. Loaded with defer after htmx, so htmx exists and the
-// config below is applied before htmx initialises on DOMContentLoaded.
+// controls, visibility-gated polling, local times, copy buttons, the
+// client-side filters, row selection, confirmation dialogs and toasts.
+// Loaded with defer after htmx, so htmx exists and the config below is
+// applied before htmx initialises on DOMContentLoaded.
 // Everything here is progressive enhancement: pages read fine without it.
 (function () {
 	"use strict";
 
 	var root = document.documentElement;
 	var cookiePath = root.getAttribute("data-base") || "/";
+	root.classList.add("js"); // hides the no-JS fallbacks ([data-nojs])
 
 	// htmx must never eval, run swapped-in scripts or inject an inline
 	// <style> (the CSP forbids all three).
@@ -209,8 +211,178 @@
 	document.addEventListener("input", function (e) {
 		if (e.target.matches("input[data-filter]")) {
 			applyFilter(e.target);
+			updateSelections();
 		}
 	});
+
+	// ---- row selection ----
+	// Row checkboxes belong to a form by their form attribute and sit in a
+	// <tr data-state>. A [data-toolbar=form-id] bar shows "N selected"
+	// ([data-sel-label], count in [data-sel-count]) and enables its
+	// buttons: data-enable="any" when a row is selected, "state" when a
+	// selected row's data-state equals the button's data-state. Buttons
+	// rendered disabled for the viewer's role have no data-enable and stay
+	// disabled. The header [data-select-all=form-id] checkbox selects the
+	// visible rows.
+	//
+	// The checkboxes carry hx-preserve, so htmx keeps them (and their
+	// checked state) when a poll or a sort replaces the table; this only
+	// recomputes the toolbar afterwards.
+	function rowBoxes(formId) {
+		var out = [];
+		var boxes = document.querySelectorAll("input[type=checkbox][name]");
+		for (var i = 0; i < boxes.length; i++) {
+			if (boxes[i].getAttribute("form") === formId) {
+				out.push(boxes[i]);
+			}
+		}
+		return out;
+	}
+
+	function visible(el) {
+		var tr = el.closest("tr");
+		return !tr || !tr.hidden;
+	}
+
+	function updateSelection(bar) {
+		var formId = bar.getAttribute("data-toolbar");
+		var boxes = rowBoxes(formId);
+		var n = 0, states = {}, shown = 0, shownChecked = 0;
+		for (var i = 0; i < boxes.length; i++) {
+			var b = boxes[i], tr = b.closest("tr");
+			if (visible(b)) {
+				shown++;
+			}
+			if (!b.checked) {
+				continue;
+			}
+			n++;
+			if (visible(b)) {
+				shownChecked++;
+			}
+			if (tr && tr.getAttribute("data-state")) {
+				states[tr.getAttribute("data-state")] = true;
+			}
+		}
+		var label = bar.querySelector("[data-sel-label]");
+		if (label) {
+			label.hidden = n === 0;
+			label.querySelector("[data-sel-count]").textContent = String(n);
+		}
+		var buttons = bar.querySelectorAll("button[data-enable]");
+		for (var j = 0; j < buttons.length; j++) {
+			var btn = buttons[j], rule = btn.getAttribute("data-enable");
+			btn.disabled = n === 0 || (rule === "state" && !states[btn.getAttribute("data-state")]);
+		}
+		var all = document.querySelectorAll("input[data-select-all]");
+		for (var k = 0; k < all.length; k++) {
+			if (all[k].getAttribute("data-select-all") === formId) {
+				all[k].checked = shown > 0 && shownChecked === shown;
+				all[k].indeterminate = shownChecked > 0 && shownChecked < shown;
+			}
+		}
+	}
+
+	function updateSelections() {
+		var bars = document.querySelectorAll("[data-toolbar]");
+		for (var i = 0; i < bars.length; i++) {
+			updateSelection(bars[i]);
+		}
+	}
+
+	document.addEventListener("change", function (e) {
+		var t = e.target;
+		if (t.matches("input[data-select-all]")) {
+			var boxes = rowBoxes(t.getAttribute("data-select-all"));
+			for (var i = 0; i < boxes.length; i++) {
+				if (visible(boxes[i])) {
+					boxes[i].checked = t.checked;
+				}
+			}
+		}
+		if (t.matches("input[type=checkbox]")) {
+			updateSelections();
+		}
+	});
+
+	// ---- confirmation dialogs ----
+	// A button with data-confirm="dialog-id" opens that <dialog> instead of
+	// submitting (without JS it submits, and the server asks on a page).
+	// [data-sel-names] in the dialog lists the selected rows' values.
+	// [data-dialog-close] closes it; so does its confirm button once htmx
+	// has sent the request.
+	document.addEventListener("click", function (e) {
+		var opener = e.target.closest("button[data-confirm]");
+		if (opener) {
+			var dlg = document.getElementById(opener.getAttribute("data-confirm"));
+			if (!dlg || typeof dlg.showModal !== "function") {
+				return; // no <dialog> support: post, and confirm on a page
+			}
+			e.preventDefault();
+			var list = dlg.querySelector("[data-sel-names]");
+			if (list) {
+				list.textContent = "";
+				var boxes = rowBoxes(opener.getAttribute("form"));
+				for (var i = 0; i < boxes.length; i++) {
+					if (boxes[i].checked) {
+						var li = document.createElement("li");
+						li.textContent = boxes[i].value;
+						list.appendChild(li);
+					}
+				}
+			}
+			dlg.showModal();
+			return;
+		}
+		var closer = e.target.closest("dialog [data-dialog-close]");
+		if (closer) {
+			closer.closest("dialog").close();
+			return;
+		}
+		var confirm = e.target.closest("dialog button[type=submit]");
+		if (confirm) {
+			var d = confirm.closest("dialog");
+			setTimeout(function () { d.close(); }, 0);
+		}
+	});
+
+	// ---- toasts ----
+	// Toasts arrive in #toasts (out of band, or with the page). Each goes
+	// away after a while or on its close button. A failed action request
+	// with no answer to show gets the #toast-request-failed template.
+	var toastMs = 8000;
+
+	function armToasts() {
+		var toasts = document.querySelectorAll("#toasts .toast:not([data-armed])");
+		for (var i = 0; i < toasts.length; i++) {
+			(function (t) {
+				t.setAttribute("data-armed", "");
+				setTimeout(function () { t.remove(); }, toastMs);
+			})(toasts[i]);
+		}
+	}
+
+	document.addEventListener("click", function (e) {
+		var b = e.target.closest("[data-toast-close]");
+		if (b) {
+			b.closest(".toast").remove();
+		}
+	});
+
+	function requestFailed(e) {
+		var cfg = e.detail && e.detail.requestConfig;
+		if (!cfg || cfg.verb === "get") {
+			return; // a failed poll is retried by the next one
+		}
+		var tpl = document.getElementById("toast-request-failed");
+		var region = document.getElementById("toasts");
+		if (tpl && region) {
+			region.appendChild(tpl.content.cloneNode(true));
+			armToasts();
+		}
+	}
+	document.addEventListener("htmx:responseError", requestFailed);
+	document.addEventListener("htmx:sendError", requestFailed);
 
 	// ---- menus ----
 	// <details data-menu> closes on an outside click or Escape. Escape
@@ -253,6 +425,8 @@
 			for (var i = 0; i < filters.length; i++) {
 				applyFilter(filters[i]);
 			}
+			updateSelections();
+			armToasts();
 		}, 0);
 	}
 	document.addEventListener("htmx:afterSettle", afterSwap);
@@ -260,5 +434,7 @@
 
 	renderTimes(document);
 	revealCopy(document);
+	updateSelections();
+	armToasts();
 	schedule();
 })();

@@ -154,6 +154,7 @@ type Conn struct {
 	pinger pinger         // redis, or a fake in tests
 	queues queueInspector // inspector, or a fake in tests
 	cache  *cache
+	now    func() time.Time // the clock; dates of History without queues
 
 	closed atomic.Bool // set by Registry.Close
 
@@ -221,6 +222,7 @@ func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 		pinger:    redisPinger{rc},
 		queues:    inspector,
 		cache:     newCache(),
+		now:       time.Now,
 	}, nil
 }
 

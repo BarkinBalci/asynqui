@@ -286,15 +286,19 @@ func TestOIDCSuccess(t *testing.T) {
 	}
 }
 
-// TestOIDCStartEntryPoints: the UI links to GET /login/sso, and POST /login
-// still starts the flow for clients that post. Both store next only after
-// SafeNext and redirect to the IdP with PKCE.
+// TestOIDCStartEntryPoints: the flow starts only at GET /login/sso, which
+// stores next only after SafeNext and redirects to the IdP with PKCE.
+// POST /login is the basic form and is 404 for oidc.
 func TestOIDCStartEntryPoints(t *testing.T) {
 	idp := newFakeIDP(t)
 	h := app(mustNew(t, idp.options("")))
+	post := do(t, h, req{method: http.MethodPost, target: "/login", form: url.Values{"next": {"/"}}})
+	if post.status != http.StatusNotFound || post.cookies[flowCookie] != nil {
+		t.Errorf("oidc POST /login = %d, flow cookie %v; want 404 and none", post.status, post.cookies[flowCookie])
+	}
 	for name, rq := range map[string]req{
-		"GET /login/sso": {target: "/login/sso?next=" + url.QueryEscape("https://evil.example/")},
-		"POST /login":    {method: http.MethodPost, target: "/login", form: url.Values{"next": {"//evil.example/"}}},
+		"GET /login/sso":    {target: "/login/sso?next=" + url.QueryEscape("https://evil.example/")},
+		"GET /login/sso //": {target: "/login/sso?next=" + url.QueryEscape("//evil.example/")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			res := do(t, h, rq)

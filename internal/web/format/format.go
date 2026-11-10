@@ -4,6 +4,7 @@
 package format
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,74 @@ func Duration(d time.Duration) string {
 		return strconv.FormatInt(mins, 10) + "m " + pad2(secs) + "s"
 	}
 	return strconv.FormatInt(secs, 10) + "s"
+}
+
+// Latency formats a queue's latency: tenths of a second under a minute
+// ("0.4s", "12.6s", "48.0s"), truncated, and Duration from a minute on
+// ("1m 05s"). Negative latencies format as "0.0s".
+func Latency(d time.Duration) string {
+	if d < time.Minute {
+		tenths := max(int64(d/(100*time.Millisecond)), 0)
+		return strconv.FormatInt(tenths/10, 10) + "." + strconv.FormatInt(tenths%10, 10) + "s"
+	}
+	return Duration(d)
+}
+
+// Bytes formats a size in binary units with one decimal: "512 B",
+// "3.1 KB", "41.8 MB", "2.0 GB". Negative sizes format as "0 B".
+func Bytes(n int64) string {
+	if n < 1024 {
+		return strconv.FormatInt(max(n, 0), 10) + " B"
+	}
+	units := []string{"KB", "MB", "GB", "TB", "PB", "EB"}
+	v := float64(n) / 1024
+	i := 0
+	for v >= 1023.95 && i < len(units)-1 {
+		v /= 1024
+		i++
+	}
+	return strconv.FormatFloat(v, 'f', 1, 64) + " " + units[i]
+}
+
+// Compact formats a count for chart axes: as Number under 1,000, then with
+// k, M or B and at most one decimal ("1.5k", "70k", "2.5M").
+func Compact(n int64) string {
+	if n > -1000 && n < 1000 {
+		return Number(n)
+	}
+	v := float64(n)
+	for _, u := range []struct {
+		div    float64
+		suffix string
+	}{{1e9, "B"}, {1e6, "M"}, {1e3, "k"}} {
+		if math.Abs(v) >= u.div*0.99995 || u.suffix == "k" {
+			s := strconv.FormatFloat(v/u.div, 'f', 1, 64)
+			return strings.TrimSuffix(s, ".0") + u.suffix
+		}
+	}
+	return Number(n) // not reached
+}
+
+// Percent formats part/whole as a percentage with at most two decimals
+// ("0.23%", "12.5%", "100%"). A zero whole is "0%".
+func Percent(part, whole int64) string {
+	if whole == 0 {
+		return "0%"
+	}
+	s := strconv.FormatFloat(float64(part)/float64(whole)*100, 'f', 2, 64)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimSuffix(s, ".")
+	return s + "%"
+}
+
+// Day formats a UTC calendar day for chart labels ("Nov 8").
+func Day(t time.Time) string {
+	return t.UTC().Format("Jan 2")
+}
+
+// WeekdayDay formats a UTC calendar day with its weekday ("Sun, Nov 8").
+func WeekdayDay(t time.Time) string {
+	return t.UTC().Format("Mon, Jan 2")
 }
 
 func pad2(n int64) string {

@@ -108,6 +108,108 @@ func TestShortID(t *testing.T) {
 	}
 }
 
+func TestLatency(t *testing.T) {
+	tests := []struct {
+		in   time.Duration
+		want string
+	}{
+		{-time.Second, "0.0s"},
+		{0, "0.0s"},
+		{99 * time.Millisecond, "0.0s"},
+		{400 * time.Millisecond, "0.4s"},
+		{12*time.Second + 690*time.Millisecond, "12.6s"},
+		{48 * time.Second, "48.0s"},
+		{59*time.Second + 999*time.Millisecond, "59.9s"},
+		{time.Minute, "1m 00s"},
+		{65 * time.Second, "1m 05s"},
+		{3 * time.Hour, "3h 00m"},
+	}
+	for _, tt := range tests {
+		if got := Latency(tt.in); got != tt.want {
+			t.Errorf("Latency(%v) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestBytes(t *testing.T) {
+	tests := []struct {
+		in   int64
+		want string
+	}{
+		{-1, "0 B"},
+		{0, "0 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KB"},
+		{3174, "3.1 KB"},
+		{43_830_000, "41.8 MB"},
+		{1024*1024 - 1, "1.0 MB"},
+		{2 << 30, "2.0 GB"},
+		{5 << 40, "5.0 TB"},
+		{math.MaxInt64, "8.0 EB"},
+	}
+	for _, tt := range tests {
+		if got := Bytes(tt.in); got != tt.want {
+			t.Errorf("Bytes(%d) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestCompact(t *testing.T) {
+	tests := []struct {
+		in   int64
+		want string
+	}{
+		{0, "0"},
+		{250, "250"},
+		{999, "999"},
+		{1000, "1k"},
+		{1500, "1.5k"},
+		{2500, "2.5k"},
+		{70000, "70k"},
+		{250000, "250k"},
+		{999_999, "1M"},
+		{1_200_000, "1.2M"},
+		{3_000_000_000, "3B"},
+		{-1500, "-1.5k"},
+	}
+	for _, tt := range tests {
+		if got := Compact(tt.in); got != tt.want {
+			t.Errorf("Compact(%d) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestPercent(t *testing.T) {
+	tests := []struct {
+		part, whole int64
+		want        string
+	}{
+		{0, 0, "0%"},
+		{5, 0, "0%"},
+		{0, 100, "0%"},
+		{160, 70000, "0.23%"},
+		{1, 8, "12.5%"},
+		{1, 3, "33.33%"},
+		{7, 7, "100%"},
+	}
+	for _, tt := range tests {
+		if got := Percent(tt.part, tt.whole); got != tt.want {
+			t.Errorf("Percent(%d, %d) = %q, want %q", tt.part, tt.whole, got, tt.want)
+		}
+	}
+}
+
+func TestDay(t *testing.T) {
+	ist := time.FixedZone("IST", 5*3600+1800)
+	d := time.Date(2026, 11, 8, 3, 0, 0, 0, ist) // Nov 7 in UTC
+	if got := Day(d); got != "Nov 7" {
+		t.Errorf("Day = %q", got)
+	}
+	if got := WeekdayDay(time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)); got != "Sun, Nov 8" {
+		t.Errorf("WeekdayDay = %q", got)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"0.1.0", "v0.1.0"},

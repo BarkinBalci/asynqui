@@ -99,6 +99,15 @@
 
 	--chart-processed:#3B5BDB;
 	--chart-failed:#EA580C;
+	--chart-processed-text:#3B5BDB;
+	--chart-failed-text:#C2410C;
+	--chart-grid:#EEF0F3;
+	--chart-axis:#D5DAE1;
+	--chart-band:rgba(59,91,219,.06);
+	--chart-area-opacity:.08;
+	--th-bg:#FAFBFC;
+	--scrim:rgba(15,23,42,.35);
+	--dialog-shadow:0 12px 32px rgba(15,23,42,.18);
 
 	--wordmark-accent:#3B5BDB;
 	--logo-back:#C7D2FE;
@@ -177,6 +186,15 @@
 	--code-btn-fg:#CBD5E1;
 	--chart-processed:#6B83EE;
 	--chart-failed:#E8651A;
+	--chart-processed-text:#8DA2FB;
+	--chart-failed-text:#F08A4B;
+	--chart-grid:#1F2937;
+	--chart-axis:#374151;
+	--chart-band:rgba(107,131,238,.10);
+	--chart-area-opacity:.14;
+	--th-bg:#0F172A;
+	--scrim:rgba(0,0,0,.6);
+	--dialog-shadow:0 12px 32px rgba(0,0,0,.5);
 	--wordmark-accent:#8DA2FB;
 	--logo-back:#334155;
 	--logo-mid:#4F63C9;
@@ -256,6 +274,15 @@
 	--code-btn-fg:#CBD5E1;
 	--chart-processed:#6B83EE;
 	--chart-failed:#E8651A;
+	--chart-processed-text:#8DA2FB;
+	--chart-failed-text:#F08A4B;
+	--chart-grid:#1F2937;
+	--chart-axis:#374151;
+	--chart-band:rgba(107,131,238,.10);
+	--chart-area-opacity:.14;
+	--th-bg:#0F172A;
+	--scrim:rgba(0,0,0,.6);
+	--dialog-shadow:0 12px 32px rgba(0,0,0,.5);
 	--wordmark-accent:#8DA2FB;
 	--logo-back:#334155;
 	--logo-mid:#4F63C9;
@@ -449,3 +476,98 @@ summary.account-btn:hover{background:var(--control-hover)}
 .login .btn{width:100%;height:var(--control-h);border-radius:var(--radius-sm)}
 .alert{padding:6px 10px;border:1px solid var(--error-border);border-radius:var(--radius-sm);background:var(--error-bg);color:var(--alert-fg);font-size:12px}
 .login-version{font-size:12px;color:var(--muted)}
+
+/* ---------- connection page ---------- */
+.head-title{display:flex;flex-direction:column;gap:6px;min-width:0}
+.head-title .mono{overflow-wrap:anywhere}
+.cardhead{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border)}
+.page-error{border-top:0}
+.checking{padding:14px 20px;color:var(--muted)}
+html.js [data-nojs]{display:none}
+
+/* selection toolbar */
+.tbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.tsearch{display:block;max-width:100%}
+.tsearch input{width:240px;max-width:100%;height:32px;padding:0 10px;border:1px solid var(--control-border);border-radius:var(--radius);background:var(--field-bg);color:var(--text);font-size:13px}
+.tacts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-left:auto}
+.selc{margin-right:4px;font-size:13px;color:var(--muted)}
+
+/* data tables */
+.tbl-scroll{overflow-x:auto}
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{padding:10px 16px;background:var(--th-bg);border-bottom:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600;text-align:left;white-space:nowrap}
+.tbl td{padding:11px 16px;border-bottom:1px solid var(--divider);white-space:nowrap;vertical-align:middle}
+.tbl tbody tr:last-child td{border-bottom:0}
+.tbl tbody tr:has(.cb:checked){background:var(--selected)}
+.tbl .num{text-align:right;font-variant-numeric:tabular-nums}
+.tbl .strong{font-weight:600}
+.tbl tfoot td,.tbl tfoot th{padding:11px 16px;border-top:1px solid var(--border);border-bottom:0;background:var(--th-bg);color:var(--text);font-size:13px;font-weight:600}
+.tbl .empty{white-space:normal}
+.cb-col{width:36px}
+.tbl th.cb-col,.tbl td.cb-col{padding-right:0}
+.cb{width:16px;height:16px;margin:0;vertical-align:middle;accent-color:var(--accent);cursor:pointer}
+.sort{display:inline-flex;align-items:center;gap:4px;color:inherit}
+.sort:hover{color:var(--text);text-decoration:none}
+.sort-icon{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;opacity:.45}
+.sort-icon.sort-on{stroke:var(--accent);stroke-width:2;opacity:1}
+.row-link{font-weight:600}
+.c-retry{color:var(--orange-fg)}
+.c-archived{color:var(--danger-fg)}
+.c-failed{color:var(--danger-text)}
+
+/* segmented links (range) and selects */
+.seg a{display:inline-flex;align-items:center;height:34px;padding:0 12px;border-right:1px solid var(--control-border);background:var(--surface);color:var(--text-2);font-size:13px;font-weight:500}
+.seg a:last-child{border-right:0}
+.seg a:hover{background:var(--control-hover);color:var(--text-2);text-decoration:none}
+.seg a.on{background:var(--seg-on-bg);color:var(--seg-on-fg);font-weight:600}
+.seg a:focus-visible{outline-offset:-2px}
+.select{height:36px;padding:0 10px;border:1px solid var(--control-border);border-radius:var(--radius);background:var(--field-bg);color:var(--text);font-size:13px}
+
+/* throughput chart */
+.tp-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.tp-picker{display:inline-flex;align-items:center;gap:8px;margin:0}
+.tp-body{padding:12px 20px 16px}
+.tp-body .page-error{padding:0}
+.chart-legend{display:flex;flex-wrap:wrap;align-items:center;gap:16px;min-height:24px;margin:0 0 8px 62px;font-size:12px;color:var(--muted)}
+.lg{display:inline-flex;align-items:center;gap:6px}
+.lg .sw{width:16px;height:2px;border-radius:1px}
+.lg-processed .sw{background:var(--chart-processed)}
+.lg-failed .sw{background:var(--chart-failed)}
+.chart-grid{display:grid;grid-template-columns:52px minmax(0,1fr) 44px;column-gap:10px}
+.yaxis{display:flex;flex-direction:column-reverse;justify-content:space-between;height:240px;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.yaxis span{line-height:0}
+.yaxis-processed{text-align:right;color:var(--chart-processed-text)}
+.yaxis-failed{color:var(--chart-failed-text)}
+.plot{position:relative;min-width:0;height:240px}
+.chart-svg{display:block;width:100%;height:100%;overflow:visible}
+.chart-svg .grid{stroke:var(--chart-grid);stroke-width:1;vector-effect:non-scaling-stroke}
+.chart-svg .baseline{stroke:var(--chart-axis);stroke-width:1;vector-effect:non-scaling-stroke}
+.area-processed{fill:var(--chart-processed);fill-opacity:var(--chart-area-opacity);stroke:none}
+.line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.line-processed{stroke:var(--chart-processed)}
+.line-failed{stroke:var(--chart-failed)}
+.band{fill:transparent}
+.band:hover{fill:var(--chart-band)}
+.xaxis{display:flex;height:22px}
+.xcell{position:relative;flex:1;min-width:0}
+.xl{position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--muted);white-space:nowrap}
+.xl-last{transform:translateX(-80%)}
+
+/* confirmation dialog */
+.dialog{width:min(400px,calc(100% - 32px));padding:18px 20px 20px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);color:var(--text);box-shadow:var(--dialog-shadow)}
+.dialog[open]{display:flex;flex-direction:column;gap:14px}
+.dialog::backdrop{background:var(--scrim)}
+.dlghead{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dlgtitle{font-size:16px;font-weight:600}
+.dlg-list{display:flex;flex-direction:column;gap:4px;max-height:200px;margin:0;padding:0 0 0 18px;overflow:auto;overflow-wrap:anywhere}
+.dlgacts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin:6px 0 0}
+.confirm-card{display:flex;flex-direction:column;gap:16px;max-width:480px;padding:18px 20px}
+.iconbtn{display:inline-flex;flex:none;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:0;border-radius:var(--radius-sm);background:none;color:var(--muted);cursor:pointer}
+.iconbtn:hover{background:var(--hover);color:var(--text)}
+
+/* toasts */
+.toasts{position:fixed;right:16px;bottom:16px;z-index:50;display:flex;flex-direction:column;gap:8px;width:min(420px,calc(100vw - 32px))}
+.toasts:empty{display:none}
+.toast{display:flex;align-items:flex-start;gap:10px;padding:10px 10px 10px 14px;border:1px solid var(--error-border);border-radius:var(--radius);background:var(--error-bg);color:var(--alert-fg);box-shadow:var(--shadow);font-size:13px}
+.toast-body{display:flex;flex:1;flex-direction:column;gap:4px;min-width:0;padding-top:5px;overflow-wrap:anywhere}
+.toast .iconbtn{color:inherit}

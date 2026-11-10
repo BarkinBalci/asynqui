@@ -169,6 +169,10 @@ func TestOIDCLoginPage(t *testing.T) {
 	if start.Header().Get("Cache-Control") != "no-store" {
 		t.Error("SSO start is cacheable")
 	}
+	// POST /login is the basic form only.
+	if rec := do(t, h, request{method: http.MethodPost, path: "/asynq/login", form: "next=%2Fasynq%2F"}); rec.Code != http.StatusNotFound {
+		t.Errorf("oidc POST /login = %d, want 404", rec.Code)
+	}
 }
 
 func TestPrefs(t *testing.T) {
@@ -341,7 +345,8 @@ func TestNoInlineStyleOrScript(t *testing.T) {
 	for _, p := range []string{
 		"/", "/c/main", "/c/main/queues/default", "/c/main/queues/default/tasks/c3e81b90-04aa-4f1e-9d27-6b52e0c8a113",
 		"/c/main/servers", "/c/main/servers/host:1234:abcdef", "/c/main/schedulers", "/c/main/schedulers/abc",
-		"/c/main/info", "/c/main/throughput", "/c/nope", "/no/such/page",
+		"/c/main/info", "/c/nope", "/no/such/page",
+		"/c/main?sort=name&dir=asc&range=90d&queue=low", "/c/analytics", "/c/local",
 	} {
 		cases = append(cases,
 			page{testOpts{}, request{path: p}},
@@ -350,6 +355,10 @@ func TestNoInlineStyleOrScript(t *testing.T) {
 	}
 	cases = append(cases,
 		page{testOpts{}, request{path: "/", htmx: true}},
+		page{testOpts{}, request{path: "/c/main", htmx: true}},
+		page{testOpts{authz: proxyAuthz}, request{method: http.MethodPost, path: "/c/main/queues/pause", htmx: true, form: "queue=default&queue=gone"}},
+		page{testOpts{authz: proxyAuthz}, request{method: http.MethodPost, path: "/c/main/queues/delete", form: "queue=low"}},
+		page{testOpts{authz: proxyAuthz}, request{method: http.MethodPost, path: "/c/main/queues/resume", form: "queue=gone"}},
 		page{testOpts{}, request{method: http.MethodPost, path: "/c/analytics/recheck", htmx: true}},
 		page{testOpts{provider: config.ProviderBasic}, request{path: "/login"}},
 		page{testOpts{provider: config.ProviderBasic}, request{path: "/no/such/page"}},

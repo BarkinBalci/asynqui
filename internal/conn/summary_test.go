@@ -22,11 +22,45 @@ type fakeQueues struct {
 	panics  map[string]bool
 	// delay is how long each GetQueueInfo takes.
 	delay time.Duration
+	// history is each queue's DailyStats, newest first.
+	history    map[string][]*asynq.DailyStats
+	historyErr map[string]error
+	// actErr fails PauseQueue, UnpauseQueue and DeleteQueue of a queue.
+	actErr map[string]error
 
 	mu       sync.Mutex
 	calls    int
 	inFlight int
 	maxIn    int
+	// acted records the actions run, as "pause q", "unpause q", "delete q".
+	acted []string
+}
+
+func (f *fakeQueues) History(q string, n int) ([]*asynq.DailyStats, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if err := f.historyErr[q]; err != nil {
+		return nil, err
+	}
+	h := f.history[q]
+	return h[:min(n, len(h))], nil
+}
+
+func (f *fakeQueues) act(verb, q string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.acted = append(f.acted, verb+" "+q)
+	return f.actErr[q]
+}
+
+func (f *fakeQueues) PauseQueue(q string) error   { return f.act("pause", q) }
+func (f *fakeQueues) UnpauseQueue(q string) error { return f.act("unpause", q) }
+func (f *fakeQueues) DeleteQueue(q string, force bool) error {
+	if force {
+		return errors.New("force is never used")
+	}
+	return f.act("delete", q)
 }
 
 func (f *fakeQueues) Queues() ([]string, error) {
@@ -134,7 +168,7 @@ func TestSummary(t *testing.T) {
 func TestSummaryConcurrency(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		fake := &fakeQueues{infos: map[string]*asynq.QueueInfo{}, delay: time.Second}
-		for i := range 3*summaryConcurrency + 1 {
+		for i := range 3*queueConcurrency + 1 {
 			q := fmt.Sprintf("q%02d", i)
 			fake.names = append(fake.names, q)
 			fake.infos[q] = &asynq.QueueInfo{Queue: q, Pending: 1}
@@ -150,8 +184,8 @@ func TestSummaryConcurrency(t *testing.T) {
 		if got.Queues != len(fake.names) || got.Pending != len(fake.names) {
 			t.Errorf("Summary = %+v, want %d queues and pending", got, len(fake.names))
 		}
-		if fake.maxIn != summaryConcurrency {
-			t.Errorf("%d GetQueueInfo calls in flight at most, want %d", fake.maxIn, summaryConcurrency)
+		if fake.maxIn != queueConcurrency {
+			t.Errorf("%d GetQueueInfo calls in flight at most, want %d", fake.maxIn, queueConcurrency)
 		}
 		if took := time.Since(start); took != 4*time.Second {
 			t.Errorf("took %v, want 4 rounds of 1s", took)
@@ -162,7 +196,7 @@ func TestSummaryConcurrency(t *testing.T) {
 // A hung Redis makes every GetQueueInfo fail after its socket timeouts. The
 // slots stay taken until the calls return, and after the first failure no
 // more queues are read, so the Summary fails after one round, not one per
-// summaryConcurrency queues.
+// queueConcurrency queues.
 func TestSummaryHungRedis(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		fake := &fakeQueues{errs: map[string]error{}, delay: 12 * time.Second}
@@ -182,8 +216,8 @@ func TestSummaryHungRedis(t *testing.T) {
 		if took := time.Since(start); took != 12*time.Second {
 			t.Errorf("Summary failed after %v, want one round of 12s", took)
 		}
-		if fake.maxIn != summaryConcurrency || fake.calls != summaryConcurrency {
-			t.Errorf("%d calls, at most %d in flight; want %d and %d", fake.calls, fake.maxIn, summaryConcurrency, summaryConcurrency)
+		if fake.maxIn != queueConcurrency || fake.calls != queueConcurrency {
+			t.Errorf("%d calls, at most %d in flight; want %d and %d", fake.calls, fake.maxIn, queueConcurrency, queueConcurrency)
 		}
 	})
 }

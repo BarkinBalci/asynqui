@@ -18,10 +18,10 @@ const sweepInterval = 10 * time.Second
 // with the same name but different T are different keys.
 type cacheKey[T any] string
 
-// Cache keys.
+// Cache keys. History keys are built per queue and range: historyKey.
 const (
-	summaryKey cacheKey[Summary] = "summary"
-	infoKey    cacheKey[*Info]   = "info"
+	queuesKey cacheKey[[]Queue] = "queues"
+	infoKey   cacheKey[*Info]   = "info"
 )
 
 // cache holds one connection's recent snapshots, and coalesces concurrent
@@ -32,6 +32,10 @@ type cache struct {
 	flights map[any]*flight    // fetches in progress, by cacheKey[T]
 	// nextSweep is when expired entries are next removed.
 	nextSweep time.Time
+	// gen counts resets. A fetch stores its result only if no reset
+	// happened while it ran, so a value read before an action is never
+	// served after it.
+	gen uint64
 }
 
 type cacheEntry struct {
@@ -43,6 +47,7 @@ type cacheEntry struct {
 // it ran. val and err are written before done is closed.
 type flight struct {
 	done chan struct{}
+	gen  uint64 // cache.gen when the fetch started
 	val  any
 	err  error
 }
@@ -74,7 +79,7 @@ func cached[T any](ctx context.Context, c *cache, key cacheKey[T], ttl time.Dura
 	}
 	f, ok := c.flights[key]
 	if !ok {
-		f = &flight{done: make(chan struct{})}
+		f = &flight{done: make(chan struct{}), gen: c.gen}
 		c.flights[key] = f
 		fctx := context.WithoutCancel(ctx)
 		go c.fly(key, f, ttl, func() (any, error) { return fetch(fctx) })
@@ -100,8 +105,10 @@ func (c *cache) fly(key any, f *flight, ttl time.Duration, fetch func() (any, er
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.flights, key)
-	if f.err != nil {
+	if c.flights[key] == f {
+		delete(c.flights, key)
+	}
+	if f.err != nil || f.gen != c.gen {
 		return
 	}
 	now := time.Now()
@@ -116,6 +123,18 @@ func (c *cache) fly(key any, f *flight, ttl time.Duration, fetch func() (any, er
 		c.nextSweep = now.Add(sweepInterval)
 	}
 	c.entries[key] = cacheEntry{val: f.val, expires: now.Add(ttl)}
+}
+
+// reset drops every stored value and detaches the fetches in flight: they
+// still answer the callers waiting on them, but store nothing, and the
+// next caller starts a fresh fetch. Actions that change a connection call
+// it so the next read sees their effect.
+func (c *cache) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+	clear(c.entries)
+	clear(c.flights)
 }
 
 // recovered calls fn and returns a panic in it as an error, since nothing

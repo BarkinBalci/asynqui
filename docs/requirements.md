@@ -84,7 +84,7 @@ This document is the source of truth for behaviour. When this file and the canva
 - Header stripping and network isolation are the deployer's job: see [deployment.md](deployment.md).
 
 ### `oidc`
-- Authorization-code flow with **PKCE (S256)**. "Sign in with SSO" is a link to `GET /login/sso?next=…`, which sets the flow cookie and redirects to the IdP. The IdP returns to `GET /auth/callback`. It is a navigation, not a form post, because the CSP `form-action 'self'` (§7) also applies to a form's redirects; the state, nonce and PKCE verifier in the flow cookie are what protect the flow.
+- Authorization-code flow with **PKCE (S256)**. "Sign in with SSO" is a link to `GET /login/sso?next=…`, which sets the flow cookie and redirects to the IdP. The IdP returns to `GET /auth/callback`. It is a navigation, not a form post, because the CSP `form-action 'self'` (§7) also applies to a form's redirects; the state, nonce and PKCE verifier in the flow cookie are what protect the flow. `POST /login` is the basic form only and is 404 for `oidc`.
 - **Flow cookie:** state, nonce, PKCE verifier and `next` are kept in an encrypted cookie `asynqui_oidc`: 10 minute lifetime, `Path=<base>/auth/callback`, `HttpOnly`, `SameSite=Lax`, `Secure` per `cookie_secure`. It is deleted by a callback whose `state` matches; a forged callback leaves it, so it cannot cancel a login in progress.
 - **ID token:** verified with go-oidc's Verifier (issuer, audience = `client_id`, expiry, RS256 and other asymmetric algorithms only) and the nonce. `sub` must be non-empty; `azp` must equal `client_id` when present or when `aud` has several entries; `iat` may be at most 5 minutes in the future.
 - **Username:** the `username_claim` (default `email`). When it is `email`, `email_verified` must be `true` (the boolean, or the string `"true"` as Amazon Cognito sends it), otherwise login fails. Userinfo claims are used only when the userinfo `sub` is present and equals the ID token's.
@@ -190,7 +190,7 @@ authz:
 - **Code blocks:** dark block with a copy button pinned top-right, outside the scrolling area (`scrollbar-gutter: stable`).
 - **Fonts:** self-hosted and embedded. No requests to third-party domains.
 - **Tokens:** colours, spacing and type follow the canvas "Style guide" board. Dark mode swaps CSS custom properties.
-- **Errors:** an action that fails (e.g. a duplicate task) shows its error in a toast.
+- **Errors:** an action that fails shows its error in a toast, bottom right, which goes away after 8s or when dismissed. An action request that fails without an answer (network error, 403, 500) shows "Request failed".
 
 ### Localization and time
 - **English only** in v1. No i18n framework.
@@ -236,17 +236,25 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 
 ### 6.2 Connection → Queues `/c/{conn}`
 - **Header:** "Queues", the address (mono, muted) and a Healthy or Unreachable badge.
-- **Toolbar:** a "Filter queues" input (client-side, by name), a "N selected" label, and Pause, Resume and Delete (admin).
-  - Pause is enabled only if any selected queue is running.
-  - Resume is enabled only if any selected queue is paused.
-- **Table:** checkbox, then Queue (link), State (Running/Paused badge), Size, Pending, Active, Scheduled, Retry, Archived, Latency, Memory, Processed today, Failed today. Every column sorts, default Size desc. The `<tfoot>` Total row sums everything except Latency, which shows "—".
+- **Toolbar:** a "Filter queues" input (client-side, by name), a "N selected" label (only while rows are selected), and Pause, Resume and Delete.
+  - Pause and Resume need operator, Delete needs admin. A role that cannot use one gets it disabled with the native `title` "Requires operator" or "Requires admin".
+  - Pause is enabled only if any selected queue is running, and pauses only those; Resume likewise for paused queues. Delete is enabled when anything is selected.
+  - Delete asks first in a dialog listing the selected queues. Only empty queues can be deleted (asynq's `DeleteQueue` without force); a queue with tasks fails with "Queue {name} is not empty". There is no force delete.
+  - Without JS the buttons still post; Delete then answers with a confirmation page.
+  - Failures show one toast per queue ("Queue {name} not found", "Queue {name} is not empty", or "Could not pause {name}" with the error in mono). Success just refreshes the table. The selection is kept.
+- **Table:** checkbox, then Queue (link), State (Running/Paused badge), Size, Pending, Active, Scheduled, Retry, Archived, Latency, Memory, Processed today, Failed today.
+  - Every column sorts, server-side; default Size desc. A column sorts ascending first for Queue and State, descending for numbers; ties go by name. Sort state is `?sort=&dir=` in the URL.
+  - Latency shows tenths of a second under a minute ("12.6s"), and "—" for a paused queue, which sorts last. Over 30s it is red. Memory is asynq's sampled `QueueInfo.MemoryUsage`, in binary units ("41.8 MB").
+  - Retry and Archived are coloured when non-zero, Failed today red when non-zero.
+  - The `<tfoot>` Total row sums everything except Latency, which shows "—".
+  - Empty state: "No queues".
 - **Throughput card:**
-  - a range selector: 7d / 14d / 30d / 90d
-  - a Queue picker: "All queues" or one queue
-  - one overlaid line chart: Processed on the left axis, Failed on the right axis, each axis colour-matched to its line
-  - a hover tooltip showing date, Processed, Failed and Failure rate
-- **Chart rendering:** server-rendered SVG, with the data from `Inspector.History`.
-- **Unreachable connection:** the page shows "Connection failed" with the error in place of the table.
+  - a range selector: 7d / 14d / 30d / 90d, default 14d (`?range=`)
+  - a Queue picker: "All queues" or one queue (`?queue=`); an unknown queue falls back to all
+  - one overlaid line chart: Processed on the left axis, Failed on the right axis, each axis colour-matched to its line; x labels about a week apart, the last one "Today"
+  - a hover tooltip per day (the SVG's native `<title>`) with the date, Processed, Failed and Failure rate; the same data is in a visually hidden table
+- **Chart rendering:** server-rendered SVG, with the data from `Inspector.History` (summed over the queues for "All queues").
+- **Unreachable connection:** the page shows "Connection failed" with the error in place of the table, and no chart. A read that does not finish within 5s shows "Checking" until a poll has it.
 
 ### 6.3 Queue `/c/{conn}/queues/{queue}?state=…`
 - **Header:**

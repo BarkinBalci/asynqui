@@ -1,0 +1,334 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// QueuesPage is the Connection page.
+//
+// Polling: the hidden #queues-poll element polls the page URL (hx-swap
+// none). The answer (QueuesPoll) replaces the poll element itself (so its
+// URL follows sort and chart changes), the health badge, the table, the
+// chart card, the Updated time and the sidebar list out of band, by id.
+// The toolbar, the filter and the dialog are outside those regions, so
+// typing, focus and an open dialog survive; the row checkboxes carry
+// hx-preserve, so the selection survives too.
+templ QueuesPage(m Queues) {
+	@views.Page(m.Layout, lastCrumb(m.Layout)) {
+		@queuesPoll(m, false)
+		<div class="page-head">
+			<div class="head-title">
+				<h1 class="h1">
+					@components.SectionName(components.SectionQueues, false)
+				</h1>
+				<span class="mono muted">{ m.Addr }</span>
+			</div>
+			@connHealth(m.Health, false)
+		</div>
+		<section class="card tbl-card" aria-label="Queues">
+			<form id={ QueuesFormID } method="post" action={ templ.SafeURL(m.FormURL) }></form>
+			@components.SelectionToolbar(QueuesFormID, components.FilterInput(QueuesFilterID, QueuesRowsID, "Filter queues")) {
+				@components.ActionButton(m.Pause, components.IconPause("14")) {
+					Pause
+				}
+				@components.ActionButton(m.Resume, components.IconResume("14")) {
+					Resume
+				}
+				@components.ActionButton(m.Delete, components.IconDelete("14")) {
+					Delete
+				}
+			}
+			@queuesTable(m, false)
+			@components.ConfirmDialog(m.DeleteDialog, deleteTitle(), deleteLabel()) {
+				<ul class="dlg-list" data-sel-names></ul>
+			}
+		</section>
+		@throughputCard(m.Throughput, false)
+	}
+}
+
+// QueuesPoll answers a poll, a sort or a chart change: every region of
+// the page out of band.
+templ QueuesPoll(m Queues) {
+	@queuesPoll(m, true)
+	@connHealth(m.Health, true)
+	@queuesTable(m, true)
+	@throughputCard(m.Throughput, true)
+	@components.TimeID(components.UpdatedID, m.Layout.TopBar.UpdatedAt, true)
+	@components.SidebarConnList(m.Layout.Sidebar, true)
+}
+
+// QueuesActionResult answers an action posted with htmx: the poll answer,
+// plus a toast per failure.
+templ QueuesActionResult(m Queues, failures []ActionFailure) {
+	@QueuesPoll(m)
+	if len(failures) > 0 {
+		@components.ToastsOOB() {
+			@FailureToasts(failures)
+		}
+	}
+}
+
+// FailureToasts is a toast per failed action.
+templ FailureToasts(failures []ActionFailure) {
+	for _, f := range failures {
+		@components.Toast() {
+			@failureText(f)
+		}
+	}
+}
+
+templ failureText(f ActionFailure) {
+	switch f.Kind {
+		case FailureNotFound:
+			Queue { f.Queue } not found
+		case FailureNotEmpty:
+			Queue { f.Queue } is not empty
+		default:
+			switch f.Verb {
+				case VerbPause:
+					Could not pause { f.Queue }
+				case VerbResume:
+					Could not resume { f.Queue }
+				default:
+					Could not delete { f.Queue }
+			}
+			<span class="mono toast-detail">{ f.Detail }</span>
+	}
+}
+
+templ deleteTitle() {
+	Delete queues
+}
+
+templ deleteLabel() {
+	Delete
+}
+
+templ queuesPoll(m Queues, oob bool) {
+	<div id={ QueuesPollID } data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hidden { oobAttr(oob)... }></div>
+}
+
+templ connHealth(h components.Health, oob bool) {
+	<span id={ ConnHealthID } { oobAttr(oob)... }>
+		@components.HealthBadge(h)
+	</span>
+}
+
+templ queuesTable(m Queues, oob bool) {
+	<div id={ QueuesTableID } { oobAttr(oob)... }>
+		<input type="hidden" form={ QueuesFormID } name="next" value={ m.Next }/>
+		switch m.State {
+			case DataFailed:
+				@connError(m.Error)
+			case DataChecking:
+				<p class="checking">Checking</p>
+			default:
+				@components.Table("queues") {
+					<thead>
+						<tr>
+							@components.SelectAllHeader(QueuesSelectAll, QueuesFormID) {
+								Select all queues
+							}
+							@components.SortHeader(m.Heads[ColName]) {
+								Queue
+							}
+							@components.SortHeader(m.Heads[ColState]) {
+								State
+							}
+							@components.SortHeader(m.Heads[ColSize]) {
+								Size
+							}
+							@components.SortHeader(m.Heads[ColPending]) {
+								Pending
+							}
+							@components.SortHeader(m.Heads[ColActive]) {
+								Active
+							}
+							@components.SortHeader(m.Heads[ColScheduled]) {
+								Scheduled
+							}
+							@components.SortHeader(m.Heads[ColRetry]) {
+								Retry
+							}
+							@components.SortHeader(m.Heads[ColArchived]) {
+								Archived
+							}
+							@components.SortHeader(m.Heads[ColLatency]) {
+								Latency
+							}
+							@components.SortHeader(m.Heads[ColMemory]) {
+								Memory
+							}
+							@components.SortHeader(m.Heads[ColProcessed]) {
+								Processed today
+							}
+							@components.SortHeader(m.Heads[ColFailed]) {
+								Failed today
+							}
+						</tr>
+					</thead>
+					<tbody id={ QueuesRowsID }>
+						if len(m.Rows) == 0 {
+							@components.EmptyRow(int(NumQueueColumns) + 1) {
+								No queues
+							}
+						}
+						for _, r := range m.Rows {
+							<tr data-state={ queueState(r.Paused) } data-filter-text={ r.Name }>
+								@components.SelectCell(r.Select) {
+									Select queue { r.Name }
+								}
+								<td><a id={ r.LinkID } class="row-link" href={ templ.SafeURL(r.URL) }>{ r.Name }</a></td>
+								<td>
+									@components.QueueStateBadge(r.Paused)
+								</td>
+								<td class="num strong">{ format.Number(r.Size) }</td>
+								<td class="num">{ format.Number(r.Pending) }</td>
+								<td class="num">{ format.Number(r.Active) }</td>
+								<td class="num">{ format.Number(r.Scheduled) }</td>
+								<td class={ "num", templ.KV("c-retry", r.Retry > 0) }>{ format.Number(r.Retry) }</td>
+								<td class={ "num", templ.KV("c-archived", r.Archived > 0) }>{ format.Number(r.Archived) }</td>
+								if r.Paused {
+									<td class="num">—</td>
+								} else {
+									<td class={ "num", templ.KV("c-failed", r.LatencyHigh) }>{ format.Latency(r.Latency) }</td>
+								}
+								<td class="num">{ format.Bytes(r.Memory) }</td>
+								<td class="num">{ format.Number(r.Processed) }</td>
+								<td class={ "num", templ.KV("c-failed", r.Failed > 0) }>{ format.Number(r.Failed) }</td>
+							</tr>
+						}
+					</tbody>
+					if len(m.Rows) > 0 {
+						<tfoot>
+							<tr>
+								<td></td>
+								<th scope="row">Total</th>
+								<td></td>
+								<td class="num">{ format.Number(m.Total.Size) }</td>
+								<td class="num">{ format.Number(m.Total.Pending) }</td>
+								<td class="num">{ format.Number(m.Total.Active) }</td>
+								<td class="num">{ format.Number(m.Total.Scheduled) }</td>
+								<td class="num">{ format.Number(m.Total.Retry) }</td>
+								<td class="num">{ format.Number(m.Total.Archived) }</td>
+								<td class="num">—</td>
+								<td class="num">{ format.Bytes(m.Total.Memory) }</td>
+								<td class="num">{ format.Number(m.Total.Processed) }</td>
+								<td class={ "num", templ.KV("c-failed", m.Total.Failed > 0) }>{ format.Number(m.Total.Failed) }</td>
+							</tr>
+						</tfoot>
+					}
+				}
+		}
+	</div>
+}
+
+templ connError(msg string) {
+	<div class="conn-error page-error">
+		<div class="conn-error-title">
+			@components.IconAlert("16")
+			Connection failed
+		</div>
+		<div class="mono conn-error-text">{ msg }</div>
+	</div>
+}
+
+func queueState(paused bool) string {
+	if paused {
+		return "paused"
+	}
+	return "running"
+}
+
+templ throughputCard(t Throughput, oob bool) {
+	if !t.Show {
+		<section id={ ThroughputID } hidden { oobAttr(oob)... }></section>
+	} else {
+		<section id={ ThroughputID } class="card" aria-labelledby="tp-heading" { oobAttr(oob)... }>
+			<div class="cardhead">
+				<h2 class="card-title" id="tp-heading">Throughput</h2>
+				<div class="tp-controls">
+					<nav class="seg" aria-label="Range">
+						for _, r := range t.Ranges {
+							<a id={ r.ID } href={ templ.SafeURL(r.URL) } hx-get={ r.URL } hx-swap="none" hx-push-url="true" { rangeAttrs(r.On)... }>{ format.Number(int64(r.Days)) }d</a>
+						}
+					</nav>
+					<form id={ PickerFormID } class="tp-picker" method="get" action={ templ.SafeURL(t.FormURL) } hx-get={ t.FormURL } hx-trigger="change" hx-swap="none" hx-push-url="true">
+						for _, p := range t.Hidden {
+							<input type="hidden" name={ p.Name } value={ p.Value }/>
+						}
+						<label>
+							<span class="sr-only">Queue</span>
+							<select id={ PickerID } name="queue" class="select">
+								<option value="" selected?={ t.Queue == "" }>All queues</option>
+								for _, q := range t.Queues {
+									<option value={ q } selected?={ t.Queue == q }>{ q }</option>
+								}
+							</select>
+						</label>
+						<button id={ PickerApplyID } type="submit" class="btn sm" data-nojs>Apply</button>
+					</form>
+				</div>
+			</div>
+			<div class="tp-body">
+				if t.Error != "" {
+					@connError(t.Error)
+				} else {
+					@components.ThroughputChart(t.Chart)
+				}
+			</div>
+		</section>
+	}
+}
+
+func rangeAttrs(on bool) templ.Attributes {
+	if on {
+		return templ.Attributes{"class": "on", "aria-current": "true"}
+	}
+	return nil
+}
+
+func oobAttr(oob bool) templ.Attributes {
+	if oob {
+		return templ.Attributes{"hx-swap-oob": "true"}
+	}
+	return nil
+}
+
+// DeleteQueuesCrumb is the confirmation page's title and last breadcrumb.
+templ DeleteQueuesCrumb() {
+	Delete queues
+}
+
+// DeleteQueuesPage confirms a queue delete posted without JS.
+templ DeleteQueuesPage(m DeleteQueues) {
+	@views.Page(m.Layout, DeleteQueuesCrumb()) {
+		<div class="page-head">
+			<h1 class="h1">
+				@DeleteQueuesCrumb()
+			</h1>
+		</div>
+		<section class="card confirm-card">
+			<ul class="dlg-list">
+				for _, n := range m.Names {
+					<li>{ n }</li>
+				}
+			</ul>
+			<form class="dlgacts" method="post" action={ templ.SafeURL(m.Action) }>
+				for _, n := range m.Names {
+					<input type="hidden" name="queue" value={ n }/>
+				}
+				<input type="hidden" name="next" value={ m.Next }/>
+				<input type="hidden" name="confirm" value="1"/>
+				<a class="btn" href={ templ.SafeURL(m.CancelURL) }>Cancel</a>
+				<button type="submit" class="btn danger">
+					@components.IconDelete("16")
+					Delete
+				</button>
+			</form>
+		</section>
+	}
+}

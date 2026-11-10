@@ -1,0 +1,102 @@
+package components
+
+import "github.com/BarkinBalci/asynqui/internal/web/format"
+
+// ThroughputChart is the daily Processed / Failed chart: one SVG stretched
+// to the plot's width (non-scaling strokes), axis labels in HTML at fixed
+// fractions of the height, a native <title> tooltip per day, and the same
+// data in a visually hidden table. Colors come from CSS classes.
+templ ThroughputChart(c Chart) {
+	<div class="chart">
+		<div class="chart-legend" aria-hidden="true">
+			<span class="lg lg-processed"><span class="sw"></span>Processed</span>
+			<span class="lg lg-failed"><span class="sw"></span>Failed</span>
+		</div>
+		<div class="chart-grid">
+			<div class="yaxis yaxis-processed" aria-hidden="true">
+				for _, v := range c.ProcessedTicks {
+					<span>{ format.Compact(v) }</span>
+				}
+			</div>
+			<div class="plot">
+				<svg class="chart-svg" viewBox={ "0 0 " + c.ViewW + " " + c.ViewH } preserveAspectRatio="none" role="img" aria-labelledby={ c.ID + "-title " + c.ID + "-desc" } focusable="false">
+					<title id={ c.ID + "-title" }>Throughput</title>
+					<desc id={ c.ID + "-desc" }>
+						Processed and failed tasks per day, last { format.Number(int64(len(c.Days))) } days. Processed on the left axis, failed on the right axis.
+						if c.Peak >= 0 && c.Peak < len(c.Days) {
+							Failures peak at { format.Number(c.Days[c.Peak].Failed) } on { format.Day(c.Days[c.Peak].Date) }.
+						}
+					</desc>
+					for _, y := range c.GridY {
+						<line class="grid" x1="0" x2={ c.ViewW } y1={ y } y2={ y }></line>
+					}
+					<line class="baseline" x1="0" x2={ c.ViewW } y1={ c.ViewH } y2={ c.ViewH }></line>
+					<path class="area-processed" d={ c.ProcessedArea }></path>
+					<path class="line line-processed" d={ c.ProcessedLine }></path>
+					<path class="line line-failed" d={ c.FailedLine }></path>
+					for _, d := range c.Days {
+						<rect class="band" x={ d.BandX } y="0" width={ d.BandW } height={ c.ViewH }>
+							<title>
+								@dayName(d)
+								@dayTipRest(d)
+							</title>
+						</rect>
+					}
+				</svg>
+			</div>
+			<div class="yaxis yaxis-failed" aria-hidden="true">
+				for _, v := range c.FailedTicks {
+					<span>{ format.Compact(v) }</span>
+				}
+			</div>
+			<div></div>
+			<div class="xaxis" aria-hidden="true">
+				for _, d := range c.Days {
+					<div class="xcell">
+						if d.Label {
+							if d.Today {
+								<span class="xl xl-last">Today</span>
+							} else {
+								<span class="xl">{ format.Day(d.Date) }</span>
+							}
+						}
+					</div>
+				}
+			</div>
+			<div></div>
+		</div>
+		<table id={ c.ID + "-data" } class="sr-only">
+			<caption>Throughput</caption>
+			<thead>
+				<tr><th scope="col">Date</th><th scope="col">Processed</th><th scope="col">Failed</th><th scope="col">Failure rate</th></tr>
+			</thead>
+			<tbody>
+				for _, d := range c.Days {
+					<tr>
+						<th scope="row">
+							@dayName(d)
+						</th>
+						<td>{ format.Number(d.Processed) }</td>
+						<td>{ format.Number(d.Failed) }</td>
+						<td>{ format.Percent(d.Failed, d.Processed) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// dayTipRest is the tooltip after the day's name, one value per line.
+templ dayTipRest(d ChartDay) {
+	{ "\n" }Processed { format.Number(d.Processed) }{ "\n" }Failed { format.Number(d.Failed) }{ "\n" }Failure rate { format.Percent(d.Failed, d.Processed) }
+}
+
+// dayName is a day in tooltips and the data table: "Today, Nov 8" or
+// "Sat, Nov 7".
+templ dayName(d ChartDay) {
+	if d.Today {
+		Today, { format.Day(d.Date) }
+	} else {
+		{ format.WeekdayDay(d.Date) }
+	}
+}

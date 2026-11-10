@@ -251,18 +251,16 @@ func (a *Authenticator) Challenge(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
-// LoginHandler serves POST /login. For basic it checks the "username" and
-// "password" form fields (at most 5 attempts per minute per client IP and
-// per username), sets the session and redirects to "next". For oidc it
-// also starts the authorization code flow, for clients that post; the UI
-// links to SSOHandler instead. Other providers get 404. fail may be nil, which writes a
+// LoginHandler serves POST /login, the basic login form: it checks the
+// "username" and "password" form fields (at most 5 attempts per minute
+// per client IP and per username), sets the session and redirects to
+// "next". Every other provider gets 404, oidc included: its flow starts
+// only at SSOHandler (GET /login/sso). fail may be nil, which writes a
 // plain-text error.
 func (a *Authenticator) LoginHandler(fail FailFunc) http.Handler {
 	fail = failFunc(fail)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch a.kind {
-		case KindBasic, KindOIDC:
-		default:
+		if a.kind != KindBasic {
 			http.NotFound(w, r)
 			return
 		}
@@ -271,15 +269,7 @@ func (a *Authenticator) LoginHandler(fail FailFunc) http.Handler {
 			fail(w, r, http.StatusBadRequest, FailBadRequest)
 			return
 		}
-		next := a.SafeNext(r.PostForm.Get("next"))
-		if a.kind == KindOIDC {
-			if err := a.oidc.start(w, r, a.jar, next); err != nil {
-				a.logger.ErrorContext(r.Context(), "oidc start failed", slog.Any("error", err))
-				fail(w, r, http.StatusInternalServerError, FailSSO)
-			}
-			return
-		}
-		a.basicLogin(w, r, next, fail)
+		a.basicLogin(w, r, a.SafeNext(r.PostForm.Get("next")), fail)
 	})
 }
 

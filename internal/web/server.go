@@ -29,7 +29,7 @@ const (
 const defaultSummaryBudget = 1500 * time.Millisecond
 
 // Deps are the dependencies of NewServer. Every field is required except
-// Version, Now and SummaryBudget.
+// Version, Now, SummaryBudget and PageBudget.
 type Deps struct {
 	Logger *slog.Logger
 	Config *config.Config
@@ -45,6 +45,9 @@ type Deps struct {
 	// SummaryBudget bounds the Overview's wait for summaries. Zero means
 	// 1.5s.
 	SummaryBudget time.Duration
+	// PageBudget bounds a connection page's wait for its data. Zero means
+	// 5s.
+	PageBudget time.Duration
 }
 
 // deps is what handlers share: the validated Deps plus everything derived
@@ -58,8 +61,10 @@ type deps struct {
 	version string
 	now     func() time.Time
 	budget  time.Duration
-	base    string // "" or "/asynq"
-	refresh string // default refresh choice from config
+	// pageBudget bounds a connection page's wait for its data.
+	pageBudget time.Duration
+	base       string // "" or "/asynq"
+	refresh    string // default refresh choice from config
 	// secureCookies follows auth.session.cookie_secure for the preference
 	// cookies too.
 	secureCookies bool
@@ -101,6 +106,7 @@ func newServer(d Deps) (*deps, http.Handler, error) {
 		version:       d.Version,
 		now:           d.Now,
 		budget:        d.SummaryBudget,
+		pageBudget:    d.PageBudget,
 		base:          strings.TrimRight(d.Config.Server.BasePath, "/"),
 		refresh:       d.Config.Refresh.Default,
 		secureCookies: d.Config.Auth.Session.CookieSecure,
@@ -114,6 +120,9 @@ func newServer(d Deps) (*deps, http.Handler, error) {
 	}
 	if dd.budget <= 0 {
 		dd.budget = defaultSummaryBudget
+	}
+	if dd.pageBudget <= 0 {
+		dd.pageBudget = defaultPageBudget
 	}
 	dd.urls = views.Assets{
 		CSS:  dd.static("app.css"),

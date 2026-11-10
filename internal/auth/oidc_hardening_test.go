@@ -128,10 +128,10 @@ func TestOIDCForgedCallbackKeepsLogin(t *testing.T) {
 func TestOIDCNextCapped(t *testing.T) {
 	idp := newFakeIDP(t)
 	h := app(mustNew(t, idp.options("")))
-	start := do(t, h, req{method: http.MethodPost, target: "/login", form: url.Values{"next": {"/" + strings.Repeat("a", 5000)}}})
+	start := do(t, h, req{target: "/login/sso?" + url.Values{"next": {"/" + strings.Repeat("a", 5000)}}.Encode()})
 	fc := start.cookies[flowCookie]
 	if start.status != http.StatusSeeOther || fc == nil || len(fc.String()) > maxDecodeBytes {
-		t.Fatalf("POST /login with 5KB next = %d, flow cookie %d bytes", start.status, len(fc.String()))
+		t.Fatalf("GET /login/sso with 5KB next = %d, flow cookie %v", start.status, fc)
 	}
 	code, state := idp.authorize(start.header.Get("Location"))
 	cb := do(t, h, req{target: "/auth/callback?" + url.Values{"code": {code}, "state": {state}}.Encode(), cookies: []*http.Cookie{fc}})

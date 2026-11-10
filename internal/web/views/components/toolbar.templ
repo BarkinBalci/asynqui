@@ -1,0 +1,147 @@
+package components
+
+// SelectionToolbar is the bar above a selectable table: an optional
+// filter, then "N selected" (shown by app.js while rows are selected) and
+// the action buttons, which are the children. form is the id of the form
+// the selection belongs to; app.js enables the buttons from it.
+templ SelectionToolbar(form string, filter templ.Component) {
+	<div class="tbar" data-toolbar={ form }>
+		if filter != nil {
+			@filter
+		}
+		<div class="tacts">
+			<span class="selc" data-sel-label hidden><span data-sel-count>0</span> selected</span>
+			{ children... }
+		</div>
+	</div>
+}
+
+// FilterInput filters the [data-filter-text] items of the element with id
+// target, client-side. label is its placeholder and accessible name.
+templ FilterInput(id, target, label string) {
+	<label class="tsearch">
+		<span class="sr-only">{ label }</span>
+		<input id={ id } type="search" placeholder={ label } autocomplete="off" data-filter={ "#" + target }/>
+	</label>
+}
+
+// ActionButton is a selection toolbar button; the children are its label.
+// A role that may not use it gets a disabled button whose only
+// explanation is a native title.
+templ ActionButton(a Action, icon templ.Component) {
+	if !a.Allowed {
+		switch a.Need {
+			case RoleAdmin:
+				@lockedAction(a, icon, "Requires admin") {
+					{ children... }
+				}
+			default:
+				@lockedAction(a, icon, "Requires operator") {
+					{ children... }
+				}
+		}
+	} else {
+		<button { actionAttrs(a)... }>
+			@icon
+			{ children... }
+		</button>
+	}
+}
+
+templ lockedAction(a Action, icon templ.Component, title string) {
+	<button id={ a.ID } type="button" class={ "btn", "sm", templ.KV("danger", a.Danger) } disabled title={ title }>
+		@icon
+		{ children... }
+	</button>
+}
+
+func actionAttrs(a Action) templ.Attributes {
+	attrs := templ.Attributes{
+		"id":         a.ID,
+		"type":       "submit",
+		"form":       a.Form,
+		"formaction": a.URL,
+		"class":      "btn sm",
+	}
+	if a.Danger {
+		attrs["class"] = "btn sm danger"
+	}
+	switch a.Enable {
+	case EnableState:
+		attrs["data-enable"] = "state"
+		attrs["data-state"] = a.State
+	default:
+		attrs["data-enable"] = "any"
+	}
+	if a.Confirm != "" {
+		attrs["data-confirm"] = a.Confirm
+	} else {
+		attrs["hx-post"] = a.URL
+		attrs["hx-swap"] = "none"
+	}
+	return attrs
+}
+
+// ConfirmDialog is a modal <dialog> that app.js opens for an Action with
+// Confirm set to its id. The children are its body; title and confirm
+// are the heading and the confirm button's label. Cancel and Escape close
+// it; the confirm button submits the form with confirm=1, through htmx.
+templ ConfirmDialog(d Dialog, title, confirm templ.Component) {
+	<dialog id={ d.ID } class="dialog" aria-labelledby={ d.TitleID() }>
+		<div class="dlghead">
+			<h2 id={ d.TitleID() } class="dlgtitle">
+				@title
+			</h2>
+			<button type="button" class="iconbtn" data-dialog-close aria-label="Close">
+				@IconClose("16")
+			</button>
+		</div>
+		<div class="dlgbody">
+			{ children... }
+		</div>
+		<div class="dlgacts">
+			<button type="button" class="btn" data-dialog-close>Cancel</button>
+			<button id={ d.ConfirmID() } type="submit" form={ d.Form } formaction={ templ.SafeURL(d.ConfirmURL) } hx-post={ d.ConfirmURL } hx-swap="none" name="confirm" value="1" class={ "btn", templ.KV("danger", d.Danger), templ.KV("primary", !d.Danger) }>
+				@confirm
+			</button>
+		</div>
+	</dialog>
+}
+
+// ToastRegion is where toasts appear, bottom right, with initial toasts
+// (a page rendered after a failed action without JS) or none. Action
+// answers append to it out of band (ToastsOOB). The template is the toast
+// app.js shows when a request fails without an answer to show.
+templ ToastRegion(initial templ.Component) {
+	<div id={ ToastsID } class="toasts" role="status">
+		if initial != nil {
+			@initial
+		}
+	</div>
+	<template id={ ToastFailedID }>
+		@Toast() {
+			Request failed
+		}
+	</template>
+}
+
+// Toast is one error toast; the children are its text. app.js removes it
+// after a while, or when its close button is pressed.
+templ Toast() {
+	<div class="toast">
+		<div class="toast-body">
+			{ children... }
+		</div>
+		<button type="button" class="iconbtn" data-toast-close aria-label="Dismiss">
+			@IconClose("14")
+		</button>
+	</div>
+}
+
+// ToastsOOB appends its children (Toasts) to the toast region from an
+// htmx answer.
+templ ToastsOOB() {
+	<div hx-swap-oob={ "beforeend:#" + ToastsID }>
+		{ children... }
+	</div>
+}

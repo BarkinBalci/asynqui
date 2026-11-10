@@ -1,0 +1,133 @@
+package components
+
+// Badge is a pill with a tone; the caller writes its text.
+templ Badge(t Tone) {
+	<span class={ "badge", toneClass(t) }>
+		{ children... }
+	</span>
+}
+
+// QueueStateBadge is a queue's Running or Paused badge.
+templ QueueStateBadge(paused bool) {
+	if paused {
+		@Badge(ToneWarn) {
+			Paused
+		}
+	} else {
+		@Badge(ToneOK) {
+			Running
+		}
+	}
+}
+
+func toneClass(t Tone) string {
+	switch t {
+	case ToneOK:
+		return "badge-ok"
+	case ToneWarn:
+		return "badge-warn"
+	case ToneDanger:
+		return "badge-danger"
+	case ToneInfo:
+		return "badge-info"
+	case ToneTeal:
+		return "badge-teal"
+	case ToneViolet:
+		return "badge-violet"
+	case ToneOrange:
+		return "badge-orange"
+	}
+	return "badge-neutral"
+}
+
+// Table is a data table in a horizontally scrolling box. The children are
+// its thead, tbody and tfoot.
+templ Table(id string) {
+	<div class="tbl-scroll">
+		<table id={ id } class="tbl">
+			{ children... }
+		</table>
+	</div>
+}
+
+// SortHeader is a sortable column header; the children are its label.
+templ SortHeader(h SortHead) {
+	<th { sortThAttrs(h)... }>
+		<a id={ h.ID } class="sort" href={ templ.SafeURL(h.URL) } hx-get={ h.URL } hx-swap="none" hx-push-url="true">
+			{ children... }
+			@sortIcon(h.Dir)
+		</a>
+	</th>
+}
+
+// PlainHeader is a column header that does not sort.
+templ PlainHeader(num bool) {
+	if num {
+		<th class="num">
+			{ children... }
+		</th>
+	} else {
+		<th>
+			{ children... }
+		</th>
+	}
+}
+
+func sortThAttrs(h SortHead) templ.Attributes {
+	a := templ.Attributes{"aria-sort": "none"}
+	switch h.Dir {
+	case SortAsc:
+		a["aria-sort"] = "ascending"
+	case SortDesc:
+		a["aria-sort"] = "descending"
+	}
+	if h.Num {
+		a["class"] = "num"
+	}
+	return a
+}
+
+templ sortIcon(d SortDir) {
+	<svg class={ "icon", "sort-icon", templ.KV("sort-on", d != SortNone) } width="10" height="12" viewBox="0 0 10 12" aria-hidden="true" focusable="false">
+		switch d {
+			case SortAsc:
+				<path d="M2 7.5L5 4.5L8 7.5"></path>
+			case SortDesc:
+				<path d="M2 4.5L5 7.5L8 4.5"></path>
+			default:
+				<path d="M2 4.5L5 1.5L8 4.5M2 7.5L5 10.5L8 7.5"></path>
+		}
+	</svg>
+}
+
+// SelectAllHeader is the header checkbox that selects every visible row
+// of the form's selection; the children are its accessible label.
+// app.js keeps it checked, unchecked or indeterminate.
+templ SelectAllHeader(id, form string) {
+	<th class="cb-col">
+		<input id={ id } class="cb" type="checkbox" data-select-all={ form } hx-preserve="true"/>
+		<label class="sr-only" for={ id }>
+			{ children... }
+		</label>
+	</th>
+}
+
+// SelectCell is a row's selection checkbox; the children are its
+// accessible label.
+templ SelectCell(s RowSelect) {
+	<td class="cb-col">
+		<input id={ s.ID } class="cb" type="checkbox" form={ s.Form } name={ s.Name } value={ s.Value } hx-preserve="true"/>
+		<label class="sr-only" for={ s.ID }>
+			{ children... }
+		</label>
+	</td>
+}
+
+// EmptyRow is a table body's one-line empty state.
+templ EmptyRow(cols int) {
+	<tr class="empty-row">
+		<td class="empty" colspan={ colspan(cols) }>
+			{ children... }
+		</td>
+	</tr>
+}

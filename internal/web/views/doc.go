@@ -3,7 +3,11 @@
 // plain view-model structs and never call Redis or contain business logic.
 package views
 
-import "github.com/BarkinBalci/asynqui/internal/web/views/components"
+import (
+	"github.com/a-h/templ"
+
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
 
 // Doc is what every HTML document needs: theme, refresh and asset URLs.
 type Doc struct {
@@ -28,4 +32,7 @@ type Layout struct {
 	Doc     Doc
 	Sidebar components.Sidebar
 	TopBar  components.TopBar
+	// Toasts are shown when the page loads, such as the errors of an
+	// action posted without JS. Nil shows none.
+	Toasts templ.Component
 }

@@ -124,6 +124,83 @@ func (s registrySource) Summary(ctx context.Context, name string) (web.Summary, 
 	}, nil
 }
 
+func (s registrySource) Queues(ctx context.Context, name string) ([]web.Queue, error) {
+	c, ok := s.reg.Get(name)
+	if !ok {
+		return nil, conn.ErrNotFound
+	}
+	qs, err := c.Queues(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]web.Queue, len(qs))
+	for i, q := range qs {
+		out[i] = web.Queue{
+			Name:           q.Name,
+			Paused:         q.Paused,
+			Size:           q.Size,
+			Pending:        q.Pending,
+			Active:         q.Active,
+			Scheduled:      q.Scheduled,
+			Retry:          q.Retry,
+			Archived:       q.Archived,
+			ProcessedToday: q.ProcessedToday,
+			FailedToday:    q.FailedToday,
+			Latency:        q.Latency,
+			MemoryUsage:    q.MemoryUsage,
+		}
+	}
+	return out, nil
+}
+
+func (s registrySource) History(ctx context.Context, name, queue string, days int) ([]web.DailyStat, error) {
+	c, ok := s.reg.Get(name)
+	if !ok {
+		return nil, conn.ErrNotFound
+	}
+	stats, err := c.History(ctx, queue, days)
+	if err != nil {
+		return nil, webQueueErr(err)
+	}
+	out := make([]web.DailyStat, len(stats))
+	for i, st := range stats {
+		out[i] = web.DailyStat{Date: st.Date, Processed: st.Processed, Failed: st.Failed}
+	}
+	return out, nil
+}
+
+func (s registrySource) PauseQueue(ctx context.Context, name, queue string) error {
+	return s.act(ctx, name, queue, (*conn.Conn).PauseQueue)
+}
+
+func (s registrySource) ResumeQueue(ctx context.Context, name, queue string) error {
+	return s.act(ctx, name, queue, (*conn.Conn).UnpauseQueue)
+}
+
+func (s registrySource) DeleteQueue(ctx context.Context, name, queue string) error {
+	return s.act(ctx, name, queue, (*conn.Conn).DeleteQueue)
+}
+
+func (s registrySource) act(ctx context.Context, name, queue string, fn func(*conn.Conn, context.Context, string) error) error {
+	c, ok := s.reg.Get(name)
+	if !ok {
+		return conn.ErrNotFound
+	}
+	return webQueueErr(fn(c, ctx, queue))
+}
+
+// webQueueErr adds the web error a handler tests for to conn's typed
+// queue errors.
+func webQueueErr(err error) error {
+	switch {
+	case errors.Is(err, conn.ErrQueueNotFound):
+		return fmt.Errorf("%w: %w", web.ErrQueueNotFound, err)
+	case errors.Is(err, conn.ErrQueueNotEmpty):
+		return fmt.Errorf("%w: %w", web.ErrQueueNotEmpty, err)
+	}
+	return err
+}
+
 // Recheck runs a check now. When it does not finish (the request ended, or
 // the registry is closing) nothing was stored, and the health is the cached
 // one.
