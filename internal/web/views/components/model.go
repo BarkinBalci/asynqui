@@ -162,6 +162,10 @@ type Crumb struct {
 	// instead of Text or Section.
 	Label templ.Component
 	URL   string
+	// Mono sets the crumb in the monospace face (IDs, hosts); Title is
+	// its native tooltip, such as the full ID behind a short one.
+	Mono  bool
+	Title string
 }
 
 // Account is the account menu. It is hidden when Visible is false

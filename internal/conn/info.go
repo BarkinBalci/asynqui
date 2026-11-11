@@ -3,7 +3,12 @@ package conn
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // Backend is the server software behind a connection.
@@ -24,8 +29,9 @@ func (b Backend) String() string {
 }
 
 // Info is a parsed INFO reply. It describes the whole instance, which other
-// connections (other DBs) may share. It is shared between callers, who must
-// not modify it.
+// connections (other DBs) may share, except Keyspace, which is the
+// connection's own DB. It is shared between callers, who must not modify
+// it.
 type Info struct {
 	// Backend is BackendValkey when the server section has
 	// server_name:valkey, otherwise BackendRedis.
@@ -36,10 +42,35 @@ type Info struct {
 	// RedisVersion is redis_version: the Redis version a Valkey server is
 	// compatible with, or the version of Redis itself.
 	RedisVersion string
+	// Mode is redis_mode, or server_mode on a Valkey server that writes
+	// no redis_mode ("standalone").
+	Mode string
+	// Uptime is uptime_in_seconds.
+	Uptime time.Duration
+	// ConnectedClients is connected_clients.
+	ConnectedClients int64
+	// UsedMemory, UsedMemoryPeak and MaxMemory are used_memory,
+	// used_memory_peak and maxmemory, in bytes. MaxMemory 0 means no
+	// limit.
+	UsedMemory     int64
+	UsedMemoryPeak int64
+	MaxMemory      int64
+	// MaxMemoryPolicy is maxmemory_policy.
+	MaxMemoryPolicy string
+	// Keyspace is the Keyspace line of the connection's own DB.
+	Keyspace Keyspace
 	// Sections are in reply order, each with its fields in reply order.
 	Sections []InfoSection
 	// Raw is the reply as received.
 	Raw string
+}
+
+// Keyspace is one DB's line of the Keyspace section
+// ("db3:keys=7,expires=1,avg_ttl=0"). An empty DB has no line: zero keys.
+type Keyspace struct {
+	DB      int
+	Keys    int64
+	Expires int64
 }
 
 // InfoSection is one "# Name" section of an INFO reply.
@@ -75,8 +106,19 @@ func (s InfoSection) Get(key string) (string, bool) {
 	return "", false
 }
 
+// infoReader sends INFO.
+type infoReader interface {
+	Info(ctx context.Context, sections ...string) (string, error)
+}
+
+type redisInfo struct{ c redis.UniversalClient }
+
+func (r redisInfo) Info(ctx context.Context, sections ...string) (string, error) {
+	return r.c.Info(ctx, sections...).Result()
+}
+
 // Info returns the server's INFO (default sections), from the 1s cache
-// when fresh.
+// when fresh. Each fetch also updates Backend.
 func (c *Conn) Info(ctx context.Context) (*Info, error) {
 	return cached(ctx, c.cache, infoKey, cacheTTL, c.fetchInfo)
 }
@@ -84,18 +126,63 @@ func (c *Conn) Info(ctx context.Context) (*Info, error) {
 func (c *Conn) fetchInfo(ctx context.Context) (*Info, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	raw, err := c.redis.Info(ctx).Result()
+	raw, err := c.info.Info(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("info: %w", err)
 	}
-	return parseInfo(raw), nil
+	info := parseInfo(raw, c.db)
+	c.setBackend(info.Backend)
+	return info, nil
+}
+
+// Backend returns the server software found by the last INFO, and false
+// before any. It does no I/O: the health loop detects the backend each
+// time the connection becomes reachable, and every Info fetch refreshes
+// it.
+func (c *Conn) Backend() (Backend, bool) {
+	switch c.backend.Load() {
+	case backendRedis:
+		return BackendRedis, true
+	case backendValkey:
+		return BackendValkey, true
+	}
+	return BackendRedis, false
+}
+
+// Stored values of Conn.backend; 0 is not detected yet.
+const (
+	backendRedis int32 = 1 + iota
+	backendValkey
+)
+
+func (c *Conn) setBackend(b Backend) {
+	v := backendRedis
+	if b == BackendValkey {
+		v = backendValkey
+	}
+	c.backend.Store(v)
+}
+
+// detectBackend reads INFO server and stores the backend. A failure keeps
+// the last value; the next detection tries again.
+func (c *Conn) detectBackend(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	raw, err := c.info.Info(ctx, "server")
+	if err != nil {
+		c.logger.Debug("backend detection failed", slog.Any("error", err))
+		return
+	}
+	c.setBackend(parseInfo(raw, c.db).Backend)
 }
 
 // parseInfo parses an INFO reply: "# Section" headers followed by key:value
 // lines, split on the first colon. Lines before the first header go in a
-// section named "". Blank and malformed lines are skipped.
-func parseInfo(raw string) *Info {
-	info := &Info{Raw: raw}
+// section named "". Blank and malformed lines are skipped. db is the
+// connection's DB, whose Keyspace line fills Keyspace. Numbers that do not
+// parse are left zero.
+func parseInfo(raw string, db int) *Info {
+	info := &Info{Raw: raw, Keyspace: Keyspace{DB: db}}
 	var cur *InfoSection
 	for line := range strings.Lines(raw) {
 		line = strings.TrimRight(line, "\r\n")
@@ -127,5 +214,43 @@ func parseInfo(raw string) *Info {
 			info.Version = v
 		}
 	}
+	info.Mode, _ = server.Get("redis_mode")
+	if info.Mode == "" {
+		info.Mode, _ = server.Get("server_mode")
+	}
+	info.Uptime = time.Duration(fieldInt(server, "uptime_in_seconds")) * time.Second
+	clients, _ := info.Section("Clients")
+	info.ConnectedClients = fieldInt(clients, "connected_clients")
+	mem, _ := info.Section("Memory")
+	info.UsedMemory = fieldInt(mem, "used_memory")
+	info.UsedMemoryPeak = fieldInt(mem, "used_memory_peak")
+	info.MaxMemory = fieldInt(mem, "maxmemory")
+	info.MaxMemoryPolicy, _ = mem.Get("maxmemory_policy")
+	ks, _ := info.Section("Keyspace")
+	if line, ok := ks.Get("db" + strconv.Itoa(db)); ok {
+		for kv := range strings.SplitSeq(line, ",") {
+			k, v, _ := strings.Cut(kv, "=")
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				continue
+			}
+			switch k {
+			case "keys":
+				info.Keyspace.Keys = n
+			case "expires":
+				info.Keyspace.Expires = n
+			}
+		}
+	}
 	return info
+}
+
+// fieldInt is the integer value of key in s, or 0.
+func fieldInt(s InfoSection, key string) int64 {
+	v, _ := s.Get(key)
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }

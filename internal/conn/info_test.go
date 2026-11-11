@@ -82,7 +82,7 @@ func TestParseInfoFixtures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.fixture, func(t *testing.T) {
 			raw := readInfoFixture(t, tt.fixture)
-			info := parseInfo(raw)
+			info := parseInfo(raw, 0)
 			if info.Raw != raw {
 				t.Error("Raw is not the reply as received")
 			}
@@ -125,6 +125,7 @@ func TestParseInfoOrderAndEdges(t *testing.T) {
 			want: &Info{
 				Version:      "7.0.0",
 				RedisVersion: "7.0.0",
+				Keyspace:     Keyspace{Keys: 2},
 				Sections: []InfoSection{
 					{Name: "Server", Fields: []InfoField{{"redis_version", "7.0.0"}, {"executable", "/opt/a:b"}, {"empty", ""}}},
 					{Name: "Keyspace", Fields: []InfoField{{"db1", "keys=1,expires=0"}, {"db0", "keys=2,expires=0"}}},
@@ -161,7 +162,7 @@ func TestParseInfoOrderAndEdges(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.want.Raw = tt.raw
-			if diff := cmp.Diff(tt.want, parseInfo(tt.raw)); diff != "" {
+			if diff := cmp.Diff(tt.want, parseInfo(tt.raw, 0)); diff != "" {
 				t.Errorf("parseInfo (-want +got):\n%s", diff)
 			}
 		})

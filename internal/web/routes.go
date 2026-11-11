@@ -34,11 +34,11 @@ func addRoutes(mux *http.ServeMux, d *deps) {
 	mux.Handle("GET /c/{conn}", view(d, handleQueues(d)))                                                               // ?sort=size&dir=desc&range=14d&queue=
 	mux.Handle("GET /c/{conn}/queues/{queue}", view(d, handleStub(d, stubPage{components.SectionQueues, queueCrumbs}))) // ?state=pending&page=2&size=20&sort=
 	mux.Handle("GET /c/{conn}/queues/{queue}/tasks/{id}", view(d, handleStub(d, stubPage{components.SectionQueues, taskCrumbs})))
-	mux.Handle("GET /c/{conn}/servers", view(d, handleStub(d, stubPage{components.SectionServers, serversCrumbs})))
-	mux.Handle("GET /c/{conn}/servers/{id}", view(d, handleStub(d, stubPage{components.SectionServers, serverCrumbs})))
-	mux.Handle("GET /c/{conn}/schedulers", view(d, handleStub(d, stubPage{components.SectionSchedulers, schedulersCrumbs})))
-	mux.Handle("GET /c/{conn}/schedulers/{id}", view(d, handleStub(d, stubPage{components.SectionSchedulers, schedulerCrumbs})))
-	mux.Handle("GET /c/{conn}/info", view(d, handleStub(d, stubPage{components.SectionInfo, infoCrumbs})))
+	mux.Handle("GET /c/{conn}/servers", view(d, handleServers(d)))                // ?sort=busy&dir=desc
+	mux.Handle("GET /c/{conn}/servers/{id}", view(d, handleServer(d)))            // ?sort=running&dir=desc
+	mux.Handle("GET /c/{conn}/schedulers", view(d, handleSchedulers(d)))          // ?sort=next&dir=asc
+	mux.Handle("GET /c/{conn}/schedulers/{id}", view(d, handleSchedulerEntry(d))) // ?page=2
+	mux.Handle("GET /c/{conn}/info", view(d, handleInfo(d)))
 	mux.Handle("POST /c/{conn}/recheck", view(d, handleRecheck(d))) // Overview "Retry now"
 
 	// actions (operator)

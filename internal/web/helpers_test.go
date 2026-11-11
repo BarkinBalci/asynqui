@@ -46,6 +46,9 @@ type fakeConns struct {
 	// actErrs fails actions on a queue; acted records "verb conn/queue".
 	actErrs map[string]error
 	acted   []string
+
+	// infra are the Servers, Schedulers and Info reads (infra_test.go).
+	infra fakeInfra
 }
 
 func (f *fakeConns) Queues(ctx context.Context, name string) ([]Queue, error) {

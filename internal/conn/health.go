@@ -79,11 +79,21 @@ func (c *Conn) Recheck(ctx context.Context) (Health, error) {
 
 // healthLoop checks the connection now and then every interval until ctx
 // is canceled. A check that outlasts the interval delays the next one.
+// Each time the connection becomes reachable, and while the backend is
+// still unknown, it also detects the backend (one INFO server), so the
+// "Redis info"/"Valkey info" label needs no INFO per page.
 func (c *Conn) healthLoop(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	prev := StateUnknown
 	for {
-		_, _ = c.check(ctx) // only fails once ctx is done or Close ran
+		h, err := c.check(ctx) // only fails once ctx is done or Close ran
+		if err == nil {
+			if _, known := c.Backend(); h.State == StateUp && (prev != StateUp || !known) {
+				c.detectBackend(ctx)
+			}
+			prev = h.State
+		}
 		select {
 		case <-ctx.Done():
 			return

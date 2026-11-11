@@ -8,12 +8,16 @@ import (
 // ConnectionSource is what the web layer needs from the connection
 // registry (package conn), so tests can pass a fake. Each area declares
 // its part next to its handlers: ConnectionLister (the shell and access
-// checks), OverviewSource (the Overview) and QueueSource (the Connection
-// page).
+// checks), OverviewSource (the Overview), QueueSource (the Connection
+// page), ServerSource, SchedulerSource and InfoSource (the Servers,
+// Schedulers and Redis info pages).
 type ConnectionSource interface {
 	ConnectionLister
 	OverviewSource
 	QueueSource
+	ServerSource
+	SchedulerSource
+	InfoSource
 }
 
 // ConnectionLister lists the configured connections.
@@ -62,6 +66,9 @@ type Connection struct {
 	// Addr is the display address, "host:port/db".
 	Addr   string
 	Health Health
+	// Valkey is set once the backend was detected as Valkey: the info
+	// page is titled "Valkey info".
+	Valkey bool
 }
 
 // HealthState is the result of the last health check.

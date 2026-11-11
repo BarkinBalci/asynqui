@@ -1,0 +1,240 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// ServersPage is the Servers page: a read-only table of the connection's
+// asynq servers. See Live for requests and polling; the filter input sits
+// outside the polled table.
+templ ServersPage(m Servers) {
+	@views.Page(m.Layout, lastCrumb(m.Layout)) {
+		<div id={ ServersPageID } class="content-region" hx-sync="this:queue last">
+			@livePoll(m.Live, false)
+			<div class="page-head">
+				<h1 class="h1">
+					@components.SectionName(components.SectionServers, false)
+				</h1>
+			</div>
+			@liveBanner(m.Live, false)
+			<section class="card tbl-card" aria-label="Servers">
+				<div class="tbar">
+					@components.FilterInput(ServersFilterID, ServersRowsID, "Filter servers")
+				</div>
+				@serversTable(m, false)
+			</section>
+		</div>
+	}
+}
+
+// ServersPoll answers a poll or a sort, out of band.
+templ ServersPoll(m Servers) {
+	@livePoll(m.Live, true)
+	@liveBanner(m.Live, true)
+	if !m.Live.Keep {
+		@serversTable(m, true)
+	}
+	@liveTail(m.Layout)
+}
+
+templ serversTable(m Servers, oob bool) {
+	<div id={ ServersTableID } { components.OOB(oob)... }>
+		@liveData(m.Live) {
+			@components.Table("servers") {
+				<thead>
+					<tr>
+						@components.SortHeader(m.Heads[SrvColHost]) {
+							Host
+						}
+						@components.SortHeader(m.Heads[SrvColPID]) {
+							PID
+						}
+						@components.SortHeader(m.Heads[SrvColState]) {
+							State
+						}
+						@components.SortHeader(m.Heads[SrvColBusy]) {
+							Busy
+						}
+						@components.PlainHeader(false) {
+							Queues
+						}
+						@components.SortHeader(m.Heads[SrvColStarted]) {
+							Started
+						}
+					</tr>
+				</thead>
+				<tbody id={ ServersRowsID }>
+					if len(m.Rows) == 0 {
+						@components.EmptyRow(6) {
+							No servers running
+						}
+					}
+					for _, r := range m.Rows {
+						<tr data-filter-text={ serverFilterText(r) }>
+							<td><a id={ r.LinkID } class="row-link" href={ templ.SafeURL(r.URL) } title={ r.ID }>{ r.Host }</a></td>
+							<td class="num mono">{ format.Int(r.PID) }</td>
+							<td>
+								@serverStatus(r)
+							</td>
+							<td>
+								@busy(r, false)
+							</td>
+							<td>
+								@queueTokens(r.Queues)
+							</td>
+							<td>
+								@components.Time(r.Started)
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	</div>
+}
+
+// ServerPage is the Server detail page: the server's details and the
+// tasks it is processing. The whole body below the back link is one
+// polled region.
+templ ServerPage(m Server) {
+	@views.Page(m.Layout, lastCrumb(m.Layout)) {
+		<div id={ ServerPageID } class="content-region" hx-sync="this:queue last">
+			@livePoll(m.Live, false)
+			@backLink("back-servers", m.ServersURL, components.SectionServers)
+			@liveBanner(m.Live, false)
+			@serverBody(m, false)
+		</div>
+	}
+}
+
+// ServerPoll answers a poll or a sort, out of band.
+templ ServerPoll(m Server) {
+	@livePoll(m.Live, true)
+	@liveBanner(m.Live, true)
+	if !m.Live.Keep {
+		@serverBody(m, true)
+	}
+	@liveTail(m.Layout)
+}
+
+// ServerNotFound is the heading of a server that is gone.
+templ ServerNotFound() {
+	Server not found
+}
+
+templ serverBody(m Server, oob bool) {
+	<div id={ ServerBodyID } class="content-region" { components.OOB(oob)... }>
+		if m.Live.State != DataReady {
+			<div class="page-head">
+				<h1 class="h1 h1-mono mono">
+					@lastCrumb(m.Layout)
+				</h1>
+			</div>
+			<div class="card">
+				@liveData(m.Live)
+			</div>
+		} else if !m.Found {
+			<div class="page-head">
+				<h1 class="h1">
+					@ServerNotFound()
+				</h1>
+			</div>
+		} else {
+			<div class="detail-head">
+				<div class="detail-title">
+					<h1 class="h1 h1-mono mono">{ m.Row.Host }</h1>
+					@serverStatus(m.Row)
+				</div>
+				<div class="detail-id">
+					<span class="mono muted">{ m.Row.ID }</span>
+					@components.CopyIDButton(CopyIDButtonID, m.Row.ID)
+				</div>
+			</div>
+			<div class="detail-cols">
+				<section class="card detail-main" aria-labelledby="workers-title">
+					<div class="cardhead">
+						<h2 class="card-title" id="workers-title">Active workers ({ format.Number(int64(len(m.Workers))) })</h2>
+					</div>
+					@components.Table("workers") {
+						<thead>
+							<tr>
+								@components.PlainHeader(false) {
+									Task ID
+								}
+								@components.PlainHeader(false) {
+									Type
+								}
+								@components.PlainHeader(false) {
+									Queue
+								}
+								@components.SortHeader(m.Heads[WrkColStarted]) {
+									Started
+								}
+								@components.SortHeader(m.Heads[WrkColRunning]) {
+									Running for
+								}
+								@components.PlainHeader(false) {
+									Deadline
+								}
+							</tr>
+						</thead>
+						<tbody>
+							if len(m.Workers) == 0 {
+								@components.EmptyRow(6) {
+									No active workers
+								}
+							}
+							for _, w := range m.Workers {
+								<tr>
+									<td><a id={ w.LinkID } class="mono" href={ templ.SafeURL(w.TaskURL) } title={ w.TaskID }>{ w.ShortID }</a></td>
+									<td class="strong">{ w.Type }</td>
+									<td><a id={ w.QueueLinkID } href={ templ.SafeURL(w.QueueURL) }>{ w.Queue }</a></td>
+									<td>
+										@components.TimeAbs(w.Started)
+									</td>
+									<td class={ "num", templ.KV("c-long", w.Long) }>{ format.Duration(w.Running) }</td>
+									<td>
+										@components.TimeOrDash(w.Deadline)
+									</td>
+								</tr>
+							}
+						</tbody>
+					}
+				</section>
+				<section class="card detail-side" aria-labelledby="details-title">
+					<div class="cardhead">
+						<h2 class="card-title" id="details-title">Details</h2>
+					</div>
+					<dl class="dl">
+						<dt>PID</dt>
+						<dd class="mono">{ format.Int(m.Row.PID) }</dd>
+						<dt>Started</dt>
+						<dd>
+							@components.Time(m.Row.Started)
+						</dd>
+						<dt>Concurrency</dt>
+						<dd class="num">{ format.Number(m.Row.Concurrency) }</dd>
+						<dt>Busy</dt>
+						<dd>
+							@busy(m.Row, true)
+						</dd>
+						<dt>Queues</dt>
+						<dd>
+							@queueTokens(m.Row.Queues)
+						</dd>
+						<dt>Strict priority</dt>
+						<dd>
+							if m.Strict {
+								Yes
+							} else {
+								No
+							}
+						</dd>
+					</dl>
+				</section>
+			</div>
+		}
+	</div>
+}

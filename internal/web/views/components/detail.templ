@@ -1,0 +1,72 @@
+package components
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+)
+
+// BusyBar is a server's busy workers out of its concurrency as a small
+// bar. The figure itself is written next to it, so the bar is hidden from
+// assistive technology. Its fill is an SVG attribute, never an inline
+// style.
+templ BusyBar(busy, concurrency int64) {
+	<svg class="busy" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+		if w := busyWidth(busy, concurrency); w != "" {
+			<rect class="busy-fill" width={ w } height="4"></rect>
+		}
+	</svg>
+}
+
+// busyWidth is the fill's width out of 100, empty for none. It is
+// geometry, not display text.
+func busyWidth(busy, concurrency int64) string {
+	if busy <= 0 || concurrency <= 0 {
+		return ""
+	}
+	return strconv.FormatFloat(100*float64(min(busy, concurrency))/float64(concurrency), 'f', 1, 64)
+}
+
+// CopyIDButton copies the full ID value. Like every copy button it is
+// rendered hidden and shown by app.js where the Clipboard API exists.
+templ CopyIDButton(id, value string) {
+	<button id={ id } type="button" class="btn sm" data-copy={ value } hidden>
+		@IconCopy("14")
+		Copy ID
+	</button>
+}
+
+// CodeBlock is a dark code block with a copy button pinned top right,
+// outside the scrolling area. label names the scrollable block and copy
+// the button, for assistive technology.
+templ CodeBlock(id, text, label, copy string) {
+	<div class="code code-card">
+		<button id={ id + "-copy" } type="button" class="copy" data-copy={ text } aria-label={ copy } title="Copy" hidden>
+			@IconCopy("16")
+		</button>
+		<pre id={ id } tabindex="0" aria-label={ label }>{ text }</pre>
+	</div>
+}
+
+// IconBack is the arrow of a detail page's back link.
+templ IconBack(size string) {
+	@icon(size) {
+		<path d="M19 12H5M12 19l-7-7 7-7"></path>
+	}
+}
+
+// TimeAbs is Time shown as the absolute local time (app.js), without the
+// relative text.
+templ TimeAbs(t time.Time) {
+	<time datetime={ format.TimeAttr(t) } data-format="absolute">{ format.TimeText(t) }</time>
+}
+
+// TimeOrDash is Time, or "—" for the zero time.
+templ TimeOrDash(t time.Time) {
+	if t.IsZero() {
+		<span class="muted">—</span>
+	} else {
+		@Time(t)
+	}
+}

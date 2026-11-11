@@ -99,7 +99,7 @@ func (s registrySource) Connections() []web.Connection {
 	all := s.reg.All()
 	out := make([]web.Connection, len(all))
 	for i, c := range all {
-		out[i] = web.Connection{Name: c.Name(), Addr: c.Addr(), Health: webHealth(c.Health())}
+		out[i] = web.Connection{Name: c.Name(), Addr: c.Addr(), Health: webHealth(c.Health()), Valkey: isValkey(c)}
 	}
 	return out
 }

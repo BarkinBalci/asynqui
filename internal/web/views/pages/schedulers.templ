@@ -1,0 +1,280 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// SchedulersPage is the Schedulers page: a read-only table of the entries
+// of the connection's running schedulers. See Live for requests and
+// polling; the filter input sits outside the polled table.
+templ SchedulersPage(m Schedulers) {
+	@views.Page(m.Layout, lastCrumb(m.Layout)) {
+		<div id={ SchedulersPageID } class="content-region" hx-sync="this:queue last">
+			@livePoll(m.Live, false)
+			<div class="page-head">
+				<h1 class="h1">
+					@components.SectionName(components.SectionSchedulers, false)
+				</h1>
+			</div>
+			@liveBanner(m.Live, false)
+			<section class="card tbl-card" aria-label="Scheduler entries">
+				<div class="tbar">
+					@components.FilterInput(SchedulersFilter, SchedulersRowsID, "Filter entries")
+				</div>
+				@schedulersTable(m, false)
+			</section>
+		</div>
+	}
+}
+
+// SchedulersPoll answers a poll or a sort, out of band.
+templ SchedulersPoll(m Schedulers) {
+	@livePoll(m.Live, true)
+	@liveBanner(m.Live, true)
+	if !m.Live.Keep {
+		@schedulersTable(m, true)
+	}
+	@liveTail(m.Layout)
+}
+
+templ schedulersTable(m Schedulers, oob bool) {
+	<div id={ SchedulersTable } { components.OOB(oob)... }>
+		@liveData(m.Live) {
+			@components.Table("schedulers") {
+				<thead>
+					<tr>
+						@components.SortHeader(m.Heads[EntColID]) {
+							Entry ID
+						}
+						@components.SortHeader(m.Heads[EntColSpec]) {
+							Spec
+						}
+						@components.SortHeader(m.Heads[EntColType]) {
+							Task type
+						}
+						@components.PlainHeader(false) {
+							Payload
+						}
+						@components.PlainHeader(false) {
+							Options
+						}
+						@components.SortHeader(m.Heads[EntColNext]) {
+							Next run
+						}
+						@components.SortHeader(m.Heads[EntColPrev]) {
+							Last run
+						}
+					</tr>
+				</thead>
+				<tbody id={ SchedulersRowsID }>
+					if len(m.Rows) == 0 {
+						@components.EmptyRow(7) {
+							No scheduler entries
+						}
+					}
+					for _, r := range m.Rows {
+						<tr data-filter-text={ r.ID + " " + r.Spec + " " + r.TaskType }>
+							<td><a id={ r.LinkID } class="row-link mono" href={ templ.SafeURL(r.URL) } title={ r.ID }>{ r.ShortID }</a></td>
+							<td class="mono">{ r.Spec }</td>
+							<td class="strong">{ r.TaskType }</td>
+							<td class="mono muted cell-trunc" title={ r.Payload }>{ r.Payload }</td>
+							<td>
+								@optionTokens(r.Options)
+							</td>
+							<td>
+								@components.TimeOrDash(r.Next)
+							</td>
+							<td class="muted">
+								@components.TimeOrDash(r.Prev)
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	</div>
+}
+
+// SchedulerEntryPage is the Scheduler entry page: the entry's details,
+// payload and enqueue history. The whole body below the back link is one
+// polled region; the history's page links are user requests.
+templ SchedulerEntryPage(m SchedulerEntry) {
+	@views.Page(m.Layout, lastCrumb(m.Layout)) {
+		<div id={ EntryPageID } class="content-region" hx-sync="this:queue last">
+			@livePoll(m.Live, false)
+			@backLink("back-schedulers", m.SchedulersURL, components.SectionSchedulers)
+			@liveBanner(m.Live, false)
+			@entryBody(m, false)
+		</div>
+	}
+}
+
+// SchedulerEntryPoll answers a poll or a page change, out of band.
+templ SchedulerEntryPoll(m SchedulerEntry) {
+	@livePoll(m.Live, true)
+	@liveBanner(m.Live, true)
+	if !m.Live.Keep {
+		@entryBody(m, true)
+	}
+	@liveTail(m.Layout)
+}
+
+// EntryNotFound is the heading of a stale or unknown entry.
+templ EntryNotFound() {
+	Entry not found
+}
+
+templ entryBody(m SchedulerEntry, oob bool) {
+	<div id={ EntryBodyID } class="content-region" { components.OOB(oob)... }>
+		if m.Live.State != DataReady {
+			<div class="page-head">
+				<h1 class="h1 h1-mono mono">
+					@lastCrumb(m.Layout)
+				</h1>
+			</div>
+			<div class="card">
+				@liveData(m.Live)
+			</div>
+		} else if !m.Found {
+			<div class="page-head">
+				<h1 class="h1">
+					@EntryNotFound()
+				</h1>
+			</div>
+		} else {
+			<div class="detail-head">
+				<h1 class="h1">{ m.TaskType }</h1>
+				<div class="detail-id">
+					<span class="mono muted">{ m.ID }</span>
+					@components.CopyIDButton(CopyIDButtonID, m.ID)
+				</div>
+			</div>
+			<div class="detail-cols">
+				<div class="detail-main detail-stack">
+					<section class="card" aria-labelledby="payload-title">
+						<div class="cardhead">
+							<h2 class="card-title" id="payload-title">Payload</h2>
+						</div>
+						@components.CodeBlock(PayloadID, m.Payload, "Payload", "Copy payload")
+					</section>
+					<section class="card" aria-labelledby="history-title">
+						<div class="cardhead">
+							<h2 class="card-title" id="history-title">Enqueue history</h2>
+							@historyPager(m.History)
+						</div>
+						@historyTable(m.History)
+					</section>
+				</div>
+				<section class="card detail-side" aria-labelledby="details-title">
+					<div class="cardhead">
+						<h2 class="card-title" id="details-title">Details</h2>
+					</div>
+					<dl class="dl">
+						<dt>Spec</dt>
+						<dd class="mono">{ m.Spec }</dd>
+						<dt>Queue</dt>
+						<dd><a id="entry-queue" href={ templ.SafeURL(m.QueueURL) }>{ m.Queue }</a></dd>
+						<dt>Options</dt>
+						<dd>
+							if len(m.Options) == 0 {
+								<span class="muted">—</span>
+							} else {
+								@optionTokens(m.Options)
+							}
+						</dd>
+						<dt>Next run</dt>
+						<dd>
+							@components.TimeOrDash(m.Next)
+						</dd>
+						<dt>Last run</dt>
+						<dd>
+							@components.TimeOrDash(m.Prev)
+						</dd>
+					</dl>
+				</section>
+			</div>
+		}
+	</div>
+}
+
+// historyPager is "21–40" with ‹ and ›; asynq gives no total.
+templ historyPager(h History) {
+	if h.State == DataReady && (h.PrevURL != "" || h.NextURL != "") {
+		<nav class="pager" aria-label="Enqueue history pages">
+			if h.To > 0 {
+				<span class="muted num">{ format.Number(h.From) }–{ format.Number(h.To) }</span>
+			}
+			@pageLink("hist-prev", h.PrevURL, "Newer") {
+				‹
+			}
+			@pageLink("hist-next", h.NextURL, "Older") {
+				›
+			}
+		</nav>
+	}
+}
+
+// pageLink is a pager arrow: a link that fetches the page with htmx, or a
+// disabled-looking span at either end.
+templ pageLink(id, url, label string) {
+	if url == "" {
+		<span class="pager-btn" aria-disabled="true" aria-label={ label }>
+			{ children... }
+		</span>
+	} else {
+		<a id={ id } class="pager-btn" href={ templ.SafeURL(url) } hx-get={ url } hx-swap="none" hx-push-url="true" aria-label={ label } title={ label }>
+			{ children... }
+		</a>
+	}
+}
+
+templ historyTable(h History) {
+	switch h.State {
+		case DataFailed:
+			<div class="conn-error page-error">
+				<div class="conn-error-title">
+					@components.IconAlert("16")
+					Could not load enqueue history
+				</div>
+				<div class="mono conn-error-text">{ h.Error }</div>
+			</div>
+		case DataChecking:
+			<p class="checking">Checking</p>
+		default:
+			@components.Table("history") {
+				<thead>
+					<tr>
+						@components.PlainHeader(false) {
+							Enqueued at
+						}
+						@components.PlainHeader(false) {
+							Task ID
+						}
+					</tr>
+				</thead>
+				<tbody>
+					if len(h.Events) == 0 {
+						@components.EmptyRow(2) {
+							No enqueue events
+						}
+					}
+					for _, e := range h.Events {
+						<tr>
+							<td>
+								@components.TimeAbs(e.EnqueuedAt)
+							</td>
+							<td>
+								if e.TaskURL != "" {
+									<a id={ e.LinkID } class="mono" href={ templ.SafeURL(e.TaskURL) } title={ e.TaskID }>{ e.ShortID }</a>
+								} else {
+									<span class="mono muted" title={ e.TaskID }>{ e.ShortID }</span>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+	}
+}

@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -41,6 +42,7 @@ func testConn(t *testing.T, name string, p pinger) *Conn {
 		t.Fatal(err)
 	}
 	c.pinger = p
+	c.info = infoFunc(func(context.Context, ...string) (string, error) { return "", errNoInfo })
 	return c
 }
 

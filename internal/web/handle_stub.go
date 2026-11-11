@@ -54,23 +54,3 @@ func taskCrumbs(d *deps, r *http.Request) []components.Crumb {
 	id := r.PathValue("id")
 	return append(queueCrumbs(d, r), components.Crumb{Text: format.ShortID(id)})
 }
-
-func serversCrumbs(d *deps, r *http.Request) []components.Crumb {
-	return []components.Crumb{sectionCrumb(d, components.SectionServers, "c", r.PathValue("conn"), "servers")}
-}
-
-func serverCrumbs(d *deps, r *http.Request) []components.Crumb {
-	return append(serversCrumbs(d, r), components.Crumb{Text: format.ShortID(r.PathValue("id"))})
-}
-
-func schedulersCrumbs(d *deps, r *http.Request) []components.Crumb {
-	return []components.Crumb{sectionCrumb(d, components.SectionSchedulers, "c", r.PathValue("conn"), "schedulers")}
-}
-
-func schedulerCrumbs(d *deps, r *http.Request) []components.Crumb {
-	return append(schedulersCrumbs(d, r), components.Crumb{Text: format.ShortID(r.PathValue("id"))})
-}
-
-func infoCrumbs(d *deps, r *http.Request) []components.Crumb {
-	return []components.Crumb{sectionCrumb(d, components.SectionInfo, "c", r.PathValue("conn"), "info")}
-}

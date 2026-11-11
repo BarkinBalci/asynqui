@@ -362,6 +362,19 @@ func TestNoInlineStyleOrScript(t *testing.T) {
 		page{testOpts{}, request{path: "/c/main", htmx: true, header: map[string]string{"HX-Trigger": "queues-poll"}}},
 		page{testOpts{}, request{path: "/c/analytics?poll=init", htmx: true, header: map[string]string{"HX-Trigger": "queues-poll"}}},
 		page{testOpts{}, request{method: http.MethodPost, path: "/c/analytics/recheck", htmx: true}},
+	)
+	// The Servers, Schedulers and Info pages with data, and their answers.
+	for _, p := range []string{
+		"/c/main/servers", "/c/main/servers/" + srvA, "/c/main/servers/" + srvA + "?sort=started",
+		"/c/main/schedulers", "/c/main/schedulers/" + entryA, "/c/main/schedulers/" + entryB, "/c/main/info",
+	} {
+		cases = append(cases,
+			page{testOpts{conns: infraConns()}, request{path: p}},
+			page{testOpts{conns: infraConns()}, request{path: p, htmx: true}},
+			page{testOpts{conns: infraConns()}, request{path: p + "?poll=init", htmx: true, header: map[string]string{"HX-Trigger": "info-poll"}}},
+		)
+	}
+	cases = append(cases,
 		page{testOpts{provider: config.ProviderBasic}, request{path: "/login"}},
 		page{testOpts{provider: config.ProviderBasic}, request{path: "/no/such/page"}},
 		page{testOpts{provider: config.ProviderBasic}, request{method: http.MethodPost, path: "/login", form: "username=a&password=b"}},

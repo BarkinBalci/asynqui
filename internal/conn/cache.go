@@ -18,10 +18,13 @@ const sweepInterval = 10 * time.Second
 // with the same name but different T are different keys.
 type cacheKey[T any] string
 
-// Cache keys. History keys are built per queue and range: historyKey.
+// Cache keys. History keys are built per queue and range (historyKey), and
+// enqueue event keys per entry and page (enqueueKey).
 const (
-	queuesKey cacheKey[[]Queue] = "queues"
-	infoKey   cacheKey[*Info]   = "info"
+	queuesKey           cacheKey[[]Queue]          = "queues"
+	infoKey             cacheKey[*Info]            = "info"
+	serversKey          cacheKey[[]Server]         = "servers"
+	schedulerEntriesKey cacheKey[[]SchedulerEntry] = "scheduler-entries"
 )
 
 // cache holds one connection's recent snapshots, and coalesces concurrent

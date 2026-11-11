@@ -142,6 +142,11 @@ func (r *Registry) Close() error {
 type Conn struct {
 	name string
 	addr string // display address, host:port/db
+	db   int
+	// tls is the TLS setting; username is the ACL user, empty for Redis's
+	// default user.
+	tls      TLSInfo
+	username string
 	// timeout is the context deadline of our own commands (PING, INFO):
 	// dial_timeout + write_timeout + read_timeout, room for one attempt on
 	// a fresh connection. Inspector calls take no context; see newConn.
@@ -151,12 +156,17 @@ type Conn struct {
 	inspector *asynq.Inspector
 	redis     redis.UniversalClient
 
-	pinger pinger         // redis, or a fake in tests
-	queues queueInspector // inspector, or a fake in tests
-	cache  *cache
-	now    func() time.Time // the clock; dates of History without queues
+	pinger     pinger             // redis, or a fake in tests
+	info       infoReader         // redis, or a fake in tests
+	queues     queueInspector     // inspector, or a fake in tests
+	servers    serverInspector    // inspector, or a fake in tests
+	schedulers schedulerInspector // inspector, or a fake in tests
+	cache      *cache
+	now        func() time.Time // the clock; dates of History without queues
 
 	closed atomic.Bool // set by Registry.Close
+	// backend is backendRedis or backendValkey; 0 before any detection.
+	backend atomic.Int32
 
 	mu            sync.Mutex
 	health        Health
@@ -213,18 +223,38 @@ func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Conn{
-		name:      cc.Name,
-		addr:      displayAddr(cc.Addr, cc.DB),
-		timeout:   cc.DialTimeout + cc.WriteTimeout + cc.ReadTimeout,
-		logger:    logger.With(slog.String("conn", cc.Name)),
-		inspector: inspector,
-		redis:     rc,
-		pinger:    redisPinger{rc},
-		queues:    inspector,
-		cache:     newCache(),
-		now:       time.Now,
+		name:       cc.Name,
+		addr:       displayAddr(cc.Addr, cc.DB),
+		db:         cc.DB,
+		tls:        TLSInfo{Enabled: cc.TLS.Enabled, Verified: cc.TLS.Enabled && !cc.TLS.InsecureSkipVerify},
+		username:   cc.Username,
+		timeout:    cc.DialTimeout + cc.WriteTimeout + cc.ReadTimeout,
+		logger:     logger.With(slog.String("conn", cc.Name)),
+		inspector:  inspector,
+		redis:      rc,
+		pinger:     redisPinger{rc},
+		info:       redisInfo{rc},
+		queues:     inspector,
+		servers:    inspector,
+		schedulers: inspector,
+		cache:      newCache(),
+		now:        time.Now,
 	}, nil
 }
+
+// TLSInfo is a connection's TLS setting, from config.
+type TLSInfo struct {
+	Enabled bool
+	// Verified is false when tls.insecure_skip_verify is set.
+	Verified bool
+}
+
+// TLS returns the connection's TLS setting.
+func (c *Conn) TLS() TLSInfo { return c.tls }
+
+// Username returns the configured ACL username; empty is Redis's default
+// user.
+func (c *Conn) Username() string { return c.username }
 
 // displayAddr formats the address shown under a connection's name.
 func displayAddr(addr string, db int) string {

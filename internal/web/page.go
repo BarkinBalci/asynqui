@@ -150,6 +150,7 @@ func (d *deps) layoutWith(r *http.Request, a access, section components.Section,
 				ServersURL:    d.url("c", c.Name, "servers"),
 				SchedulersURL: d.url("c", c.Name, "schedulers"),
 				InfoURL:       d.url("c", c.Name, "info"),
+				Valkey:        c.Valkey,
 			}
 		}
 		side.Conns = append(side.Conns, sc)

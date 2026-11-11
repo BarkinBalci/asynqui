@@ -1,0 +1,107 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// livePoll is a Live page's poll trigger. Its own hx-sync drops it while
+// another request of the page is in flight and lets a user request abort
+// it.
+templ livePoll(l Live, oob bool) {
+	<div id={ l.PollID } data-poll hx-get={ l.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-sync={ "#" + l.PageID + ":abort" } hidden { components.OOB(oob)... }></div>
+}
+
+// liveBanner shows why a poll that kept the data has none; empty
+// otherwise.
+templ liveBanner(l Live, oob bool) {
+	<div id={ LiveStateID } class="state-banner" { components.OOB(oob)... }>
+		if l.Keep {
+			<div class="card">
+				switch l.State {
+					case DataFailed:
+						@connError(l.Error)
+					default:
+						<p class="checking">Checking</p>
+				}
+			</div>
+		}
+	</div>
+}
+
+// liveData is the page's data, or why there is none.
+templ liveData(l Live) {
+	switch l.State {
+		case DataFailed:
+			@connError(l.Error)
+		case DataChecking:
+			<p class="checking">Checking</p>
+		default:
+			{ children... }
+	}
+}
+
+// liveTail are the regions every answer replaces after the page's own.
+templ liveTail(l views.Layout) {
+	@components.TimeID(components.UpdatedID, l.TopBar.UpdatedAt, true)
+	@components.SidebarConnList(l.Sidebar, true)
+}
+
+// backLink is the "← Servers" style link above a detail page's heading.
+templ backLink(id, url string, s components.Section) {
+	<a id={ id } class="back-link" href={ templ.SafeURL(url) }>
+		@components.IconBack("16")
+		@components.SectionName(s, false)
+	</a>
+}
+
+// queueTokens are a server's queues with their weights. The spaces
+// between tokens are for copying and assistive technology; the flex gap
+// spaces them on screen.
+templ queueTokens(qs []QueueToken) {
+	<span class="tokens">
+		for i, q := range qs {
+			if i > 0 {
+				{ " " }
+			}
+			<span>{ q.Name } <span class="muted">{ format.Number(q.Weight) }</span></span>
+		}
+	</span>
+}
+
+// optionTokens are an entry's options, space separated.
+templ optionTokens(opts []string) {
+	<span class="tokens mono">
+		for i, o := range opts {
+			if i > 0 {
+				{ " " }
+			}
+			<span>{ o }</span>
+		}
+	</span>
+}
+
+templ serverStatus(r ServerRow) {
+	switch r.Status {
+		case StatusActive:
+			@components.Badge(components.ToneOK) {
+				Active
+			}
+		case StatusStopped:
+			@components.Badge(components.ToneWarn) {
+				Stopped
+			}
+		default:
+			@components.Badge(components.ToneNeutral) {
+				{ r.StatusText }
+			}
+	}
+}
+
+templ busy(r ServerRow, wide bool) {
+	<span class={ "busy-cell", templ.KV("busy-wide", wide) }>
+		<span class="num busy-num">{ format.Number(r.Busy) } / { format.Number(r.Concurrency) }</span>
+		@components.BusyBar(r.Busy, r.Concurrency)
+	</span>
+}

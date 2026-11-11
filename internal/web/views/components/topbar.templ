@@ -7,11 +7,11 @@ templ TopBarView(m TopBar) {
 				for i, c := range m.Crumbs {
 					<li>
 						if i == len(m.Crumbs)-1 || c.URL == "" {
-							<span aria-current="page">
+							<span aria-current="page" { crumbAttrs(c)... }>
 								@CrumbLabel(c)
 							</span>
 						} else {
-							<a href={ templ.SafeURL(c.URL) }>
+							<a href={ templ.SafeURL(c.URL) } { crumbAttrs(c)... }>
 								@CrumbLabel(c)
 							</a>
 						}
@@ -90,6 +90,18 @@ templ themeButton(t Theme, on bool) {
 				@IconThemeSystem("16")
 			}
 	}
+}
+
+// crumbAttrs are a crumb's optional mono class and title.
+func crumbAttrs(c Crumb) templ.Attributes {
+	a := templ.Attributes{}
+	if c.Mono {
+		a["class"] = "crumb-mono"
+	}
+	if c.Title != "" {
+		a["title"] = c.Title
+	}
+	return a
 }
 
 func ariaBool(b bool) string {
