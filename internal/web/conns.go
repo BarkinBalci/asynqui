@@ -1,37 +1,26 @@
 package web
 
 import (
-	"context"
 	"errors"
 	"time"
 )
 
 // ConnectionSource is what the web layer needs from the connection
-// registry (package conn). It is declared here, where it is used, so tests
-// can pass a fake.
+// registry (package conn), so tests can pass a fake. Each area declares
+// its part next to its handlers: ConnectionLister (the shell and access
+// checks), OverviewSource (the Overview) and QueueSource (the Connection
+// page).
 type ConnectionSource interface {
+	ConnectionLister
+	OverviewSource
+	QueueSource
+}
+
+// ConnectionLister lists the configured connections.
+type ConnectionLister interface {
 	// Connections lists every configured connection in config order, each
 	// with its cached health. It does no Redis I/O.
 	Connections() []Connection
-	// Summary returns the Overview numbers of one connection. It may be
-	// served from a short-lived cache.
-	Summary(ctx context.Context, name string) (Summary, error)
-	// Recheck runs a health check now, stores it and returns it.
-	Recheck(ctx context.Context, name string) Health
-
-	// Queues lists the connection's queues, sorted by name. It may be
-	// served from a short-lived cache shared with Summary.
-	Queues(ctx context.Context, name string) ([]Queue, error)
-	// History returns the daily counters of the last days days, oldest
-	// first, for one queue or, with queue empty, summed over all of them.
-	// An unknown queue is ErrQueueNotFound.
-	History(ctx context.Context, name, queue string, days int) ([]DailyStat, error)
-	// PauseQueue, ResumeQueue and DeleteQueue (empty queues only) act on
-	// one queue. They return errors wrapping ErrQueueNotFound or
-	// ErrQueueNotEmpty where those apply.
-	PauseQueue(ctx context.Context, name, queue string) error
-	ResumeQueue(ctx context.Context, name, queue string) error
-	DeleteQueue(ctx context.Context, name, queue string) error
 }
 
 // Errors a ConnectionSource wraps so handlers can tell causes apart; the
@@ -45,7 +34,8 @@ var (
 type Queue struct {
 	Name   string
 	Paused bool
-	// Size is what asynq counts: every task but the completed ones.
+	// Size is asynq's QueueInfo.Size: every stored task, completed and
+	// aggregating ones included (asynq v0.26.0).
 	Size           int
 	Pending        int
 	Active         int
@@ -107,7 +97,7 @@ type Summary struct {
 }
 
 // lookup finds a connection by name.
-func lookup(src ConnectionSource, name string) (Connection, bool) {
+func lookup(src ConnectionLister, name string) (Connection, bool) {
 	for _, c := range src.Connections() {
 		if c.Name == name {
 			return c, true

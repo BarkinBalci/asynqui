@@ -49,16 +49,15 @@ type queueInspector interface {
 type Queue struct {
 	Name   string
 	Paused bool
-	// Size is Pending + Active + Scheduled + Retry + Aggregating +
-	// Archived, as asynq counts it; completed tasks are not included.
-	Size        int
-	Pending     int
-	Active      int
-	Scheduled   int
-	Retry       int
-	Archived    int
-	Completed   int
-	Aggregating int
+	// Size is asynq's QueueInfo.Size. In asynq v0.26.0 it counts every
+	// stored task: Pending + Active + Scheduled + Retry + Archived +
+	// Completed + Aggregating (its doc comment leaves Completed out).
+	Size      int
+	Pending   int
+	Active    int
+	Scheduled int
+	Retry     int
+	Archived  int
 	// ProcessedToday and FailedToday count asynq's current UTC day.
 	// Processed includes failed tasks.
 	ProcessedToday int
@@ -120,8 +119,6 @@ func (c *Conn) fetchQueues(context.Context) ([]Queue, error) {
 			Scheduled:      qi.Scheduled,
 			Retry:          qi.Retry,
 			Archived:       qi.Archived,
-			Completed:      qi.Completed,
-			Aggregating:    qi.Aggregating,
 			ProcessedToday: qi.Processed,
 			FailedToday:    qi.Failed,
 			Latency:        qi.Latency,
@@ -207,8 +204,10 @@ func (c *Conn) History(ctx context.Context, queue string, days int) ([]DailyStat
 
 // fetchHistory reads Inspector.History per queue (one SISMEMBER and one
 // Lua script reading 2*days counters each), up to queueConcurrency at a
-// time, and sums them by day. asynq returns newest first; the result is
-// oldest first.
+// time, and sums them by UTC day. The days are today and the days-1
+// before it by our clock; a counter that asynq dated outside them (its
+// clock on the other side of midnight) is dropped. The result is oldest
+// first.
 func (c *Conn) fetchHistory(queue string, days int) ([]DailyStat, error) {
 	names, err := c.queues.Queues()
 	if err != nil {
@@ -222,27 +221,25 @@ func (c *Conn) fetchHistory(queue string, days int) ([]DailyStat, error) {
 	}
 
 	out := make([]DailyStat, days)
+	index := make(map[time.Time]int, days)
 	today := utcDay(c.now())
 	for i := range out {
 		out[i].Date = today.AddDate(0, 0, i-days+1)
+		index[out[i].Date] = i
 	}
 	per, err := eachQueue(names, func(q string) ([]*asynq.DailyStats, error) { return c.queues.History(q, days) })
 	if err != nil {
 		return nil, err
 	}
-	for qi, stats := range per {
-		for i, s := range stats {
-			if i >= days || s == nil {
+	for _, stats := range per {
+		for _, s := range stats {
+			if s == nil {
 				continue
 			}
-			j := days - 1 - i
-			if qi == 0 {
-				// asynq's own dates, in case its clock and ours straddle
-				// midnight.
-				out[j].Date = utcDay(s.Date)
+			if i, ok := index[utcDay(s.Date)]; ok {
+				out[i].Processed += s.Processed
+				out[i].Failed += s.Failed
 			}
-			out[j].Processed += s.Processed
-			out[j].Failed += s.Failed
 		}
 	}
 	return out, nil

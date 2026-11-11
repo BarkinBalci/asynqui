@@ -10,7 +10,7 @@ templ SelectionToolbar(form string, filter templ.Component) {
 			@filter
 		}
 		<div class="tacts">
-			<span class="selc" data-sel-label hidden><span data-sel-count>0</span> selected</span>
+			<span class="selc-live" role="status"><span class="selc" data-sel-label hidden><span data-sel-count>0</span> selected</span></span>
 			{ children... }
 		</div>
 	</div>
@@ -25,33 +25,29 @@ templ FilterInput(id, target, label string) {
 	</label>
 }
 
-// ActionButton is a selection toolbar button; the children are its label.
-// A role that may not use it gets a disabled button whose only
-// explanation is a native title.
-templ ActionButton(a Action, icon templ.Component) {
+// ActionButton is a selection toolbar button labelled label. A role that
+// may not use it gets a disabled button whose only explanation is a native
+// title, also folded into its accessible name ("Delete (requires admin)").
+templ ActionButton(a Action, icon templ.Component, label string) {
 	if !a.Allowed {
 		switch a.Need {
 			case RoleAdmin:
-				@lockedAction(a, icon, "Requires admin") {
-					{ children... }
-				}
+				@lockedAction(a, icon, label, "Requires admin", label+" (requires admin)")
 			default:
-				@lockedAction(a, icon, "Requires operator") {
-					{ children... }
-				}
+				@lockedAction(a, icon, label, "Requires operator", label+" (requires operator)")
 		}
 	} else {
 		<button { actionAttrs(a)... }>
 			@icon
-			{ children... }
+			{ label }
 		</button>
 	}
 }
 
-templ lockedAction(a Action, icon templ.Component, title string) {
-	<button id={ a.ID } type="button" class={ "btn", "sm", templ.KV("danger", a.Danger) } disabled title={ title }>
+templ lockedAction(a Action, icon templ.Component, label, title, name string) {
+	<button id={ a.ID } type="button" class={ "btn", "sm", templ.KV("danger", a.Danger) } disabled title={ title } aria-label={ name }>
 		@icon
-		{ children... }
+		{ label }
 	</button>
 }
 
@@ -85,7 +81,8 @@ func actionAttrs(a Action) templ.Attributes {
 // ConfirmDialog is a modal <dialog> that app.js opens for an Action with
 // Confirm set to its id. The children are its body; title and confirm
 // are the heading and the confirm button's label. Cancel and Escape close
-// it; the confirm button submits the form with confirm=1, through htmx.
+// it; Cancel has the initial focus. The confirm button submits the form
+// with confirm=1, through htmx.
 templ ConfirmDialog(d Dialog, title, confirm templ.Component) {
 	<dialog id={ d.ID } class="dialog" aria-labelledby={ d.TitleID() }>
 		<div class="dlghead">
@@ -100,7 +97,7 @@ templ ConfirmDialog(d Dialog, title, confirm templ.Component) {
 			{ children... }
 		</div>
 		<div class="dlgacts">
-			<button type="button" class="btn" data-dialog-close>Cancel</button>
+			<button type="button" class="btn" data-dialog-close autofocus>Cancel</button>
 			<button id={ d.ConfirmID() } type="submit" form={ d.Form } formaction={ templ.SafeURL(d.ConfirmURL) } hx-post={ d.ConfirmURL } hx-swap="none" name="confirm" value="1" class={ "btn", templ.KV("danger", d.Danger), templ.KV("primary", !d.Danger) }>
 				@confirm
 			</button>
@@ -126,13 +123,13 @@ templ ToastRegion(initial templ.Component) {
 }
 
 // Toast is one error toast; the children are its text. app.js removes it
-// after a while, or when its close button is pressed.
+// after a while, or when its close button is pressed (shown only with JS).
 templ Toast() {
 	<div class="toast">
 		<div class="toast-body">
 			{ children... }
 		</div>
-		<button type="button" class="iconbtn" data-toast-close aria-label="Dismiss">
+		<button type="button" class="iconbtn js-only" data-toast-close aria-label="Dismiss">
 			@IconClose("14")
 		</button>
 	</div>

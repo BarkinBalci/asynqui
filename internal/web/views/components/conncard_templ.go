@@ -65,7 +65,7 @@ func ConnCardView(c ConnCard, oob bool) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "article", oobAttr(oob))
+			templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "article", OOB(oob))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

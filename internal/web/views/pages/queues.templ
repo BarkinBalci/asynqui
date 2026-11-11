@@ -8,54 +8,67 @@ import (
 
 // QueuesPage is the Connection page.
 //
+// Requests: #queues-page is the hx-sync scope of all of them. A poll is
+// dropped while another request is in flight and aborted when a user
+// request starts; sorts and chart changes queue (the last one wins);
+// actions queue in order.
+//
 // Polling: the hidden #queues-poll element polls the page URL (hx-swap
-// none). The answer (QueuesPoll) replaces the poll element itself (so its
-// URL follows sort and chart changes), the health badge, the table, the
-// chart card, the Updated time and the sidebar list out of band, by id.
-// The toolbar, the filter and the dialog are outside those regions, so
-// typing, focus and an open dialog survive; the row checkboxes carry
-// hx-preserve, so the selection survives too.
+// none) and the answer (QueuesPoll) swaps regions out of band, by id. The
+// toolbar, the filter and the dialog are outside those regions, so typing,
+// focus and an open dialog survive; the row checkboxes carry hx-preserve,
+// so the selection survives too.
 templ QueuesPage(m Queues) {
 	@views.Page(m.Layout, lastCrumb(m.Layout)) {
-		@queuesPoll(m, false)
-		<div class="page-head">
-			<div class="head-title">
-				<h1 class="h1">
-					@components.SectionName(components.SectionQueues, false)
-				</h1>
-				<span class="mono muted">{ m.Addr }</span>
+		<div id={ QueuesPageID } class="content-region" hx-sync="this:queue last">
+			@queuesPoll(m, false)
+			<div class="page-head">
+				<div class="head-title">
+					<h1 class="h1">
+						@components.SectionName(components.SectionQueues, false)
+					</h1>
+					<span class="mono muted">{ m.Addr }</span>
+				</div>
+				@connHealth(m.Health, false)
 			</div>
-			@connHealth(m.Health, false)
+			@connState(m, false)
+			<section class="card tbl-card" aria-label="Queues">
+				<form id={ QueuesFormID } method="post" action={ templ.SafeURL(m.FormURL) }></form>
+				<div hx-sync={ "#" + QueuesPageID + ":queue all" }>
+					@components.SelectionToolbar(QueuesFormID, components.FilterInput(QueuesFilterID, QueuesRowsID, "Filter queues")) {
+						@components.ActionButton(m.Pause, components.IconPause("14"), "Pause")
+						@components.ActionButton(m.Resume, components.IconResume("14"), "Resume")
+						@components.ActionButton(m.Delete, components.IconDelete("14"), "Delete")
+					}
+				</div>
+				@queuesTable(m, false)
+				<div hx-sync={ "#" + QueuesPageID + ":queue all" }>
+					@components.ConfirmDialog(m.DeleteDialog, deleteTitle(), deleteLabel()) {
+						<ul class="dlg-list" data-sel-names></ul>
+					}
+				</div>
+			</section>
+			@throughputCard(m.Throughput, false)
 		</div>
-		<section class="card tbl-card" aria-label="Queues">
-			<form id={ QueuesFormID } method="post" action={ templ.SafeURL(m.FormURL) }></form>
-			@components.SelectionToolbar(QueuesFormID, components.FilterInput(QueuesFilterID, QueuesRowsID, "Filter queues")) {
-				@components.ActionButton(m.Pause, components.IconPause("14")) {
-					Pause
-				}
-				@components.ActionButton(m.Resume, components.IconResume("14")) {
-					Resume
-				}
-				@components.ActionButton(m.Delete, components.IconDelete("14")) {
-					Delete
-				}
-			}
-			@queuesTable(m, false)
-			@components.ConfirmDialog(m.DeleteDialog, deleteTitle(), deleteLabel()) {
-				<ul class="dlg-list" data-sel-names></ul>
-			}
-		</section>
-		@throughputCard(m.Throughput, false)
 	}
 }
 
-// QueuesPoll answers a poll, a sort or a chart change: every region of
-// the page out of band.
+// QueuesPoll answers a poll, a sort, a chart change or an action, out of
+// band. A user request gets every region. A poll leaves the chart's
+// controls alone and swaps only the chart body, and when it finds no data
+// while the page shows a table it keeps the table and shows a banner.
 templ QueuesPoll(m Queues) {
 	@queuesPoll(m, true)
 	@connHealth(m.Health, true)
-	@queuesTable(m, true)
-	@throughputCard(m.Throughput, true)
+	@connState(m, true)
+	if !m.KeepTable {
+		@queuesTable(m, true)
+	}
+	if !m.Poll || m.Init {
+		@throughputCard(m.Throughput, true)
+	} else if m.State == DataReady {
+		@throughputBody(m.Throughput, true)
+	}
 	@components.TimeID(components.UpdatedID, m.Layout.TopBar.UpdatedAt, true)
 	@components.SidebarConnList(m.Layout.Sidebar, true)
 }
@@ -107,18 +120,37 @@ templ deleteLabel() {
 	Delete
 }
 
+// queuesPoll is the poll trigger. Its own hx-sync drops it while another
+// request of the page is in flight and lets a user request abort it.
 templ queuesPoll(m Queues, oob bool) {
-	<div id={ QueuesPollID } data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hidden { oobAttr(oob)... }></div>
+	<div id={ QueuesPollID } data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-sync={ "#" + QueuesPageID + ":abort" } hidden { components.OOB(oob)... }></div>
 }
 
 templ connHealth(h components.Health, oob bool) {
-	<span id={ ConnHealthID } { oobAttr(oob)... }>
+	<span id={ ConnHealthID } { components.OOB(oob)... }>
 		@components.HealthBadge(h)
 	</span>
 }
 
+// connState is the banner a poll shows when it finds no data but keeps
+// the table; empty otherwise.
+templ connState(m Queues, oob bool) {
+	<div id={ ConnStateID } class="state-banner" { components.OOB(oob)... }>
+		if m.KeepTable {
+			<div class="card">
+				switch m.State {
+					case DataFailed:
+						@connError(m.Error)
+					default:
+						<p class="checking">Checking</p>
+				}
+			</div>
+		}
+	</div>
+}
+
 templ queuesTable(m Queues, oob bool) {
-	<div id={ QueuesTableID } { oobAttr(oob)... }>
+	<div id={ QueuesTableID } { components.OOB(oob)... }>
 		<input type="hidden" form={ QueuesFormID } name="next" value={ m.Next }/>
 		switch m.State {
 			case DataFailed:
@@ -245,19 +277,22 @@ func queueState(paused bool) string {
 
 templ throughputCard(t Throughput, oob bool) {
 	if !t.Show {
-		<section id={ ThroughputID } hidden { oobAttr(oob)... }></section>
+		<section id={ ThroughputID } hidden { components.OOB(oob)... }></section>
 	} else {
-		<section id={ ThroughputID } class="card" aria-labelledby="tp-heading" { oobAttr(oob)... }>
+		<section id={ ThroughputID } class="card" aria-labelledby="tp-heading" { components.OOB(oob)... }>
 			<div class="cardhead">
 				<h2 class="card-title" id="tp-heading">Throughput</h2>
 				<div class="tp-controls">
-					<nav class="seg" aria-label="Range">
-						for _, r := range t.Ranges {
-							<a id={ r.ID } href={ templ.SafeURL(r.URL) } hx-get={ r.URL } hx-swap="none" hx-push-url="true" { rangeAttrs(r.On)... }>{ format.Number(int64(r.Days)) }d</a>
+					<form id={ RangeFormID } class="seg" role="group" aria-label="Range" method="get" action={ templ.SafeURL(t.FormURL) } hx-get={ t.FormURL } hx-swap="none" hx-push-url="true">
+						for _, p := range t.RangeHidden {
+							<input type="hidden" name={ p.Name } value={ p.Value }/>
 						}
-					</nav>
+						for _, r := range t.Ranges {
+							<button id={ r.ID } type="submit" name="range" value={ r.Value } aria-pressed={ pressed(r.On) } { onClass(r.On)... }>{ format.Number(int64(r.Days)) }d</button>
+						}
+					</form>
 					<form id={ PickerFormID } class="tp-picker" method="get" action={ templ.SafeURL(t.FormURL) } hx-get={ t.FormURL } hx-trigger="change" hx-swap="none" hx-push-url="true">
-						for _, p := range t.Hidden {
+						for _, p := range t.PickerHidden {
 							<input type="hidden" name={ p.Name } value={ p.Value }/>
 						}
 						<label>
@@ -273,29 +308,44 @@ templ throughputCard(t Throughput, oob bool) {
 					</form>
 				</div>
 			</div>
-			<div class="tp-body">
-				if t.Error != "" {
-					@connError(t.Error)
-				} else {
-					@components.ThroughputChart(t.Chart)
-				}
-			</div>
+			@throughputBody(t, false)
 		</section>
 	}
 }
 
-func rangeAttrs(on bool) templ.Attributes {
+// throughputBody is the chart, or why there is none. Polls replace only
+// this part of the card.
+templ throughputBody(t Throughput, oob bool) {
+	<div id={ ChartBodyID } class="tp-body" { components.OOB(oob)... }>
+		switch t.State {
+			case DataChecking:
+				<p class="checking">Checking</p>
+			case DataFailed:
+				<div class="conn-error page-error">
+					<div class="conn-error-title">
+						@components.IconAlert("16")
+						Could not load throughput
+					</div>
+					<div class="mono conn-error-text">{ t.Error }</div>
+				</div>
+			default:
+				@components.ThroughputChart(t.Chart)
+		}
+	</div>
+}
+
+func onClass(on bool) templ.Attributes {
 	if on {
-		return templ.Attributes{"class": "on", "aria-current": "true"}
+		return templ.Attributes{"class": "on"}
 	}
 	return nil
 }
 
-func oobAttr(oob bool) templ.Attributes {
-	if oob {
-		return templ.Attributes{"hx-swap-oob": "true"}
+func pressed(on bool) string {
+	if on {
+		return "true"
 	}
-	return nil
+	return "false"
 }
 
 // DeleteQueuesCrumb is the confirmation page's title and last breadcrumb.

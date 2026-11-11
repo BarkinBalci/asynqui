@@ -15,7 +15,7 @@ templ Time(t time.Time) {
 // TimeID is Time with an element id. With oob it replaces the element of
 // the same id when it arrives in an htmx response.
 templ TimeID(id string, t time.Time, oob bool) {
-	<time id={ id } datetime={ format.TimeAttr(t) } { oobAttr(oob)... }>{ format.TimeText(t) }</time>
+	<time id={ id } datetime={ format.TimeAttr(t) } { OOB(oob)... }>{ format.TimeText(t) }</time>
 }
 
 // StatusDot is a connection's health dot, with its state as text for
@@ -44,7 +44,7 @@ templ HealthBadge(h Health) {
 // UnreachableBadge is the Overview heading's "N unreachable" badge. Its
 // wrapper is always rendered, empty when n is 0, so polling can replace it.
 templ UnreachableBadge(n int, oob bool) {
-	<span id={ UnreachableID } { oobAttr(oob)... }>
+	<span id={ UnreachableID } { OOB(oob)... }>
 		if n > 0 {
 			<span class="badge badge-danger"><span class="dot"></span>{ format.Number(int64(n)) } unreachable</span>
 		}
@@ -95,8 +95,9 @@ templ CrumbLabel(c Crumb) {
 	}
 }
 
-// oobAttr marks an element for an htmx out-of-band swap by id.
-func oobAttr(oob bool) templ.Attributes {
+// OOB marks an element for an htmx out-of-band swap by id; pages use it
+// too.
+func OOB(oob bool) templ.Attributes {
 	if oob {
 		return templ.Attributes{"hx-swap-oob": "true"}
 	}

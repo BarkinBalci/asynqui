@@ -29,7 +29,7 @@ templ SidebarNav(m Sidebar) {
 // SidebarConnList is the connection list alone; the Overview poll replaces
 // it out of band so its status dots follow the cards.
 templ SidebarConnList(m Sidebar, oob bool) {
-	<nav id={ SidebarListID } class="conn-list" aria-label="Connections" { oobAttr(oob)... }>
+	<nav id={ SidebarListID } class="conn-list" aria-label="Connections" { OOB(oob)... }>
 		for _, c := range m.Conns {
 			if c.Current {
 				<div class="conn-current" data-filter-text={ c.Name + " " + c.Addr }>

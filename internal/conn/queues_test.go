@@ -31,8 +31,8 @@ func TestQueues(t *testing.T) {
 	}
 	want := []Queue{
 		{Name: "critical", Paused: true, Size: 1, Pending: 1},
-		{Name: "default", Size: 20, Pending: 5, Active: 2, Scheduled: 3, Retry: 1, Archived: 4, Aggregating: 5,
-			Completed: 9, ProcessedToday: 100, FailedToday: 3, Latency: 30 * time.Second, MemoryUsage: 4096},
+		{Name: "default", Size: 20, Pending: 5, Active: 2, Scheduled: 3, Retry: 1, Archived: 4,
+			ProcessedToday: 100, FailedToday: 3, Latency: 30 * time.Second, MemoryUsage: 4096},
 		{Name: "low"},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -83,6 +83,14 @@ func stats(q string, pf ...int) []*asynq.DailyStats {
 	return out
 }
 
+// shifted moves every date of a History reply by d.
+func shifted(in []*asynq.DailyStats, d time.Duration) []*asynq.DailyStats {
+	for _, s := range in {
+		s.Date = s.Date.Add(d)
+	}
+	return in
+}
+
 func TestHistory(t *testing.T) {
 	errBoom := errors.New("boom")
 	history := map[string][]*asynq.DailyStats{
@@ -113,6 +121,13 @@ func TestHistory(t *testing.T) {
 		{"too many days", &fakeQueues{}, "", MaxHistoryDays + 1, nil, ErrHistoryRange},
 		{"a queue fails", &fakeQueues{names: []string{"a", "b"}, history: history, historyErr: map[string]error{"b": errBoom}}, "", 3, nil, errBoom},
 		{"listing fails", &fakeQueues{listErr: errBoom}, "", 3, nil, errBoom},
+		// Summed by UTC day, not by position: a reply dated a day ahead
+		// (asynq's clock past midnight) loses its newest day and shifts
+		// the rest onto their own dates.
+		{"keyed by day", &fakeQueues{names: []string{"a", "b"}, history: map[string][]*asynq.DailyStats{
+			"a": stats("a", 10, 1, 20, 2, 30, 3),
+			"b": shifted(stats("b", 1, 0, 2, 0, 3, 1), 24*time.Hour),
+		}}, "", 3, three(10, 1, 21, 2, 32, 3), nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

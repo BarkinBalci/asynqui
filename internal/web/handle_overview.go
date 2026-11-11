@@ -9,6 +9,15 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
+// OverviewSource is what the Overview needs from the connection registry.
+type OverviewSource interface {
+	// Summary returns the Overview numbers of one connection. It may be
+	// served from a short-lived cache.
+	Summary(ctx context.Context, name string) (Summary, error)
+	// Recheck runs a health check now, stores it and returns it.
+	Recheck(ctx context.Context, name string) Health
+}
+
 // handleOverview serves GET /: one card per visible connection. With
 // HX-Request (a poll) it answers with out-of-band swaps only: each card,
 // the heading badge, the Updated time and the sidebar list.

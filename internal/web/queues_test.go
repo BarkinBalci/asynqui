@@ -1,11 +1,13 @@
 package web
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -204,7 +206,7 @@ func TestQueuesFragment(t *testing.T) {
 		}
 		ids = append(ids, id)
 	})
-	if got := strings.Join(ids, " "); got != "queues-poll conn-health queues-table throughput updated-at sidebar-conns" {
+	if got := strings.Join(ids, " "); got != "queues-poll conn-health conn-state queues-table throughput updated-at sidebar-conns" {
 		t.Errorf("oob ids = %q", got)
 	}
 	if diff := cmp.Diff([]string{"critical", "default", "image-resize", "low"}, rowNames(doc)); diff != "" {
@@ -275,8 +277,8 @@ func TestQueuesPathEscaping(t *testing.T) {
 	if v, _ := doc.Find("#tp-queue option[selected]").Attr("value"); v != "a/b c" {
 		t.Errorf("picked = %q", v)
 	}
-	if href, _ := doc.Find("#range-7").Attr("href"); href != "/asynq/c/main?queue=a%2Fb+c&range=7d" {
-		t.Errorf("range href = %q", href)
+	if v, _ := doc.Find(`#tp-range input[name=queue]`).Attr("value"); v != "a/b c" {
+		t.Errorf("range form queue = %q", v)
 	}
 }
 
@@ -445,18 +447,58 @@ func TestQueueActions(t *testing.T) {
 			t.Errorf("rows after delete = %q", names)
 		}
 
-		// Without JS: the page itself, with the toasts.
+		// Without JS: post, redirect, get. The failures ride in a
+		// short-lived cookie that the page shows once.
 		conns.actErrs["low"] = errors.New("boom")
-		rec = do(t, h, request{method: http.MethodPost, path: "/c/main/queues/delete", form: "confirm=1&queue=low&next=%2Fc%2Fmain%3Fsort%3Dname"})
-		page := parse(t, rec)
-		if rec.Code != http.StatusOK || page.Find("aside.side").Length() != 1 {
-			t.Fatalf("no-JS failure = %d", rec.Code)
+		rec = do(t, h, request{method: http.MethodPost, path: "/c/main/queues/delete", form: "confirm=1&queue=low&queue=default&next=%2Fc%2Fmain%3Fsort%3Dname"})
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/c/main?dir=asc&sort=name" {
+			t.Fatalf("no-JS failure = %d %q", rec.Code, rec.Header().Get("Location"))
 		}
-		if got := text(page.Find("#toasts .toast-body")); got != "Could not delete low boom" {
-			t.Errorf("toast = %q", got)
+		var flash *http.Cookie
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == flashCookie {
+				flash = c
+			}
 		}
-		if v, _ := page.Find(`form[data-pref=theme] input[name=next]`).Attr("value"); v != "/c/main?dir=asc&sort=name" {
-			t.Errorf("prefs next = %q", v)
+		if flash == nil || flash.Path != "/c/main" || flash.MaxAge != flashMaxAge || !flash.HttpOnly || flash.SameSite != http.SameSiteLaxMode {
+			t.Fatalf("flash cookie = %+v", flash)
+		}
+		get := do(t, h, request{path: rec.Header().Get("Location"), cookies: []*http.Cookie{flash}})
+		page := parse(t, get)
+		var shown []string
+		page.Find("#toasts .toast-body").Each(func(_ int, s *goquery.Selection) { shown = append(shown, text(s)) })
+		if diff := cmp.Diff([]string{"Could not delete low boom", "Queue default is not empty"}, shown); diff != "" {
+			t.Errorf("toasts (-want +got):\n%s", diff)
+		}
+		cleared := false
+		for _, c := range get.Result().Cookies() {
+			cleared = cleared || (c.Name == flashCookie && c.MaxAge < 0)
+		}
+		if !cleared {
+			t.Error("flash cookie not cleared after showing")
+		}
+		if page.Find("#toasts [data-toast-close].js-only").Length() != 2 {
+			t.Error("toast close buttons are not JS-only")
+		}
+		// Success sets no cookie.
+		rec = do(t, h, request{method: http.MethodPost, path: "/c/main/queues/resume", form: "queue=image-resize"})
+		if len(rec.Result().Cookies()) != 0 {
+			t.Error("success set a cookie")
+		}
+	})
+	t.Run("flash cookie is display data only", func(t *testing.T) {
+		h, _ := newTestServer(t, admin)
+		for _, v := range []string{"%%%", base64.RawURLEncoding.EncodeToString([]byte(`[{"v":9,"k":0,"q":"x"}]`)),
+			base64.RawURLEncoding.EncodeToString([]byte(`[]`)), strings.Repeat("A", flashMaxBytes+1)} {
+			doc := parse(t, do(t, h, request{path: "/c/main", cookies: []*http.Cookie{{Name: flashCookie, Value: v}}}))
+			if doc.Find("#toasts .toast").Length() != 0 {
+				t.Errorf("cookie %.20q showed a toast", v)
+			}
+		}
+		v := base64.RawURLEncoding.EncodeToString([]byte(`[{"v":0,"k":0,"q":"<b>x</b>","d":"<script>"}]`))
+		rec := do(t, h, request{path: "/c/main", cookies: []*http.Cookie{{Name: flashCookie, Value: v}}})
+		if strings.Contains(rec.Body.String(), "<b>x</b>") || text(parse(t, rec).Find("#toasts .toast-body")) != "Could not pause <b>x</b> <script>" {
+			t.Errorf("flash text not escaped: %q", text(parse(t, rec).Find("#toasts")))
 		}
 	})
 	t.Run("delete without confirm asks on a page", func(t *testing.T) {
@@ -597,37 +639,57 @@ func TestQueuesUnavailable(t *testing.T) {
 func TestQueuesThroughput(t *testing.T) {
 	tests := []struct {
 		query     string
-		asked     string
+		asked     []string
 		days      int
 		on        string
 		picked    string
-		hiddenQry string
+		hiddenQry string // the picker's hidden fields
+		rangeQry  string // the range form's
 	}{
-		{"", "/14", 14, "range-14", "", ""},
-		{"?range=7d", "/7", 7, "range-7", "", "range=7d"},
-		{"?range=90d&queue=low", "low/90", 90, "range-90", "low", "range=90d"},
-		{"?range=30d&sort=name", "/30", 30, "range-30", "", "dir=asc&range=30d&sort=name"},
-		// Unknown values fall back: range 14, all queues.
-		{"?range=13d&queue=nope", "/14", 14, "range-14", "", ""},
+		{"", []string{"/14"}, 14, "range-14", "", "", ""},
+		{"?range=7d", []string{"/7"}, 7, "range-7", "", "range=7d", ""},
+		{"?range=90d&queue=low", []string{"low/90"}, 90, "range-90", "low", "range=90d", "queue=low"},
+		{"?range=30d&sort=name", []string{"/30"}, 30, "range-30", "", "dir=asc&range=30d&sort=name", "dir=asc&sort=name"},
+		// Unknown values fall back: range 14, all queues. History starts
+		// with the queues, so an unknown queue costs a second read.
+		{"?range=13d&queue=nope", []string{"nope/14", "/14"}, 14, "range-14", "", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
 			h, conns := newTestServer(t, testOpts{})
 			doc := parse(t, do(t, h, request{path: "/c/main" + tt.query}))
-			if diff := cmp.Diff([]string{tt.asked}, conns.historyAsked); diff != "" {
+			if diff := cmp.Diff(tt.asked, conns.historyAsked); diff != "" {
 				t.Errorf("History asked (-want +got):\n%s", diff)
 			}
 			card := doc.Find("#throughput")
 			if got := text(card.Find("h2")); got != "Throughput" {
 				t.Errorf("title = %q", got)
 			}
-			var ranges []string
-			card.Find(".seg a").Each(func(_ int, s *goquery.Selection) { ranges = append(ranges, text(s)) })
-			if strings.Join(ranges, " ") != "7d 14d 30d 90d" {
-				t.Errorf("ranges = %q", ranges)
+			rf := card.Find("form#tp-range.seg[role=group][aria-label=Range]")
+			for attr, want := range map[string]string{"method": "get", "action": "/c/main", "hx-get": "/c/main", "hx-swap": "none", "hx-push-url": "true"} {
+				if got, _ := rf.Attr(attr); got != want {
+					t.Errorf("range form %s = %q, want %q", attr, got, want)
+				}
 			}
-			if card.Find(".seg a.on[aria-current=true]").AttrOr("id", "") != tt.on {
-				t.Errorf("on range = %q", card.Find(".seg a.on").AttrOr("id", ""))
+			var ranges []string
+			rf.Find("button[type=submit][name=range]").Each(func(_ int, s *goquery.Selection) {
+				ranges = append(ranges, text(s)+"="+s.AttrOr("value", "")+"/"+s.AttrOr("aria-pressed", ""))
+			})
+			want := map[string]string{"range-7": "7d=7d", "range-14": "14d=14d", "range-30": "30d=30d", "range-90": "90d=90d"}
+			var wantRanges []string
+			for _, id := range []string{"range-7", "range-14", "range-30", "range-90"} {
+				wantRanges = append(wantRanges, want[id]+"/"+strconv.FormatBool(id == tt.on))
+			}
+			if diff := cmp.Diff(wantRanges, ranges); diff != "" {
+				t.Errorf("ranges (-want +got):\n%s", diff)
+			}
+			if rf.Find("button.on").AttrOr("id", "") != tt.on || rf.Find("button.on").Length() != 1 {
+				t.Errorf("on range = %q", rf.Find("button.on").AttrOr("id", ""))
+			}
+			rq := url.Values{}
+			rf.Find("input[type=hidden]").Each(func(_ int, s *goquery.Selection) { rq.Add(s.AttrOr("name", ""), s.AttrOr("value", "")) })
+			if rq.Encode() != tt.rangeQry {
+				t.Errorf("range hidden = %q, want %q", rq.Encode(), tt.rangeQry)
 			}
 			if v := card.Find("#tp-queue option[selected]").AttrOr("value", "?"); v != tt.picked {
 				t.Errorf("picked = %q", v)

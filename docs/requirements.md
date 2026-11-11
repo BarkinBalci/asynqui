@@ -190,7 +190,7 @@ authz:
 - **Code blocks:** dark block with a copy button pinned top-right, outside the scrolling area (`scrollbar-gutter: stable`).
 - **Fonts:** self-hosted and embedded. No requests to third-party domains.
 - **Tokens:** colours, spacing and type follow the canvas "Style guide" board. Dark mode swaps CSS custom properties.
-- **Errors:** an action that fails shows its error in a toast, bottom right, which goes away after 8s or when dismissed. An action request that fails without an answer (network error, 403, 500) shows "Request failed".
+- **Errors:** an action that fails shows its error in a toast, bottom right, which goes away after 8s or when dismissed (the dismiss button needs JS). An action request that fails without an answer (network error, 403, 500) shows "Request failed".
 
 ### Localization and time
 - **English only** in v1. No i18n framework.
@@ -240,21 +240,22 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - Pause and Resume need operator, Delete needs admin. A role that cannot use one gets it disabled with the native `title` "Requires operator" or "Requires admin".
   - Pause is enabled only if any selected queue is running, and pauses only those; Resume likewise for paused queues. Delete is enabled when anything is selected.
   - Delete asks first in a dialog listing the selected queues. Only empty queues can be deleted (asynq's `DeleteQueue` without force); a queue with tasks fails with "Queue {name} is not empty". There is no force delete.
-  - Without JS the buttons still post; Delete then answers with a confirmation page.
+  - Without JS the buttons still post; Delete then answers with a confirmation page. After an action without JS the page redirects back (no re-post on reload), showing any failures as toasts carried in the one-minute `asynqui_flash` cookie.
   - Failures show one toast per queue ("Queue {name} not found", "Queue {name} is not empty", or "Could not pause {name}" with the error in mono). Success just refreshes the table. The selection is kept.
 - **Table:** checkbox, then Queue (link), State (Running/Paused badge), Size, Pending, Active, Scheduled, Retry, Archived, Latency, Memory, Processed today, Failed today.
   - Every column sorts, server-side; default Size desc. A column sorts ascending first for Queue and State, descending for numbers; ties go by name. Sort state is `?sort=&dir=` in the URL.
-  - Latency shows tenths of a second under a minute ("12.6s"), and "—" for a paused queue, which sorts last. Over 30s it is red. Memory is asynq's sampled `QueueInfo.MemoryUsage`, in binary units ("41.8 MB").
+  - Latency shows tenths of a second under a minute ("12.6s"), and "—" for a paused queue, which sorts last. Over 30s it is red. Memory is asynq's sampled `QueueInfo.MemoryUsage`, in binary units ("41.8 MB"). Size is asynq's `QueueInfo.Size`, which in asynq v0.26.0 counts every stored task, completed and aggregating ones included.
   - Retry and Archived are coloured when non-zero, Failed today red when non-zero.
   - The `<tfoot>` Total row sums everything except Latency, which shows "—".
   - Empty state: "No queues".
 - **Throughput card:**
-  - a range selector: 7d / 14d / 30d / 90d, default 14d (`?range=`)
+  - a range selector: 7d / 14d / 30d / 90d (a button group with `aria-pressed`), default 14d (`?range=`)
   - a Queue picker: "All queues" or one queue (`?queue=`); an unknown queue falls back to all
   - one overlaid line chart: Processed on the left axis, Failed on the right axis, each axis colour-matched to its line; x labels about a week apart, the last one "Today"
   - a hover tooltip per day (the SVG's native `<title>`) with the date, Processed, Failed and Failure rate; the same data is in a visually hidden table
 - **Chart rendering:** server-rendered SVG, with the data from `Inspector.History` (summed over the queues for "All queues").
-- **Unreachable connection:** the page shows "Connection failed" with the error in place of the table, and no chart. A read that does not finish within 5s shows "Checking" until a poll has it.
+- **Unreachable connection:** the page shows "Connection failed" with the error in place of the table, and no chart. A read that does not finish within 5s shows "Checking" until a poll has it. A history read that misses it shows "Checking" in the chart; another history error shows "Could not load throughput" with the error.
+- **Polling** refreshes the table, the chart body, the badge and the Updated time, never the chart controls. When a poll finds the connection failing, the table (and the selection) stays and a banner above it shows "Connection failed" or "Checking".
 
 ### 6.3 Queue `/c/{conn}/queues/{queue}?state=…`
 - **Header:**
@@ -413,6 +414,7 @@ Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control:
   - `Permissions-Policy` turning off camera, microphone, geolocation, payment, USB and the other device features the UI never uses. Clipboard write stays allowed for the copy buttons.
 - **Errors:** unknown paths get 404. Error responses are never cached (`Cache-Control: no-store`). For a signed-in page request they are a page inside the layout (breadcrumb `Overview / Not found`); for htmx and non-GET requests plain text; without an identity a standalone page with no sidebar, so connection names are never shown to strangers.
 - **Preference cookies** (`asynqui_theme`, `asynqui_refresh`): `Path=<base_path>`, one year, `SameSite=Lax`, `Secure` per `auth.session.cookie_secure`, readable by `app.js`.
+- **Flash cookie** (`asynqui_flash`): the failures of an action posted without JS, for the page after its redirect. `Path=<base>/c/{conn}`, 60s, `HttpOnly`, `SameSite=Lax`, `Secure` per `cookie_secure`; read once, then cleared. It holds display text only and is not signed.
 - **CSRF:** `http.CrossOriginProtection` on every unsafe method. Extra allowed origins come from `server.trusted_origins` (each is passed to `AddTrustedOrigin`; an invalid origin fails startup). The proxy must preserve the `Host` header ([deployment.md](deployment.md)).
 - **Panics and render failures:** recovered, logged (panics with the stack), answered with 500 "Something went wrong" unless the response has already started.
 

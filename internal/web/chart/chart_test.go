@@ -39,6 +39,23 @@ func TestNiceScale(t *testing.T) {
 	}
 }
 
+// Near the top of int64 no round step fits: the scale clamps instead of
+// overflowing.
+func TestNiceScaleOverflow(t *testing.T) {
+	for _, v := range []int64{5e18, math.MaxInt64 / 3 * 2, math.MaxInt64 - 1, math.MaxInt64} {
+		s := NiceScale(v)
+		if s.Step <= 0 || s.Max != s.Step*Intervals || s.Max < 0 {
+			t.Errorf("NiceScale(%d) = %+v", v, s)
+		}
+		if s.Max < v && s.Max != math.MaxInt64/Intervals*Intervals {
+			t.Errorf("NiceScale(%d) = %+v: short of the value without clamping", v, s)
+		}
+	}
+	if s := NiceScale(math.MaxInt64); s.Step != math.MaxInt64/Intervals {
+		t.Errorf("NiceScale(MaxInt64) = %+v", s)
+	}
+}
+
 func TestTicks(t *testing.T) {
 	if diff := cmp.Diff([]int64{0, 25000, 50000, 75000}, Scale{25000, 75000}.Ticks()); diff != "" {
 		t.Error(diff)

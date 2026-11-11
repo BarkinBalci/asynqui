@@ -5,6 +5,7 @@
 package chart
 
 import (
+	"math"
 	"strconv"
 	"strings"
 )
@@ -23,24 +24,32 @@ type Scale struct {
 // NiceScale returns the smallest scale whose top is at least maxVal and
 // whose step is a round number: 1, 2, 2.5 or 5 times a power of ten, and
 // always a whole number (so 2.5 appears only from 25 on). A maxVal of 0
-// or less gives the scale 0, 1, 2, 3.
+// or less gives the scale 0, 1, 2, 3. Near math.MaxInt64, where no round
+// step fits, the step is the largest whole one that does (clamped).
 func NiceScale(maxVal int64) Scale {
 	if maxVal <= 0 {
 		return Scale{Step: 1, Max: Intervals}
 	}
-	need := (maxVal + Intervals - 1) / Intervals // smallest step that fits
+	need := maxVal / Intervals // smallest step that fits, without overflow
+	if maxVal%Intervals != 0 {
+		need++
+	}
 	for mag := int64(1); ; mag *= 10 {
 		for _, m := range []struct{ num, den int64 }{{1, 1}, {2, 1}, {5, 2}, {5, 1}} {
 			if m.den > 1 && mag < 10 {
 				continue // 2.5 is not a whole step
 			}
 			step := mag * m.num / m.den
-			if step >= need {
+			if step >= need && step <= math.MaxInt64/Intervals {
 				return Scale{Step: step, Max: step * Intervals}
 			}
 		}
-		if mag > (1<<62)/10 {
-			return Scale{Step: need, Max: need * Intervals}
+		if mag > math.MaxInt64/50 {
+			// No round step fits in an int64: use the largest whole step
+			// that does. Its top may fall just short of maxVal; Plot.Y
+			// clamps.
+			step := min(need, math.MaxInt64/Intervals)
+			return Scale{Step: step, Max: step * Intervals}
 		}
 	}
 }

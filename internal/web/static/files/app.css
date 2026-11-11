@@ -484,6 +484,8 @@ summary.account-btn:hover{background:var(--control-hover)}
 .page-error{border-top:0}
 .checking{padding:14px 20px;color:var(--muted)}
 html.js [data-nojs]{display:none}
+html:not(.js) .js-only{display:none}
+.state-banner:empty{display:none}
 
 /* selection toolbar */
 .tbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border)}
@@ -521,7 +523,7 @@ html.js [data-nojs]{display:none}
 .seg a:hover{background:var(--control-hover);color:var(--text-2);text-decoration:none}
 .seg a.on{background:var(--seg-on-bg);color:var(--seg-on-fg);font-weight:600}
 .seg a:focus-visible{outline-offset:-2px}
-.select{height:36px;padding:0 10px;border:1px solid var(--control-border);border-radius:var(--radius);background:var(--field-bg);color:var(--text);font-size:13px}
+.select{height:34px;padding:0 10px;border:1px solid var(--control-border);border-radius:var(--radius);background:var(--field-bg);color:var(--text);font-size:13px}
 
 /* throughput chart */
 .tp-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px}

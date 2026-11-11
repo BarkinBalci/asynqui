@@ -96,7 +96,7 @@ func TestQueuesTableEmpty(t *testing.T) {
 
 func TestQueuesPollIDs(t *testing.T) {
 	m := tableModel()
-	m.Throughput = Throughput{Show: true, Ranges: []RangeLink{{ID: "range-7", Days: 7, URL: "/c/main?range=7d"}}, Queues: []string{"default"}, FormURL: "/c/main",
+	m.Throughput = Throughput{Show: true, Ranges: []RangeButton{{ID: "range-7", Days: 7, Value: "7d"}}, Queues: []string{"default"}, FormURL: "/c/main",
 		Chart: components.Chart{ID: ChartID, ViewW: "1000", ViewH: "240", Peak: -1}}
 	doc := renderDoc(t, m)
 	n := 0

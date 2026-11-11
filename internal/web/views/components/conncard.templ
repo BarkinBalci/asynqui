@@ -6,7 +6,7 @@ import "github.com/BarkinBalci/asynqui/internal/web/format"
 // unreachable with the error and "Retry now", or unknown ("Checking").
 // With oob it replaces the card of the same id in an htmx response.
 templ ConnCardView(c ConnCard, oob bool) {
-	<article id={ CardID(c.Name) } class="card conn-card" data-health={ healthValue(c.Health) } { oobAttr(oob)... }>
+	<article id={ CardID(c.Name) } class="card conn-card" data-health={ healthValue(c.Health) } { OOB(oob)... }>
 		<div class="conn-head">
 			<div class="conn-title">
 				<h2 class="card-title">{ c.Name }</h2>

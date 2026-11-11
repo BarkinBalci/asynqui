@@ -411,8 +411,43 @@
 	});
 
 	// ---- after htmx swaps (including out-of-band ones) ----
+	// Right after each swap, synchronously: re-apply the filters (so
+	// filtered-out rows never flash back), recompute the toolbars, and give
+	// focus back to the element that had it. An hx-preserve'd checkbox is
+	// the same element after the swap, but htmx takes it out of the
+	// document while swapping, which drops its focus; htmx itself only
+	// refocuses elements it replaced.
+	var focusBefore = null;
+	document.addEventListener("htmx:beforeSwap", function () {
+		focusBefore = document.activeElement;
+	});
+
+	function restoreFocus() {
+		var f = focusBefore, now = document.activeElement;
+		if (f && f !== document.body && f.isConnected && (!now || now === document.body)) {
+			f.focus({ preventScroll: true });
+		}
+	}
+
+	function applyFilters() {
+		var filters = document.querySelectorAll("input[data-filter]");
+		for (var i = 0; i < filters.length; i++) {
+			applyFilter(filters[i]);
+		}
+	}
+
+	function syncAfterSwap() {
+		applyFilters();
+		updateSelections();
+		restoreFocus();
+	}
+	document.addEventListener("htmx:oobAfterSwap", syncAfterSwap);
+	document.addEventListener("htmx:afterSwap", syncAfterSwap);
+
+	// Then, once per batch of swaps: times, copy buttons, toasts.
 	var afterSwapQueued = false;
 	function afterSwap() {
+		restoreFocus();
 		if (afterSwapQueued) {
 			return;
 		}
@@ -421,11 +456,6 @@
 			afterSwapQueued = false;
 			renderTimes(document);
 			revealCopy(document);
-			var filters = document.querySelectorAll("input[data-filter]");
-			for (var i = 0; i < filters.length; i++) {
-				applyFilter(filters[i]);
-			}
-			updateSelections();
 			armToasts();
 		}, 0);
 	}

@@ -133,14 +133,14 @@ func TestActionButton(t *testing.T) {
 		{"operator allowed", func(a Action) Action { a.Allowed = true; return a },
 			map[string]string{"type": "submit", "form": "queues-form", "formaction": "/c/main/queues/pause", "hx-post": "/c/main/queues/pause",
 				"hx-swap": "none", "data-enable": "state", "data-state": "running", "class": "btn sm"},
-			[]string{"disabled", "title", "data-confirm"}},
+			[]string{"disabled", "title", "data-confirm", "aria-label"}},
 		{"viewer", func(a Action) Action { return a },
-			map[string]string{"type": "button", "disabled": "", "title": "Requires operator", "class": "btn sm"},
+			map[string]string{"type": "button", "disabled": "", "title": "Requires operator", "aria-label": "Pause (requires operator)", "class": "btn sm"},
 			[]string{"hx-post", "formaction", "data-enable", "form"}},
 		{"operator on an admin action", func(a Action) Action {
 			a.Need, a.Danger, a.Confirm, a.Enable = RoleAdmin, true, "dlg", EnableAny
 			return a
-		}, map[string]string{"type": "button", "disabled": "", "title": "Requires admin", "class": "btn sm danger"},
+		}, map[string]string{"type": "button", "disabled": "", "title": "Requires admin", "aria-label": "Pause (requires admin)", "class": "btn sm danger"},
 			[]string{"hx-post", "data-confirm", "data-enable"}},
 		{"admin with confirmation", func(a Action) Action {
 			a.Allowed, a.Need, a.Danger, a.Confirm, a.Enable = true, RoleAdmin, true, "dlg", EnableAny
@@ -150,7 +150,7 @@ func TestActionButton(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			doc := render(t, withChildren(ActionButton(tt.a(base), IconPause("14")), "Pause"))
+			doc := render(t, ActionButton(tt.a(base), IconPause("14"), "Pause"))
 			b := doc.Find("button#act-pause")
 			for k, want := range tt.attrs {
 				if got, ok := b.Attr(k); !ok || got != want {
@@ -179,7 +179,7 @@ func TestSelectionToolbar(t *testing.T) {
 	if _, hidden := sel.Attr("hidden"); !hidden || text(sel) != "0 selected" || sel.Find("[data-sel-count]").Length() != 1 {
 		t.Errorf("selected label = %q", text(sel))
 	}
-	if bar.Find(".tacts button").Length() != 1 {
+	if bar.Find(".tacts button").Length() != 1 || bar.Find(".selc-live[role=status] > .selc[data-sel-label]").Length() != 1 {
 		t.Error("children missing")
 	}
 }
@@ -191,7 +191,7 @@ func TestConfirmDialog(t *testing.T) {
 	if l, _ := dlg.Attr("aria-labelledby"); l != "queues-delete-title" || text(dlg.Find("h2#queues-delete-title")) != "Delete queues" {
 		t.Error("dialog title")
 	}
-	if dlg.Find("[data-dialog-close]").Length() != 2 || dlg.Find("ul[data-sel-names]").Length() != 1 {
+	if dlg.Find("[data-dialog-close]").Length() != 2 || text(dlg.Find("button[autofocus]")) != "Cancel" || dlg.Find("ul[data-sel-names]").Length() != 1 {
 		t.Error("close buttons or body missing")
 	}
 	b := dlg.Find("button#queues-delete-confirm")
@@ -214,7 +214,7 @@ func TestToasts(t *testing.T) {
 	}
 	doc = render(t, withChild(ToastsOOB(), withChildren(Toast(), "Queue x is not empty")))
 	oob := doc.Find(`div[hx-swap-oob="beforeend:#toasts"]`)
-	if text(oob.Find(".toast .toast-body")) != "Queue x is not empty" || oob.Find("button[data-toast-close][aria-label=Dismiss]").Length() != 1 {
+	if text(oob.Find(".toast .toast-body")) != "Queue x is not empty" || oob.Find("button.js-only[data-toast-close][aria-label=Dismiss]").Length() != 1 {
 		t.Errorf("toast = %q", text(oob))
 	}
 }

@@ -47,8 +47,14 @@ const (
 // focusable elements inside them have stable ids too (sort-, qsel-,
 // qlink-, range- prefixes).
 const (
+	// QueuesPageID wraps the page: it is the hx-sync scope of every
+	// request the page makes.
+	QueuesPageID    = "queues-page"
 	QueuesPollID    = "queues-poll"
 	ConnHealthID    = "conn-health"
+	ConnStateID     = "conn-state"
+	ChartBodyID     = "tp-chart"
+	RangeFormID     = "tp-range"
 	QueuesTableID   = "queues-table"
 	QueuesRowsID    = "queues-rows"
 	QueuesFormID    = "queues-form"
@@ -86,6 +92,16 @@ type Queues struct {
 	// PollURL is the page URL the poll fetches, with the current state.
 	PollURL    string
 	Throughput Throughput
+
+	// Poll marks the answer to a poll: it leaves the chart's controls
+	// alone (an open select stays open) and swaps only the chart body.
+	Poll bool
+	// Init marks a poll from a page that has no data regions yet (it was
+	// rendered failed or checking): it gets every region.
+	Init bool
+	// KeepTable marks a poll that found no data while the page shows a
+	// table: the table, and the selection in it, stay; a banner says why.
+	KeepTable bool
 }
 
 // QueueRow is one queue in the table, or the Total row.
@@ -108,25 +124,28 @@ type QueueRow struct {
 type Throughput struct {
 	// Show is false when the page has no data: the card is left out.
 	Show bool
-	// Error is why the history could not be read; it replaces the chart.
+	// State is the history's: DataChecking when it missed the page
+	// budget, DataFailed (with Error) when it could not be read.
+	State  DataState
 	Error  string
-	Ranges []RangeLink
+	Ranges []RangeButton
 	// Queue is the picked queue; empty is all queues.
 	Queue  string
 	Queues []string
-	// FormURL is the page URL the queue picker submits to (GET), with
-	// Hidden carrying the rest of the state.
-	FormURL string
-	Hidden  []Param
-	Chart   components.Chart
+	// FormURL is the page URL both controls submit to (GET). RangeHidden
+	// and PickerHidden carry the rest of the state for each.
+	FormURL      string
+	RangeHidden  []Param
+	PickerHidden []Param
+	Chart        components.Chart
 }
 
-// RangeLink is one of the 7d/14d/30d/90d links.
-type RangeLink struct {
-	ID   string
-	Days int
-	URL  string
-	On   bool
+// RangeButton is one of the 7d/14d/30d/90d buttons.
+type RangeButton struct {
+	ID    string
+	Days  int
+	Value string // the ?range= value
+	On    bool
 }
 
 // Param is a hidden form field.

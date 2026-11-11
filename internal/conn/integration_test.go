@@ -328,7 +328,8 @@ func TestIntegrationQueues(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(srv.Shutdown)
-	enqueue(t, client, 1, "ok", asynq.Queue("work"))
+	// Kept as completed for an hour: asynq counts it in Size.
+	enqueue(t, client, 1, "ok", asynq.Queue("work"), asynq.Retention(time.Hour))
 	enqueue(t, client, 1, "fail", asynq.Queue("flaky"), asynq.MaxRetry(3))
 	eventually(t, "a processed and a failed task", func() bool {
 		qs, err := c.Queues(t.Context())
@@ -359,6 +360,11 @@ func TestIntegrationQueues(t *testing.T) {
 	}
 	if low := qs[2]; low.Scheduled != 1 || low.Size != 1 {
 		t.Errorf("low = %+v", low)
+	}
+	// asynq v0.26.0 counts completed tasks in Size (its doc says
+	// otherwise); the table shows asynq's number.
+	if work := qs[3]; work.Size != 1 || work.Pending != 0 || work.Active != 0 {
+		t.Errorf("work = %+v, want Size 1 for the completed task", work)
 	}
 
 	hist, err := c.History(t.Context(), "", 7)
