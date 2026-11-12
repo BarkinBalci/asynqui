@@ -313,52 +313,59 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 - **Empty state:** "No servers running".
 
 ### 6.6 Server detail `/c/{conn}/servers/{id}`
-- **Header:** the host (h1), a state badge, the server ID (mono) with Copy ID.
-- **Active workers ({n}) table:** Task ID (links to the task), Type, Queue, Started, Running for. Sortable by Started and Running for, default Running for desc. Running for ≥10m is shown amber and semibold.
+- **Header:** the host (h1), a state badge, the server ID (mono) with Copy ID. The header is rendered once; polls refresh the badge, the workers and the details.
+- **Active workers ({n}) table:** Task ID (links to the task), Type, Queue, Started (absolute), Running for. Sortable by Started and Running for, default Running for desc. Running for ≥10m is shown amber and semibold.
 - **Details:** PID, Started, Concurrency, Busy, Queues (with weights), Strict priority (Yes/No).
-- **Unknown ID:** shows "Server not found".
+- **Unknown ID:** shows "Server not found" (404).
 
 ### 6.7 Schedulers `/c/{conn}/schedulers`
 - **Header:** "Schedulers" and a "Filter entries" input.
 - **Read-only table** (no checkboxes):
   - Entry ID (shortened, a row link)
-  - Spec: cron spec in mono plus a muted human description, e.g. "every day at 06:00"
+  - Spec: the cron spec in mono
   - Task type
-  - Payload (mono, truncated, not sortable)
-  - Options (space-separated tokens, not sortable)
+  - Payload (mono, a one-line preview cut on the server, not sortable)
+  - Options (`name=value` tokens such as `queue=critical max_retry=3`, not sortable)
   - Next run, Last run: relative, with absolute in the title
 - **Default sort:** Next run asc.
 - **Entry identity:** entries are identified by **entry ID**, which the scheduler regenerates on restart. Duplicate task types are allowed and shown as separate rows.
+- **Pending a user decision:** a muted human description of the spec ("every day at 06:00"). It needs a cron describer (a dependency, or hand-written English in Go), so it is not built.
 
 ### 6.8 Scheduler entry `/c/{conn}/schedulers/{id}`
 - **Breadcrumb:** ends with the short entry ID.
 - **Header:**
   - the task type (h1)
   - the full entry ID (mono) with Copy ID
-- **Payload card:** JSON / Raw toggle and copy button.
+  - Rendered once, with the payload card; polls refresh the history and the details.
+- **Payload card:** indented JSON, with a JSON / Raw toggle (links, `?payload=raw`, so it works without JS) when the payload is JSON; anything else is shown raw. A copy button copies what is shown. An empty payload shows "No payload".
 - **Enqueue history table:**
-  - Enqueued at (sortable, default desc)
-  - Task ID (links to the task while it still exists, otherwise plain text)
-  - Status ("Enqueued" or "Error")
-  - Error
-  - Paginated through `ListSchedulerEnqueueEvents`.
-- **Details:** Spec with its description, Queue, Options, Next run, Last run, Scheduler (host + pid).
-- **Stale or unknown ID:** shows "Entry not found" with a link back to Schedulers.
+  - Enqueued at (absolute), newest first
+  - Task ID (links to the task while it still exists, otherwise plain text). Existence is checked with `GetTaskInfo` in the entry's queue and reused for 10s; a failed check shows plain text.
+  - Paginated through `ListSchedulerEnqueueEvents`, 20 per page, "21–40" with ‹ ›. asynq keeps the newest 1000 events, so pages past ceil(1000/20) = 50 are out of range: nothing is read and the page links back to the last one.
+- **Details:** Spec, Queue, Options (without the queue), Next run and Last run (absolute, then the muted relative time).
+- **Queue:** the entry's `Queue` option. **asynq limitation:** a queue set on the task itself (`asynq.NewTask(…, asynq.Queue("x"))`) is not recorded in the entry, so an entry without a `Queue` option has an unknown queue. It shows "—" (never "default"), and its history task IDs are not linked.
+- **Stale or unknown ID:** shows "Entry not found" (404) with a link back to Schedulers.
+- **Dropped (no asynq API):**
+  - History **Status** and **Error** columns: an asynq enqueue event holds only the task ID and the time, and failed enqueues are not recorded.
+  - **Sortable Enqueued at:** asynq lists events newest first and gives no count, so oldest first would mean reading all 1000.
+  - **Scheduler (host + pid):** an asynq scheduler entry does not carry its scheduler's host or PID.
+  - The spec description is pending (§6.7).
 
 ### 6.9 Redis / Valkey info `/c/{conn}/info`
 - **Title:** "Redis info" or "Valkey info", per §2, with the address underneath.
 - **Info cards:**
   - Version
   - Mode
-  - Uptime
+  - Uptime ("41 days" from a day on)
   - Connected clients
   - Used memory / peak (with maxmemory underneath)
   - maxmemory-policy
   - Keyspace db{n}: keys, plus "with expiry" underneath
-  - TLS: On/Off, plus version and verification underneath
-  - ACL user
+  - TLS: On/Off, plus the version of the last handshake (recorded by `tls.Config.VerifyConnection`) and whether the server certificate is verified underneath
+  - ACL user ("default" when none is configured)
 - **Instance-wide values:** memory, clients and uptime belong to the whole instance. They appear **only** on this page, never on the Overview or Queues pages, because several connections can share one instance.
-- **Raw INFO card:** the full `INFO` output in a code block with a copy button.
+- **Raw INFO card:** the `INFO` output in a code block (height-capped) with a copy button. The Keyspace and Keysizes lines of other DBs are left out, since other connections may own them. Polls refresh the cards only; the raw block is the page load's snapshot.
+- **Errors:** a network error or timeout shows "Connection failed" and the connection down (sidebar included). An error reply, such as `NOPERM` for an ACL user without `INFO`, shows "Could not read INFO" with the error, and the connection stays up. The Servers and Schedulers pages do the same.
 
 ## 7. Operational
 

@@ -18,7 +18,7 @@ templ ServersPage(m Servers) {
 					@components.SectionName(components.SectionServers, false)
 				</h1>
 			</div>
-			@liveBanner(m.Live, false)
+			@liveBanner(m.Live, serversFailed(), false)
 			<section class="card tbl-card" aria-label="Servers">
 				<div class="tbar">
 					@components.FilterInput(ServersFilterID, ServersRowsID, "Filter servers")
@@ -32,7 +32,7 @@ templ ServersPage(m Servers) {
 // ServersPoll answers a poll or a sort, out of band.
 templ ServersPoll(m Servers) {
 	@livePoll(m.Live, true)
-	@liveBanner(m.Live, true)
+	@liveBanner(m.Live, serversFailed(), true)
 	if !m.Live.Keep {
 		@serversTable(m, true)
 	}
@@ -41,7 +41,7 @@ templ ServersPoll(m Servers) {
 
 templ serversTable(m Servers, oob bool) {
 	<div id={ ServersTableID } { components.OOB(oob)... }>
-		@liveData(m.Live) {
+		@liveData(m.Live, serversFailed()) {
 			@components.Table("servers") {
 				<thead>
 					<tr>
@@ -96,14 +96,14 @@ templ serversTable(m Servers, oob bool) {
 }
 
 // ServerPage is the Server detail page: the server's details and the
-// tasks it is processing. The whole body below the back link is one
-// polled region.
+// tasks it is processing. The heading is rendered once; polls replace the
+// state badge, the workers and the details (see Server.Whole).
 templ ServerPage(m Server) {
 	@views.Page(m.Layout, lastCrumb(m.Layout)) {
 		<div id={ ServerPageID } class="content-region" hx-sync="this:queue last">
 			@livePoll(m.Live, false)
 			@backLink("back-servers", m.ServersURL, components.SectionServers)
-			@liveBanner(m.Live, false)
+			@liveBanner(m.Live, serversFailed(), false)
 			@serverBody(m, false)
 		</div>
 	}
@@ -112,9 +112,15 @@ templ ServerPage(m Server) {
 // ServerPoll answers a poll or a sort, out of band.
 templ ServerPoll(m Server) {
 	@livePoll(m.Live, true)
-	@liveBanner(m.Live, true)
+	@liveBanner(m.Live, serversFailed(), true)
 	if !m.Live.Keep {
-		@serverBody(m, true)
+		if m.Whole {
+			@serverBody(m, true)
+		} else {
+			@serverState(m.Row, true)
+			@serverWorkers(m, true)
+			@serverDetails(m, true)
+		}
 	}
 	@liveTail(m.Layout)
 }
@@ -133,7 +139,7 @@ templ serverBody(m Server, oob bool) {
 				</h1>
 			</div>
 			<div class="card">
-				@liveData(m.Live)
+				@liveData(m.Live, serversFailed())
 			</div>
 		} else if !m.Found {
 			<div class="page-head">
@@ -145,96 +151,104 @@ templ serverBody(m Server, oob bool) {
 			<div class="detail-head">
 				<div class="detail-title">
 					<h1 class="h1 h1-mono mono">{ m.Row.Host }</h1>
-					@serverStatus(m.Row)
+					@serverState(m.Row, false)
 				</div>
 				<div class="detail-id">
-					<span class="mono muted">{ m.Row.ID }</span>
+					<span class="mono">{ m.Row.ID }</span>
 					@components.CopyIDButton(CopyIDButtonID, m.Row.ID)
 				</div>
 			</div>
 			<div class="detail-cols">
-				<section class="card detail-main" aria-labelledby="workers-title">
-					<div class="cardhead">
-						<h2 class="card-title" id="workers-title">Active workers ({ format.Number(int64(len(m.Workers))) })</h2>
-					</div>
-					@components.Table("workers") {
-						<thead>
-							<tr>
-								@components.PlainHeader(false) {
-									Task ID
-								}
-								@components.PlainHeader(false) {
-									Type
-								}
-								@components.PlainHeader(false) {
-									Queue
-								}
-								@components.SortHeader(m.Heads[WrkColStarted]) {
-									Started
-								}
-								@components.SortHeader(m.Heads[WrkColRunning]) {
-									Running for
-								}
-								@components.PlainHeader(false) {
-									Deadline
-								}
-							</tr>
-						</thead>
-						<tbody>
-							if len(m.Workers) == 0 {
-								@components.EmptyRow(6) {
-									No active workers
-								}
-							}
-							for _, w := range m.Workers {
-								<tr>
-									<td><a id={ w.LinkID } class="mono" href={ templ.SafeURL(w.TaskURL) } title={ w.TaskID }>{ w.ShortID }</a></td>
-									<td class="strong">{ w.Type }</td>
-									<td><a id={ w.QueueLinkID } href={ templ.SafeURL(w.QueueURL) }>{ w.Queue }</a></td>
-									<td>
-										@components.TimeAbs(w.Started)
-									</td>
-									<td class={ "num", templ.KV("c-long", w.Long) }>{ format.Duration(w.Running) }</td>
-									<td>
-										@components.TimeOrDash(w.Deadline)
-									</td>
-								</tr>
-							}
-						</tbody>
-					}
-				</section>
-				<section class="card detail-side" aria-labelledby="details-title">
-					<div class="cardhead">
-						<h2 class="card-title" id="details-title">Details</h2>
-					</div>
-					<dl class="dl">
-						<dt>PID</dt>
-						<dd class="mono">{ format.Int(m.Row.PID) }</dd>
-						<dt>Started</dt>
-						<dd>
-							@components.Time(m.Row.Started)
-						</dd>
-						<dt>Concurrency</dt>
-						<dd class="num">{ format.Number(m.Row.Concurrency) }</dd>
-						<dt>Busy</dt>
-						<dd>
-							@busy(m.Row, true)
-						</dd>
-						<dt>Queues</dt>
-						<dd>
-							@queueTokens(m.Row.Queues)
-						</dd>
-						<dt>Strict priority</dt>
-						<dd>
-							if m.Strict {
-								Yes
-							} else {
-								No
-							}
-						</dd>
-					</dl>
-				</section>
+				@serverWorkers(m, false)
+				@serverDetails(m, false)
 			</div>
 		}
 	</div>
+}
+
+templ serverState(r ServerRow, oob bool) {
+	<span id={ ServerStateID } { components.OOB(oob)... }>
+		@serverStatus(r)
+	</span>
+}
+
+templ serverWorkers(m Server, oob bool) {
+	<section id={ ServerWorkersID } class="card detail-main" aria-labelledby="workers-title" { components.OOB(oob)... }>
+		<div class="cardhead">
+			<h2 class="card-title" id="workers-title">Active workers ({ format.Number(int64(len(m.Workers))) })</h2>
+		</div>
+		@components.Table("workers") {
+			<thead>
+				<tr>
+					@components.PlainHeader(false) {
+						Task ID
+					}
+					@components.PlainHeader(false) {
+						Type
+					}
+					@components.PlainHeader(false) {
+						Queue
+					}
+					@components.SortHeader(m.Heads[WrkColStarted]) {
+						Started
+					}
+					@components.SortHeader(m.Heads[WrkColRunning]) {
+						Running for
+					}
+				</tr>
+			</thead>
+			<tbody>
+				if len(m.Workers) == 0 {
+					@components.EmptyRow(5) {
+						No active workers
+					}
+				}
+				for _, w := range m.Workers {
+					<tr>
+						<td><a id={ w.LinkID } class="mono" href={ templ.SafeURL(w.TaskURL) } title={ w.TaskID }>{ w.ShortID }</a></td>
+						<td class="c-type">{ w.Type }</td>
+						<td><a id={ w.QueueLinkID } href={ templ.SafeURL(w.QueueURL) }>{ w.Queue }</a></td>
+						<td>
+							@components.TimeAbs(w.Started)
+						</td>
+						<td class={ "num", templ.KV("c-long", w.Long) }>{ format.Duration(w.Running) }</td>
+					</tr>
+				}
+			</tbody>
+		}
+	</section>
+}
+
+templ serverDetails(m Server, oob bool) {
+	<section id={ ServerDetailsID } class="card detail-side" aria-labelledby="details-title" { components.OOB(oob)... }>
+		<div class="cardhead">
+			<h2 class="card-title" id="details-title">Details</h2>
+		</div>
+		<dl class="dl">
+			<dt>PID</dt>
+			<dd class="mono">{ format.Int(m.Row.PID) }</dd>
+			<dt>Started</dt>
+			<dd>
+				@components.Time(m.Row.Started)
+			</dd>
+			<dt>Concurrency</dt>
+			<dd class="num">{ format.Number(m.Row.Concurrency) }</dd>
+			<dt>Busy</dt>
+			<dd>
+				@busy(m.Row, true)
+			</dd>
+			<dt>Queues</dt>
+			<dd>
+				@queueTokens(m.Row.Queues)
+			</dd>
+			<dt>Strict priority</dt>
+			<dd>
+				if m.Strict {
+					Yes
+				} else {
+					No
+				}
+			</dd>
+		</dl>
+	</section>
 }

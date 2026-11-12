@@ -83,8 +83,9 @@ func TestParseInfoFixtures(t *testing.T) {
 		t.Run(tt.fixture, func(t *testing.T) {
 			raw := readInfoFixture(t, tt.fixture)
 			info := parseInfo(raw, 0)
-			if info.Raw != raw {
-				t.Error("Raw is not the reply as received")
+			// Raw is the reply without other DBs' keyspace lines.
+			if want := strings.Replace(raw, "db2:keys=7,expires=0,avg_ttl=0,subexpiry=0\r\n", "", 1); info.Raw != want {
+				t.Error("Raw is not the reply as received, less db2")
 			}
 			got := summary{Backend: info.Backend, Version: info.Version, RedisVersion: info.RedisVersion, Picks: map[string]string{}}
 			for _, s := range info.Sections {
@@ -161,7 +162,7 @@ func TestParseInfoOrderAndEdges(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.want.Raw = tt.raw
+			tt.want.Raw = strings.Replace(tt.raw, "db1:keys=1,expires=0\r\n", "", 1) // db 0's view
 			if diff := cmp.Diff(tt.want, parseInfo(tt.raw, 0)); diff != "" {
 				t.Errorf("parseInfo (-want +got):\n%s", diff)
 			}

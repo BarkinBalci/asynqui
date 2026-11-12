@@ -15,9 +15,10 @@ import (
 // scope of every request it makes. The hidden poll element (PollID) polls
 // PollURL with hx-swap none; it is dropped while another request is in
 // flight and aborted by a user request (a sort or page link), whose answer
-// replaces every region and pushes the URL. Answers swap regions out of
-// band, by id: the poll element itself, the state banner (LiveStateID),
-// the page's data regions, the Updated time and the sidebar list.
+// replaces the regions it changes and pushes the URL. Answers swap regions
+// out of band, by id: the poll element itself, the state banner
+// (LiveStateID), the page's data regions, the Updated time and the sidebar
+// list.
 type Live struct {
 	PageID  string
 	PollID  string
@@ -25,8 +26,11 @@ type Live struct {
 	// State and Error say whether the page has its data.
 	State DataState
 	Error string
+	// Down marks a failure to reach the server ("Connection failed"); any
+	// other failure is the read's own error (NOPERM, LOADING).
+	Down bool
 	// Poll marks the answer to a poll, Init one from a page rendered
-	// without data, which gets every region.
+	// without its data regions, which gets every region.
 	Poll bool
 	Init bool
 	// Keep marks a poll that found no data while the page shows some: the
@@ -49,6 +53,9 @@ const (
 	ServerPageID     = "server-page"
 	ServerPollID     = "server-poll"
 	ServerBodyID     = "server-body"
+	ServerStateID    = "server-state"
+	ServerWorkersID  = "server-workers"
+	ServerDetailsID  = "server-details"
 	SchedulersPageID = "schedulers-page"
 	SchedulersPollID = "schedulers-poll"
 	SchedulersTable  = "schedulers-table"
@@ -57,6 +64,8 @@ const (
 	EntryPageID      = "entry-page"
 	EntryPollID      = "entry-poll"
 	EntryBodyID      = "entry-body"
+	EntryHistoryID   = "entry-history"
+	EntryDetailsID   = "entry-details"
 	InfoPageID       = "info-page"
 	InfoPollID       = "info-poll"
 	InfoCardsID      = "info-cards"
@@ -139,13 +148,18 @@ const (
 	NumWorkerColumns
 )
 
-// Server is the Server detail page.
+// Server is the Server detail page. The heading (host, ID, Copy ID) is
+// rendered once; polls replace only the state badge, the workers and the
+// details, unless Whole.
 type Server struct {
 	Layout views.Layout
 	Live   Live
 	// Found is false when the server is gone (or never was): the page
 	// shows "Server not found".
-	Found      bool
+	Found bool
+	// Whole sends the whole body, heading included: to a page rendered
+	// without it (no data, or not found), and when the server is gone.
+	Whole      bool
 	ServersURL string
 	Row        ServerRow
 	Strict     bool
@@ -164,7 +178,6 @@ type WorkerRow struct {
 	QueueURL    string
 	QueueLinkID string
 	Started     time.Time
-	Deadline    time.Time
 	Running     time.Duration
 	// Long highlights a task running for 10 minutes or more.
 	Long bool
@@ -192,6 +205,12 @@ type Schedulers struct {
 	Heads  [NumEntryColumns]components.SortHead
 }
 
+// OptionToken is one option of a scheduler entry, shown as name=value.
+type OptionToken struct {
+	Name  string
+	Value string
+}
+
 // EntryRow is one scheduler entry.
 type EntryRow struct {
 	ID       string
@@ -200,31 +219,48 @@ type EntryRow struct {
 	LinkID   string
 	Spec     string
 	TaskType string
-	Payload  string
-	Options  []string
-	Next     time.Time
+	// Payload is a one-line preview; PayloadTitle a longer one.
+	Payload      string
+	PayloadTitle string
+	Options      []OptionToken
+	Next         time.Time
 	// Prev is zero before the first enqueue.
 	Prev time.Time
 }
 
-// SchedulerEntry is the Scheduler entry page.
+// SchedulerEntry is the Scheduler entry page. The heading (task type, ID,
+// Copy ID) and the payload card are rendered once; polls replace only the
+// history and the details, unless Whole.
 type SchedulerEntry struct {
 	Layout views.Layout
 	Live   Live
 	// Found is false for a stale or unknown entry ID: the page shows
 	// "Entry not found".
-	Found         bool
+	Found bool
+	// Whole sends the whole body: see Server.Whole.
+	Whole         bool
 	SchedulersURL string
 	ID            string
 	TaskType      string
 	Spec          string
-	Queue         string
-	QueueURL      string
-	Options       []string
-	// Payload is the payload as shown: indented when it is JSON.
-	Payload string
-	Next    time.Time
-	Prev    time.Time
+	// Queue is empty when the entry has no Queue option: asynq does not
+	// record a queue set on the task, so it is unknown and shown as "—".
+	Queue    string
+	QueueURL string
+	Options  []OptionToken
+	// Payload is the payload as shown: indented JSON, or the raw text
+	// (Raw, or not JSON). PayloadJSON offers the JSON/Raw toggle, whose
+	// links are JSONURL and RawURL.
+	Payload     string
+	NoPayload   bool
+	PayloadJSON bool
+	Raw         bool
+	JSONURL     string
+	RawURL      string
+	Next        time.Time
+	Prev        time.Time
+	// Now is the time the relative run times are written against.
+	Now time.Time
 	// History is the enqueue history page.
 	History History
 }
@@ -246,7 +282,8 @@ type History struct {
 type EventRow struct {
 	TaskID  string
 	ShortID string
-	// TaskURL is empty when the task is gone: the ID is plain text.
+	// TaskURL is empty when the task is gone or the queue unknown: the ID
+	// is plain text.
 	TaskURL    string
 	LinkID     string
 	EnqueuedAt time.Time
@@ -278,6 +315,8 @@ type InfoData struct {
 	Expires         int64
 	TLS             bool
 	TLSVerified     bool
+	// TLSVersion is the last handshake's tls.VersionTLS1x; 0 unknown.
+	TLSVersion uint16
 	// Username is the ACL user; empty is the default user.
 	Username string
 	Raw      string

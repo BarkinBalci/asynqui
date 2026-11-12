@@ -44,8 +44,10 @@ type Info struct {
 	// ACL user (empty for the default user).
 	TLS         bool
 	TLSVerified bool
-	Username    string
-	// Raw is the full INFO reply.
+	// TLSVersion is the tls.VersionTLS1x of the last handshake; 0 unknown.
+	TLSVersion uint16
+	Username   string
+	// Raw is the INFO reply without other DBs' keyspace lines.
 	Raw string
 }
 
@@ -65,7 +67,9 @@ func handleInfo(d *deps) http.Handler {
 
 func (d *deps) infoModel(r *http.Request, a access, ans answer) pages.Info {
 	name := a.conn.Name
-	info, rd := readLive(d, r, a, func(ctx context.Context) (Info, error) { return d.conns.Info(ctx, name) })
+	ctx, cancel := d.pageContext(r.Context())
+	defer cancel()
+	info, rd := readLive(ctx, a, func(ctx context.Context) (Info, error) { return d.conns.Info(ctx, name) })
 	// The label follows the backend detected so far, and this read when it
 	// has one.
 	valkey := a.conn.Valkey
@@ -76,7 +80,7 @@ func (d *deps) infoModel(r *http.Request, a access, ans answer) pages.Info {
 	crumb.Valkey = valkey
 	m := pages.Info{
 		Layout: d.liveLayout(r, a, components.SectionInfo, rd, crumb),
-		Live:   d.live(ans, pages.InfoPageID, pages.InfoPollID, rd, nil, "c", name, "info"),
+		Live:   d.live(ans, pages.InfoPageID, pages.InfoPollID, rd, rd.state == pages.DataReady, nil, "c", name, "info"),
 		Addr:   a.conn.Addr,
 		Valkey: valkey,
 		Data: pages.InfoData{
@@ -94,6 +98,7 @@ func (d *deps) infoModel(r *http.Request, a access, ans answer) pages.Info {
 			Expires:          info.Expires,
 			TLS:              info.TLS,
 			TLSVerified:      info.TLSVerified,
+			TLSVersion:       info.TLSVersion,
 			Username:         info.Username,
 			Raw:              info.Raw,
 		},

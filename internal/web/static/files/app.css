@@ -604,7 +604,11 @@ html:not(.js) .js-only{display:none}
 .busy-fill{fill:var(--accent)}
 .c-long{color:var(--orange-fg);font-weight:600}
 .cell-trunc{max-width:200px;overflow:hidden;text-overflow:ellipsis}
-.code-card pre{max-height:300px;padding:16px 56px 16px 20px;border-radius:0 0 var(--radius-lg) var(--radius-lg);white-space:pre}
+.code-card pre{padding:16px 56px 16px 20px;border-radius:0 0 var(--radius-lg) var(--radius-lg);white-space:pre}
+.raw-card pre{max-height:300px}
+.c-type{font-weight:500}
+.c-payload{color:var(--text-2)}
+.run-rel{margin-left:4px;font-weight:400}
 .pager{display:inline-flex;align-items:center;gap:6px;font-size:13px}
 .pager .muted{margin-right:4px}
 .pager-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:1px solid var(--control-border);border-radius:var(--radius);color:var(--text-2);font-size:16px;line-height:1}

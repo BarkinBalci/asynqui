@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"net/http"
 	"net/url"
@@ -30,39 +31,53 @@ func liveAnswer(r *http.Request, pollID string) answer {
 type liveRead struct {
 	state pages.DataState
 	err   string
+	// unreachable marks a failure to reach the server: the connection is
+	// known down, or the read failed with a network error or timeout. An
+	// error reply (NOPERM, LOADING) is shown inline instead.
+	unreachable bool
 	// down marks a connection reachable at the last PING whose read
-	// failed now: the sidebar shows it down, as the Overview does.
+	// could not reach it now: the sidebar shows it down, as the Overview
+	// does.
 	down bool
 }
 
-// readLive runs fetch within the page budget, unless the connection is
-// known to be down. A read that misses the budget is "Checking"; it goes
-// on in conn's cache, so the next poll usually has it.
-func readLive[T any](d *deps, r *http.Request, a access, fetch func(ctx context.Context) (T, error)) (T, liveRead) {
+// pageContext bounds a Live page's reads by the page budget. Pages with
+// two reads share it.
+func (d *deps) pageContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, d.pageBudget)
+}
+
+// readLive runs fetch under ctx (see pageContext), unless the connection
+// is known to be down. A read that misses the budget is "Checking"; it
+// goes on in conn's cache, so the next poll usually has it.
+func readLive[T any](ctx context.Context, a access, fetch func(ctx context.Context) (T, error)) (T, liveRead) {
 	var zero T
 	if a.conn.Health.State == HealthDown {
-		return zero, liveRead{state: pages.DataFailed, err: errText(a.conn.Health.Err)}
+		return zero, liveRead{state: pages.DataFailed, err: errText(a.conn.Health.Err), unreachable: true}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
-	defer cancel()
 	v, err := fetch(ctx)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return zero, liveRead{state: pages.DataChecking}
 	case err != nil:
-		return zero, liveRead{state: pages.DataFailed, err: errText(err), down: true}
+		down := errors.Is(err, ErrUnreachable)
+		return zero, liveRead{state: pages.DataFailed, err: errText(err), unreachable: down, down: down}
 	}
 	return v, liveRead{state: pages.DataReady}
 }
 
-// live builds a Live page's frame. q is the page's state in its URL query
-// (without defaults); path are the page's path segments.
-func (d *deps) live(ans answer, pageID, pollID string, rd liveRead, q url.Values, path ...string) pages.Live {
+// live builds a Live page's frame. regions reports whether the page has
+// its data regions (it read its data, and a detail page found its item);
+// without them the poll asks for every region (?poll=init). q is the
+// page's state in its URL query (without defaults); path are the page's
+// path segments.
+func (d *deps) live(ans answer, pageID, pollID string, rd liveRead, regions bool, q url.Values, path ...string) pages.Live {
 	l := pages.Live{
 		PageID: pageID,
 		PollID: pollID,
 		State:  rd.state,
 		Error:  rd.err,
+		Down:   rd.unreachable,
 		Poll:   ans.poll,
 		Init:   ans.init,
 		Keep:   ans.poll && !ans.init && rd.state != pages.DataReady,
@@ -71,7 +86,7 @@ func (d *deps) live(ans answer, pageID, pollID string, rd liveRead, q url.Values
 	if pq == nil {
 		pq = url.Values{}
 	}
-	if rd.state != pages.DataReady && !l.Keep {
+	if !regions && !l.Keep {
 		pq.Set("poll", pollInit) // the page will have no data regions
 	}
 	l.PollURL = d.urlQuery(pq, path...)

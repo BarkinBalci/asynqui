@@ -102,10 +102,12 @@ func (d *deps) serversModel(r *http.Request, a access, spec sortSpec, ans answer
 	st := spec.parse(r.URL.Query())
 	q := url.Values{}
 	spec.set(q, st)
-	servers, rd := readLive(d, r, a, func(ctx context.Context) ([]Server, error) { return d.conns.Servers(ctx, name) })
+	ctx, cancel := d.pageContext(r.Context())
+	defer cancel()
+	servers, rd := readLive(ctx, a, func(ctx context.Context) ([]Server, error) { return d.conns.Servers(ctx, name) })
 	m := pages.Servers{
 		Layout: d.liveLayout(r, a, components.SectionServers, rd, sectionCrumb(d, components.SectionServers, "c", name, "servers")),
-		Live:   d.live(ans, pages.ServersPageID, pages.ServersPollID, rd, q, "c", name, "servers"),
+		Live:   d.live(ans, pages.ServersPageID, pages.ServersPollID, rd, rd.state == pages.DataReady, q, "c", name, "servers"),
 	}
 	sorted := slices.Clone(servers)
 	slices.SortStableFunc(sorted, func(x, y Server) int { return compareServers(x, y, pages.ServerColumn(st.col), st.desc) })
@@ -197,19 +199,25 @@ func (d *deps) serverModel(r *http.Request, a access, spec sortSpec, ans answer)
 	st := spec.parse(r.URL.Query())
 	q := url.Values{}
 	spec.set(q, st)
-	servers, rd := readLive(d, r, a, func(ctx context.Context) ([]Server, error) { return d.conns.Servers(ctx, name) })
+	ctx, cancel := d.pageContext(r.Context())
+	defer cancel()
+	servers, rd := readLive(ctx, a, func(ctx context.Context) ([]Server, error) { return d.conns.Servers(ctx, name) })
 	i := slices.IndexFunc(servers, func(s Server) bool { return s.ID == id })
 
 	crumb := components.Crumb{Text: format.ShortID(id), Mono: true, Title: id}
 	if i >= 0 && servers[i].Host != "" {
 		crumb.Text = servers[i].Host
 	}
+	ready := rd.state == pages.DataReady
 	m := pages.Server{
 		Layout: d.liveLayout(r, a, components.SectionServers, rd,
 			sectionCrumb(d, components.SectionServers, "c", name, "servers"), crumb),
-		Live:       d.live(ans, pages.ServerPageID, pages.ServerPollID, rd, q, "c", name, "servers", id),
+		Live:       d.live(ans, pages.ServerPageID, pages.ServerPollID, rd, ready && i >= 0, q, "c", name, "servers", id),
 		ServersURL: d.url("c", name, "servers"),
 		Found:      i >= 0,
+		// The page has no heading or regions to update yet, or the
+		// server just went away.
+		Whole: ans.init || !ready || i < 0,
 	}
 	if i < 0 {
 		return m
@@ -241,7 +249,6 @@ func (d *deps) serverModel(r *http.Request, a access, spec sortSpec, ans answer)
 			QueueURL:    d.url("c", name, "queues", wk.Queue),
 			QueueLinkID: components.HexID("wqueue-", wk.TaskID),
 			Started:     wk.Started,
-			Deadline:    wk.Deadline,
 			Running:     running,
 			Long:        running >= longRunning,
 		})

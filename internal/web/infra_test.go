@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
@@ -112,18 +113,23 @@ func infraConns() *fakeConns {
 		}},
 		entries: map[string][]SchedulerEntry{"main": {
 			{ID: entryA, Spec: "0 6 * * *", TaskType: "report:daily", Payload: []byte(`{"tz":"Europe/Istanbul"}`),
-				Options: []string{`Queue("reports")`, "MaxRetry(3)"}, Queue: "reports", Next: now.Add(6 * time.Hour), Prev: now.Add(-18 * time.Hour)},
-			{ID: entryB, Spec: "*/5 * * * *", TaskType: "cache:warm", Payload: []byte("\xff raw"), Queue: "default", Next: now.Add(3 * time.Minute)},
+				Options: []EntryOption{{"queue", "reports"}, {"max_retry", "3"}}, Queue: "reports", Next: now.Add(6 * time.Hour), Prev: now.Add(-18 * time.Hour)},
+			// No Queue option: the queue is unknown.
+			{ID: entryB, Spec: "*/5 * * * *", TaskType: "cache:warm", Payload: []byte("\xff raw <b>" + strings.Repeat("x", 100)),
+				Options: []EntryOption{{"timeout", "2m0s"}}, Next: now.Add(3 * time.Minute)},
 		}},
-		events: map[string][]EnqueueEvent{entryA: {
-			{TaskID: taskNew, EnqueuedAt: now.Add(-18 * time.Hour), TaskExists: true},
-			{TaskID: taskOld, EnqueuedAt: now.Add(-42 * time.Hour)},
-		}},
+		events: map[string][]EnqueueEvent{
+			entryA: {
+				{TaskID: taskNew, EnqueuedAt: now.Add(-18 * time.Hour), TaskExists: true},
+				{TaskID: taskOld, EnqueuedAt: now.Add(-42 * time.Hour)},
+			},
+			entryB: {{TaskID: taskNew, EnqueuedAt: now.Add(-time.Minute)}},
+		},
 		info: map[string]Info{"main": {
-			Version: "7.2.4", RedisVersion: "7.2.4", Mode: "standalone", Uptime: 41 * 24 * time.Hour,
+			Version: "7.2.4", RedisVersion: "7.2.4", Mode: "standalone", Uptime: 41*24*time.Hour + 3*time.Hour,
 			ConnectedClients: 184, UsedMemory: 1299202048, UsedMemoryPeak: 1761607680, MaxMemory: 4 << 30,
-			MaxMemoryPolicy: "noeviction", Keys: 48213, Expires: 3902, TLS: true, TLSVerified: true, Username: "asynq-ui",
-			Raw: "# Server\r\nredis_version:7.2.4\r\n",
+			MaxMemoryPolicy: "noeviction", Keys: 48213, Expires: 3902, TLS: true, TLSVerified: true, TLSVersion: tls.VersionTLS13,
+			Username: "asynq-ui", Raw: "# Server\r\nredis_version:7.2.4\r\n",
 		}},
 	}
 	return c
@@ -311,11 +317,19 @@ func TestServerPage(t *testing.T) {
 	})
 	// Default: Running for desc.
 	want := [][]string{
-		{"9f2c4e1a-1111…", "email:welcome", "emails", "Nov 8, 00:27:52", "14m 00s", "Nov 8, 00:42:52"},
-		{"b7d01e93-2222…", "user:sync", "default", "Nov 8, 00:41:40", "12s", "—"},
+		{"9f2c4e1a-1111…", "email:welcome", "emails", "Nov 8, 00:27:52", "14m 00s"},
+		{"b7d01e93-2222…", "user:sync", "default", "Nov 8, 00:41:40", "12s"},
 	}
 	if diff := cmp.Diff(want, rows); diff != "" {
 		t.Errorf("workers (-want +got):\n%s", diff)
+	}
+	var heads []string
+	doc.Find("#workers thead th").Each(func(_ int, s *goquery.Selection) { heads = append(heads, text(s)) })
+	if diff := cmp.Diff([]string{"Task ID", "Type", "Queue", "Started", "Running for"}, heads); diff != "" {
+		t.Errorf("worker columns (-want +got):\n%s", diff)
+	}
+	if !doc.Find("#workers tbody td").Eq(1).HasClass("c-type") {
+		t.Error("type cell not at weight 500")
 	}
 	task := doc.Find("#workers tbody a.mono").First()
 	if href, _ := task.Attr("href"); href != "/asynq/c/main/queues/emails/tasks/"+taskOld {
@@ -354,15 +368,58 @@ func TestServerPage(t *testing.T) {
 		if got := crumbsOf(doc); got != "Overview / main / Servers / gone-server-…" {
 			t.Errorf("crumbs = %q", got)
 		}
-		if doc.Find("#server-poll").Length() != 1 {
-			t.Error("no poll")
+		// The page has no regions to update: it polls for all of them.
+		if got, _ := doc.Find("#server-poll").Attr("hx-get"); got != "/asynq/c/main/servers/gone-server-id-123?poll=init" {
+			t.Errorf("poll URL = %q", got)
 		}
-		// A poll that finds it gone gets the notice, with 200 so htmx swaps.
+		// A poll that finds it gone gets the whole body, with 200 so htmx
+		// swaps it.
 		rec = do(t, h, request{path: "/asynq/c/main/servers/gone-server-id-123", htmx: true, header: map[string]string{"HX-Trigger": "server-poll"}})
-		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Server not found") {
-			t.Errorf("poll = %d", rec.Code)
+		if rec.Code != http.StatusOK || oobIDs(t, parse(t, rec)) != "server-poll live-state server-body updated-at sidebar-conns" ||
+			!strings.Contains(rec.Body.String(), "Server not found") {
+			t.Errorf("poll = %d %q", rec.Code, oobIDs(t, parse(t, rec)))
 		}
 	})
+}
+
+// TestDetailHeadingsOutsidePolls: the heading, the ID and its Copy ID
+// button (and the entry's payload) are rendered once; polls swap only the
+// state badge, workers, history and details, so the copy button never
+// flickers. An init poll (the page had no data) gets the whole body.
+func TestDetailHeadingsOutsidePolls(t *testing.T) {
+	h, _ := newTestServer(t, testOpts{conns: infraConns()})
+	for _, p := range []struct{ path, poll, regions string }{
+		{"/c/main/servers/" + srvA, "server-poll", "server-state server-workers server-details"},
+		{"/c/main/schedulers/" + entryA, "entry-poll", "entry-history entry-details"},
+	} {
+		doc := parse(t, do(t, h, request{path: p.path}))
+		for _, id := range strings.Fields(p.regions) {
+			if doc.Find("#"+id).Find("#copy-id, h1, #payload").Length() != 0 {
+				t.Errorf("%s: #%s holds the heading, the copy button or the payload", p.path, id)
+			}
+		}
+		for _, rq := range []request{
+			{path: p.path, htmx: true, header: map[string]string{"HX-Trigger": p.poll}},
+			{path: p.path + "?sort=started", htmx: true},
+		} {
+			ans := parse(t, do(t, h, rq))
+			if ans.Find("#copy-id, h1, #payload").Length() != 0 {
+				t.Errorf("%s: an answer re-renders the heading", rq.path)
+			}
+			if got := oobIDs(t, ans); got != p.poll+" live-state "+p.regions+" updated-at sidebar-conns" {
+				t.Errorf("%s: oob ids = %q", rq.path, got)
+			}
+		}
+		init := parse(t, do(t, h, request{path: p.path + "?poll=init", htmx: true, header: map[string]string{"HX-Trigger": p.poll}}))
+		if init.Find("#copy-id").Length() != 1 {
+			t.Errorf("%s: an init poll lacks the heading", p.path)
+		}
+	}
+	// The badge is its own region.
+	doc := parse(t, do(t, h, request{path: "/c/main/servers/" + srvA, htmx: true, header: map[string]string{"HX-Trigger": "server-poll"}}))
+	if got := text(doc.Find("#server-state .badge")); got != "Active" {
+		t.Errorf("state badge = %q", got)
+	}
 }
 
 func TestSchedulersPage(t *testing.T) {
@@ -395,11 +452,19 @@ func TestSchedulersPage(t *testing.T) {
 		rows = append(rows, cells)
 	})
 	want := [][]string{ // Next run asc
-		{"8a42f0c3-7d16…", "*/5 * * * *", "cache:warm", "� raw", "", "Nov 8, 00:44:52", "—"},
-		{"3c1e8d27-5b90…", "0 6 * * *", "report:daily", `{"tz":"Europe/Istanbul"}`, `Queue("reports") MaxRetry(3)`, "Nov 8, 06:41:52", "Nov 7, 06:41:52"},
+		// The payload is cut to 60 runes on the server.
+		{"8a42f0c3-7d16…", "*/5 * * * *", "cache:warm", "� raw <b>" + strings.Repeat("x", 51) + "…", "timeout=2m0s", "Nov 8, 00:44:52", "—"},
+		{"3c1e8d27-5b90…", "0 6 * * *", "report:daily", `{"tz":"Europe/Istanbul"}`, "queue=reports max_retry=3", "Nov 8, 06:41:52", "Nov 7, 06:41:52"},
 	}
 	if diff := cmp.Diff(want, rows); diff != "" {
 		t.Errorf("rows (-want +got):\n%s", diff)
+	}
+	cell := doc.Find("#schedulers-rows td.c-payload").First()
+	if v, _ := cell.Attr("title"); v != "� raw <b>"+strings.Repeat("x", 100) || !cell.HasClass("mono") {
+		t.Errorf("payload title = %q", v)
+	}
+	if doc.Find("#schedulers-rows td.c-type").Length() != 2 {
+		t.Error("task type not at weight 500")
 	}
 	link := doc.Find("#schedulers-rows a.row-link").Last()
 	if href, _ := link.Attr("href"); href != "/c/main/schedulers/"+entryA {
@@ -410,7 +475,7 @@ func TestSchedulersPage(t *testing.T) {
 	}
 
 	doc = parse(t, do(t, h, request{path: "/c/main/schedulers?sort=type&dir=desc"}))
-	if got := text(doc.Find("#schedulers-rows td.strong").First()); got != "report:daily" {
+	if got := text(doc.Find("#schedulers-rows td.c-type").First()); got != "report:daily" {
 		t.Errorf("type desc first = %q", got)
 	}
 	if href, _ := doc.Find("#sort-next").Attr("href"); href != "/c/main/schedulers" {
@@ -453,11 +518,20 @@ func TestSchedulerEntryPage(t *testing.T) {
 	if got := doc.Find("#payload").Text(); got != "{\n  \"tz\": \"Europe/Istanbul\"\n}" {
 		t.Errorf("payload = %q", got)
 	}
+	if v, _ := doc.Find("#payload-copy").Attr("data-copy-from"); v != "#payload" {
+		t.Errorf("payload copy = %q", v)
+	}
 	var details []string
 	doc.Find(".dl dt").Each(func(_ int, dt *goquery.Selection) { details = append(details, text(dt)+"="+text(dt.Next())) })
-	wantDetails := []string{"Spec=0 6 * * *", "Queue=reports", "Options=MaxRetry(3)", "Next run=Nov 8, 06:41:52", "Last run=Nov 7, 06:41:52"}
+	// Absolute, then relative to the server's clock (app.js renders the
+	// same in the viewer's time zone).
+	wantDetails := []string{"Spec=0 6 * * *", "Queue=reports", "Options=max_retry=3",
+		"Next run=Nov 8, 06:41:52 (in 6h 00m)", "Last run=Nov 7, 06:41:52 (18h ago)"}
 	if diff := cmp.Diff(wantDetails, details); diff != "" {
 		t.Errorf("details (-want +got):\n%s", diff)
+	}
+	if v := doc.Find("#entry-details .run-rel time").First().AttrOr("datetime", ""); v != "2026-11-08T06:41:52Z" {
+		t.Errorf("relative time datetime = %q", v)
 	}
 	if href, _ := doc.Find("#entry-queue").Attr("href"); href != "/c/main/queues/reports" {
 		t.Errorf("queue link = %q", href)
@@ -534,13 +608,87 @@ func TestSchedulerEntryPage(t *testing.T) {
 		}
 	})
 
-	t.Run("raw payload", func(t *testing.T) {
+	t.Run("page cap", func(t *testing.T) {
+		c := infraConns()
+		var evs []EnqueueEvent
+		for i := range 1100 { // the fake holds more than asynq keeps
+			evs = append(evs, EnqueueEvent{TaskID: fmt.Sprintf("t%04d", i)})
+		}
+		c.infra.events[entryA] = evs
+		h, _ := newTestServer(t, testOpts{conns: c})
+		doc := parse(t, do(t, h, request{path: "/c/main/schedulers/" + entryA + "?page=50"}))
+		if got := text(doc.Find(".pager .muted")); got != "981–1,000" || doc.Find("#hist-next").Length() != 0 {
+			t.Errorf("page 50: range %q, next %d", got, doc.Find("#hist-next").Length())
+		}
+		doc = parse(t, do(t, h, request{path: "/c/main/schedulers/" + entryA + "?page=51&payload=raw"}))
+		if got := text(doc.Find("#history td.empty")); got != "No enqueue events" {
+			t.Errorf("page 51 = %q", got)
+		}
+		if href, _ := doc.Find("#hist-prev").Attr("href"); href != "/c/main/schedulers/"+entryA+"?page=50&payload=raw" {
+			t.Errorf("back to the last page = %q", href)
+		}
+		if got := c.infra.eventsArg; len(got) != 1 || got[0] != entryA+"/reports/50/20" {
+			t.Errorf("events read = %q (page 51 must not be read)", got)
+		}
+	})
+
+	t.Run("payload toggle", func(t *testing.T) {
+		doc := parse(t, do(t, h, request{path: "/c/main/schedulers/" + entryA + "?page=2"}))
+		if href, _ := doc.Find("#payload-raw").Attr("href"); href != "/c/main/schedulers/"+entryA+"?page=2&payload=raw" {
+			t.Errorf("raw link = %q", href)
+		}
+		if !doc.Find("#payload-json").HasClass("on") || doc.Find("#payload-json").AttrOr("aria-current", "") != "true" {
+			t.Error("JSON not current")
+		}
+		if doc.Find("#payload-raw[hx-get], #payload-json[hx-get]").Length() != 0 {
+			t.Error("the toggle needs JS")
+		}
+		doc = parse(t, do(t, h, request{path: "/c/main/schedulers/" + entryA + "?payload=raw"}))
+		if got := doc.Find("#payload").Text(); got != `{"tz":"Europe/Istanbul"}` {
+			t.Errorf("raw payload = %q", got)
+		}
+		if !doc.Find("#payload-raw").HasClass("on") || doc.Find("#payload-json").HasClass("on") {
+			t.Error("Raw not current")
+		}
+		if href, _ := doc.Find("#payload-json").Attr("href"); href != "/c/main/schedulers/"+entryA {
+			t.Errorf("JSON link = %q", href)
+		}
+		if got, _ := doc.Find("#entry-poll").Attr("hx-get"); got != "/c/main/schedulers/"+entryA+"?payload=raw" {
+			t.Errorf("poll URL = %q", got)
+		}
+	})
+
+	t.Run("not JSON, unknown queue", func(t *testing.T) {
+		c := infraConns()
+		h, _ := newTestServer(t, testOpts{conns: c})
 		doc := parse(t, do(t, h, request{path: "/c/main/schedulers/" + entryB}))
-		if got := doc.Find("#payload").Text(); got != "� raw" {
+		if got := doc.Find("#payload").Text(); got != "� raw <b>"+strings.Repeat("x", 100) {
 			t.Errorf("payload = %q", got)
 		}
-		if got := text(doc.Find(".dl dt:contains('Options')").Next()); got != "—" {
-			t.Errorf("no options = %q", got)
+		if doc.Find("#payload-raw, #payload-json").Length() != 0 {
+			t.Error("toggle without JSON")
+		}
+		if got := text(doc.Find(".dl dt:contains('Queue')").Next()); got != "—" || doc.Find("#entry-queue").Length() != 0 {
+			t.Errorf("unknown queue = %q", got)
+		}
+		if got := text(doc.Find(".dl dt:contains('Options')").Next()); got != "timeout=2m0s" {
+			t.Errorf("options = %q", got)
+		}
+		if doc.Find("#history tbody a").Length() != 0 || text(doc.Find("#history tbody td").Last()) != "b7d01e93-2222…" {
+			t.Error("a task ID is linked to a guessed queue")
+		}
+		if got := c.infra.eventsArg; len(got) != 1 || got[0] != entryB+"//1/20" {
+			t.Errorf("events read = %q, want no queue", got)
+		}
+	})
+
+	t.Run("empty payload", func(t *testing.T) {
+		c := infraConns()
+		c.infra.entries["main"][0].Payload = nil
+		h, _ := newTestServer(t, testOpts{conns: c})
+		doc := parse(t, do(t, h, request{path: "/c/main/schedulers/" + entryA}))
+		if got := text(doc.Find("#entry-body .empty")); got != "No payload" || doc.Find("#payload").Length() != 0 {
+			t.Errorf("empty payload = %q", got)
 		}
 	})
 
@@ -574,12 +722,12 @@ func TestInfoPage(t *testing.T) {
 		want := []string{
 			"Version Redis 7.2.4",
 			"Mode standalone",
-			"Uptime 41d 0h",
+			"Uptime 41 days",
 			"Connected clients 184",
 			"Used memory / peak 1.2 GB / 1.6 GB maxmemory 4.0 GB",
 			"maxmemory-policy noeviction",
 			"Keyspace db0 48,213 keys 3,902 with expiry",
-			"TLS On Server cert verified",
+			"TLS On TLS 1.3, server cert verified",
 			"ACL user asynq-ui",
 		}
 		if diff := cmp.Diff(want, cards(doc)); diff != "" {
@@ -602,8 +750,33 @@ func TestInfoPage(t *testing.T) {
 		if raw.Text() != "# Server\nredis_version:7.2.4\n" || raw.AttrOr("tabindex", "") != "0" {
 			t.Errorf("raw = %q", raw.Text())
 		}
-		if v, _ := doc.Find("#raw-info-copy").Attr("data-copy"); v != raw.Text() {
+		if v, _ := doc.Find("#raw-info-copy").Attr("data-copy-from"); v != "#raw-info" {
 			t.Errorf("copy = %q", v)
+		}
+		if doc.Find(".raw-card #raw-info").Length() != 1 || doc.Find(".raw-card #payload").Length() != 0 {
+			t.Error("only the raw INFO block is height-capped")
+		}
+	})
+	t.Run("NOPERM", func(t *testing.T) {
+		c := infraConns()
+		c.infra.errs = map[string]error{"main": errors.New("info: NOPERM User asynq-ui has no permissions to run the 'info' command")}
+		h, _ := newTestServer(t, testOpts{conns: c})
+		doc := parse(t, do(t, h, request{path: "/c/main/info"}))
+		if got := text(doc.Find("#info-cards .conn-error-title")); got != "Could not read INFO" {
+			t.Errorf("title = %q", got)
+		}
+		if doc.Find("#nav-main .dot-up").Length() != 1 {
+			t.Error("the sidebar does not show the connection up")
+		}
+	})
+	t.Run("TLS without a handshake yet", func(t *testing.T) {
+		c := infraConns()
+		i := c.infra.info["main"]
+		i.TLSVersion, i.TLSVerified = 0, false
+		c.infra.info["main"] = i
+		h, _ := newTestServer(t, testOpts{conns: c})
+		if got := cards(parse(t, do(t, h, request{path: "/c/main/info"}))); !strings.Contains(strings.Join(got, "|"), "TLS On Server cert not verified") {
+			t.Errorf("cards = %q", got)
 		}
 	})
 	t.Run("valkey", func(t *testing.T) {
@@ -670,15 +843,35 @@ func TestInfraUnavailable(t *testing.T) {
 				t.Errorf("poll URL without data = %q", got)
 			}
 
+			if got := text(doc.Find(p.region + " .conn-error-title")); got != "Connection failed" {
+				t.Errorf("down title = %q", got)
+			}
+
+			// A network error or timeout: down here and in the sidebar.
 			c := infraConns()
-			c.infra.errs = map[string]error{"main": errors.New("NOAUTH Authentication required.")} //nolint:revive // Redis's own text
+			c.infra.errs = map[string]error{"main": fmt.Errorf("%w: dial tcp: connection refused", ErrUnreachable)}
 			h, _ = newTestServer(t, testOpts{conns: c})
 			doc = parse(t, do(t, h, request{path: fmt.Sprintf(p.path, "main")}))
-			if got := text(doc.Find(p.region + " .conn-error-text")); got != "NOAUTH Authentication required." {
-				t.Errorf("failing read: %q", got)
+			if got := text(doc.Find(p.region + " .conn-error-title")); got != "Connection failed" {
+				t.Errorf("unreachable title = %q", got)
 			}
 			if doc.Find("#nav-main .dot-down").Length() != 1 {
 				t.Error("sidebar not down")
+			}
+
+			// An error reply: the server is up, the read failed.
+			c = infraConns()
+			c.infra.errs = map[string]error{"main": errors.New("NOPERM User asynq-ui has no permissions to run the 'info' command")}
+			h, _ = newTestServer(t, testOpts{conns: c})
+			doc = parse(t, do(t, h, request{path: fmt.Sprintf(p.path, "main")}))
+			if got := text(doc.Find(p.region + " .conn-error-text")); !strings.HasPrefix(got, "NOPERM") {
+				t.Errorf("failing read: %q", got)
+			}
+			if got := text(doc.Find(p.region + " .conn-error-title")); got == "Connection failed" || got == "" {
+				t.Errorf("error reply title = %q", got)
+			}
+			if doc.Find("#nav-main .dot-down").Length() != 0 {
+				t.Error("an error reply shows the connection down")
 			}
 
 			c = infraConns()
@@ -718,11 +911,15 @@ func TestInfraPollAnswers(t *testing.T) {
 		{"servers init poll", failing, poll("/c/main/servers?poll=init", "servers-poll"),
 			"servers-poll live-state servers-table updated-at sidebar-conns"},
 		{"server poll", infraConns, poll("/c/main/servers/"+srvA, "server-poll"),
+			"server-poll live-state server-state server-workers server-details updated-at sidebar-conns"},
+		{"server init poll", infraConns, poll("/c/main/servers/"+srvA+"?poll=init", "server-poll"),
 			"server-poll live-state server-body updated-at sidebar-conns"},
 		{"schedulers poll", infraConns, poll("/c/main/schedulers", "schedulers-poll"),
 			"schedulers-poll live-state schedulers-table updated-at sidebar-conns"},
 		{"entry page link", infraConns, request{path: "/c/main/schedulers/" + entryA + "?page=2", htmx: true},
-			"entry-poll live-state entry-body updated-at sidebar-conns"},
+			"entry-poll live-state entry-history entry-details updated-at sidebar-conns"},
+		{"entry poll without data", failing, poll("/c/main/schedulers/"+entryA, "entry-poll"),
+			"entry-poll live-state updated-at sidebar-conns"},
 		{"info poll: cards only", infraConns, poll("/c/main/info", "info-poll"),
 			"info-poll live-state info-cards updated-at sidebar-conns"},
 		{"info init poll: raw too", infraConns, poll("/c/main/info?poll=init", "info-poll"),

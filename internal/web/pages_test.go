@@ -364,14 +364,28 @@ func TestNoInlineStyleOrScript(t *testing.T) {
 		page{testOpts{}, request{method: http.MethodPost, path: "/c/analytics/recheck", htmx: true}},
 	)
 	// The Servers, Schedulers and Info pages with data, and their answers.
-	for _, p := range []string{
-		"/c/main/servers", "/c/main/servers/" + srvA, "/c/main/servers/" + srvA + "?sort=started",
-		"/c/main/schedulers", "/c/main/schedulers/" + entryA, "/c/main/schedulers/" + entryB, "/c/main/info",
+	for _, p := range []struct{ path, query, poll string }{
+		{"/c/main/servers", "", "servers-poll"},
+		{"/c/main/servers/" + srvA, "", "server-poll"},
+		{"/c/main/servers/" + srvA, "sort=started", "server-poll"},
+		{"/c/main/servers/gone", "", "server-poll"},
+		{"/c/main/schedulers", "", "schedulers-poll"},
+		{"/c/main/schedulers/" + entryA, "page=2", "entry-poll"},
+		{"/c/main/schedulers/" + entryA, "payload=raw", "entry-poll"},
+		{"/c/main/schedulers/" + entryB, "", "entry-poll"},
+		{"/c/main/schedulers/gone", "", "entry-poll"},
+		{"/c/main/info", "", "info-poll"},
 	} {
+		u := p.path
+		if p.query != "" {
+			u += "?" + p.query
+		}
+		poll := map[string]string{"HX-Trigger": p.poll}
 		cases = append(cases,
-			page{testOpts{conns: infraConns()}, request{path: p}},
-			page{testOpts{conns: infraConns()}, request{path: p, htmx: true}},
-			page{testOpts{conns: infraConns()}, request{path: p + "?poll=init", htmx: true, header: map[string]string{"HX-Trigger": "info-poll"}}},
+			page{testOpts{conns: infraConns()}, request{path: u}},
+			page{testOpts{conns: infraConns()}, request{path: u, htmx: true}},
+			page{testOpts{conns: infraConns()}, request{path: u, htmx: true, header: poll}},
+			page{testOpts{conns: infraConns()}, request{path: p.path + "?" + strings.TrimPrefix(p.query+"&poll=init", "&"), htmx: true, header: poll}},
 		)
 	}
 	cases = append(cases,

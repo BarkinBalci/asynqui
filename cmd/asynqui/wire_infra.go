@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web"
@@ -17,7 +18,7 @@ func (s registrySource) Servers(ctx context.Context, name string) ([]web.Server,
 	}
 	servers, err := c.Servers(ctx)
 	if err != nil {
-		return nil, err
+		return nil, webReadErr(err)
 	}
 	out := make([]web.Server, len(servers))
 	for i, sv := range servers {
@@ -50,12 +51,12 @@ func (s registrySource) SchedulerEntries(ctx context.Context, name string) ([]we
 	}
 	entries, err := c.SchedulerEntries(ctx)
 	if err != nil {
-		return nil, err
+		return nil, webReadErr(err)
 	}
 	out := make([]web.SchedulerEntry, len(entries))
 	for i, e := range entries {
 		out[i] = web.SchedulerEntry{
-			ID: e.ID, Spec: e.Spec, TaskType: e.TaskType, Payload: e.Payload, Options: e.Options,
+			ID: e.ID, Spec: e.Spec, TaskType: e.TaskType, Payload: e.Payload, Options: webOptions(e.Options),
 			Queue: e.Queue, Next: e.Next, Prev: e.Prev,
 		}
 	}
@@ -69,7 +70,7 @@ func (s registrySource) SchedulerEnqueueEvents(ctx context.Context, name, entryI
 	}
 	p, err := c.SchedulerEnqueueEvents(ctx, entryID, queue, page, size)
 	if err != nil {
-		return web.EnqueuePage{}, err
+		return web.EnqueuePage{}, webReadErr(err)
 	}
 	out := web.EnqueuePage{HasNext: p.HasNext}
 	for _, e := range p.Events {
@@ -85,7 +86,7 @@ func (s registrySource) Info(ctx context.Context, name string) (web.Info, error)
 	}
 	i, err := c.Info(ctx)
 	if err != nil {
-		return web.Info{}, err
+		return web.Info{}, webReadErr(err)
 	}
 	tls := c.TLS()
 	return web.Info{
@@ -104,9 +105,27 @@ func (s registrySource) Info(ctx context.Context, name string) (web.Info, error)
 		Expires:          i.Keyspace.Expires,
 		TLS:              tls.Enabled,
 		TLSVerified:      tls.Verified,
+		TLSVersion:       tls.Version,
 		Username:         c.Username(),
 		Raw:              i.Raw,
 	}, nil
+}
+
+// webReadErr marks a read that could not reach the server, so the page
+// shows the connection down; an error reply stays a plain error.
+func webReadErr(err error) error {
+	if conn.Unreachable(err) {
+		return fmt.Errorf("%w: %w", web.ErrUnreachable, err)
+	}
+	return err
+}
+
+func webOptions(opts []conn.EntryOption) []web.EntryOption {
+	out := make([]web.EntryOption, len(opts))
+	for i, o := range opts {
+		out[i] = web.EntryOption{Name: o.Name, Value: o.Value}
+	}
+	return out
 }
 
 // isValkey reports whether c's backend was detected as Valkey.

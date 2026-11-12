@@ -38,11 +38,13 @@ templ CopyIDButton(id, value string) {
 }
 
 // CodeBlock is a dark code block with a copy button pinned top right,
-// outside the scrolling area. label names the scrollable block and copy
-// the button, for assistive technology.
+// outside the scrolling area. The button copies the block's text
+// (data-copy-from, read by app.js), so the text is not sent twice. label
+// names the scrollable block and copy the button, for assistive
+// technology.
 templ CodeBlock(id, text, label, copy string) {
 	<div class="code code-card">
-		<button id={ id + "-copy" } type="button" class="copy" data-copy={ text } aria-label={ copy } title="Copy" hidden>
+		<button id={ id + "-copy" } type="button" class="copy" data-copy-from={ "#" + id } aria-label={ copy } title="Copy" hidden>
 			@IconCopy("16")
 		</button>
 		<pre id={ id } tabindex="0" aria-label={ label }>{ text }</pre>

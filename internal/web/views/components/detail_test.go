@@ -50,7 +50,9 @@ func TestCodeBlock(t *testing.T) {
 		t.Errorf("pre = %q", pre.Text())
 	}
 	b := doc.Find(".code > button.copy#raw-info-copy")
-	if b.AttrOr("data-copy", "") != pre.Text() || b.AttrOr("aria-label", "") != "Copy INFO" {
+	// The button copies the block's text, which is not repeated in an
+	// attribute.
+	if b.AttrOr("data-copy-from", "") != "#raw-info" || b.AttrOr("aria-label", "") != "Copy INFO" || b.AttrOr("data-copy", "-") != "-" {
 		t.Errorf("copy button = %v", b.Nodes)
 	}
 	if b.Parent().Is("pre") {

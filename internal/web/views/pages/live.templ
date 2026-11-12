@@ -1,6 +1,8 @@
 package pages
 
 import (
+	"time"
+
 	"github.com/BarkinBalci/asynqui/internal/web/format"
 	"github.com/BarkinBalci/asynqui/internal/web/views"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
@@ -14,32 +16,54 @@ templ livePoll(l Live, oob bool) {
 }
 
 // liveBanner shows why a poll that kept the data has none; empty
-// otherwise.
-templ liveBanner(l Live, oob bool) {
+// otherwise. failed is the title of a read that failed with an error
+// reply (the connection is up).
+templ liveBanner(l Live, failed templ.Component, oob bool) {
 	<div id={ LiveStateID } class="state-banner" { components.OOB(oob)... }>
 		if l.Keep {
 			<div class="card">
-				switch l.State {
-					case DataFailed:
-						@connError(l.Error)
-					default:
-						<p class="checking">Checking</p>
-				}
+				@liveData(l, failed)
 			</div>
 		}
 	</div>
 }
 
-// liveData is the page's data, or why there is none.
-templ liveData(l Live) {
+// liveData is the page's data, or why there is none: "Connection failed"
+// when the server could not be reached, failed (with the error) when it
+// answered with an error, or "Checking".
+templ liveData(l Live, failed templ.Component) {
 	switch l.State {
 		case DataFailed:
-			@connError(l.Error)
+			if l.Down {
+				@connError(l.Error)
+			} else {
+				<div class="conn-error page-error">
+					<div class="conn-error-title">
+						@components.IconAlert("16")
+						@failed
+					</div>
+					<div class="mono conn-error-text">{ l.Error }</div>
+				</div>
+			}
 		case DataChecking:
 			<p class="checking">Checking</p>
 		default:
 			{ children... }
 	}
+}
+
+// Titles of a read that failed with an error reply.
+
+templ serversFailed() {
+	Could not load servers
+}
+
+templ entriesFailed() {
+	Could not load scheduler entries
+}
+
+templ infoFailed() {
+	Could not read INFO
 }
 
 // liveTail are the regions every answer replaces after the page's own.
@@ -70,14 +94,14 @@ templ queueTokens(qs []QueueToken) {
 	</span>
 }
 
-// optionTokens are an entry's options, space separated.
-templ optionTokens(opts []string) {
+// optionTokens are an entry's options as name=value, space separated.
+templ optionTokens(opts []OptionToken) {
 	<span class="tokens mono">
 		for i, o := range opts {
 			if i > 0 {
 				{ " " }
 			}
-			<span>{ o }</span>
+			<span>{ o.Name }={ o.Value }</span>
 		}
 	</span>
 }
@@ -104,4 +128,17 @@ templ busy(r ServerRow, wide bool) {
 		<span class="num busy-num">{ format.Number(r.Busy) } / { format.Number(r.Concurrency) }</span>
 		@components.BusyBar(r.Busy, r.Concurrency)
 	</span>
+}
+
+// runTime is an absolute time with the muted relative one after it,
+// "Nov 9, 06:00:00 (in 5h 45m)", or "—" for the zero time. The relative
+// text is written against now so it reads right before app.js runs.
+templ runTime(t, now time.Time) {
+	if t.IsZero() {
+		<span class="muted">—</span>
+	} else {
+		@components.TimeAbs(t)
+		{ " " }
+		<span class="muted run-rel">(<time datetime={ format.TimeAttr(t) }>{ format.Relative(t, now) }</time>)</span>
+	}
 }

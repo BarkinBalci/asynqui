@@ -2,6 +2,7 @@ package conn
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -147,6 +148,9 @@ type Conn struct {
 	// default user.
 	tls      TLSInfo
 	username string
+	// tlsVersion is the version of the last TLS handshake, written by
+	// the TLS config's VerifyConnection.
+	tlsVersion *atomic.Uint32
 	// timeout is the context deadline of our own commands (PING, INFO):
 	// dial_timeout + write_timeout + read_timeout, room for one attempt on
 	// a fresh connection. Inspector calls take no context; see newConn.
@@ -206,6 +210,15 @@ func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	tlsVersion := new(atomic.Uint32)
+	if tc != nil {
+		// Runs after the standard verification of every handshake (and
+		// with insecure_skip_verify too); it only records the version.
+		tc.VerifyConnection = func(cs tls.ConnectionState) error {
+			tlsVersion.Store(uint32(cs.Version))
+			return nil
+		}
+	}
 	rc := redis.NewClient(&redis.Options{
 		Addr:                  cc.Addr,
 		Username:              cc.Username,
@@ -227,6 +240,7 @@ func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 		addr:       displayAddr(cc.Addr, cc.DB),
 		db:         cc.DB,
 		tls:        TLSInfo{Enabled: cc.TLS.Enabled, Verified: cc.TLS.Enabled && !cc.TLS.InsecureSkipVerify},
+		tlsVersion: tlsVersion,
 		username:   cc.Username,
 		timeout:    cc.DialTimeout + cc.WriteTimeout + cc.ReadTimeout,
 		logger:     logger.With(slog.String("conn", cc.Name)),
@@ -242,15 +256,25 @@ func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 	}, nil
 }
 
-// TLSInfo is a connection's TLS setting, from config.
+// TLSInfo is a connection's TLS setting, from config, and the version of
+// its last TLS handshake.
 type TLSInfo struct {
 	Enabled bool
 	// Verified is false when tls.insecure_skip_verify is set.
 	Verified bool
+	// Version is the tls.VersionTLS1x of the last handshake; 0 before any
+	// (or without TLS).
+	Version uint16
 }
 
-// TLS returns the connection's TLS setting.
-func (c *Conn) TLS() TLSInfo { return c.tls }
+// TLS returns the connection's TLS setting and last negotiated version.
+func (c *Conn) TLS() TLSInfo {
+	t := c.tls
+	if c.tlsVersion != nil {
+		t.Version = uint16(c.tlsVersion.Load()) //nolint:gosec // G115: stored from a uint16
+	}
+	return t
+}
 
 // Username returns the configured ACL username; empty is Redis's default
 // user.

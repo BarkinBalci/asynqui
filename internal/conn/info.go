@@ -61,7 +61,9 @@ type Info struct {
 	Keyspace Keyspace
 	// Sections are in reply order, each with its fields in reply order.
 	Sections []InfoSection
-	// Raw is the reply as received.
+	// Raw is the reply as received, without the Keyspace and Keysizes
+	// lines of other DBs ("db3:…", "db3_distrib_…"): another connection
+	// may own them. Sections keeps every line.
 	Raw string
 }
 
@@ -182,7 +184,7 @@ func (c *Conn) detectBackend(ctx context.Context) {
 // connection's DB, whose Keyspace line fills Keyspace. Numbers that do not
 // parse are left zero.
 func parseInfo(raw string, db int) *Info {
-	info := &Info{Raw: raw, Keyspace: Keyspace{DB: db}}
+	info := &Info{Raw: rawForDB(raw, db), Keyspace: Keyspace{DB: db}}
 	var cur *InfoSection
 	for line := range strings.Lines(raw) {
 		line = strings.TrimRight(line, "\r\n")
@@ -243,6 +245,42 @@ func parseInfo(raw string, db int) *Info {
 		}
 	}
 	return info
+}
+
+// rawForDB drops, from the Keyspace and Keysizes sections, the lines of
+// DBs other than db, keeping everything else byte for byte.
+func rawForDB(raw string, db int) string {
+	own := "db" + strconv.Itoa(db)
+	var b strings.Builder
+	b.Grow(len(raw))
+	perDB := false
+	for line := range strings.Lines(raw) {
+		key, _, _ := strings.Cut(strings.TrimRight(line, "\r\n"), ":")
+		if name, ok := strings.CutPrefix(key, "#"); ok {
+			name = strings.TrimSpace(name)
+			perDB = strings.EqualFold(name, "Keyspace") || strings.EqualFold(name, "Keysizes")
+		} else if perDB && otherDB(key, own) {
+			continue
+		}
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// otherDB reports whether key is "dbN" or "dbN_…" for a DB other than own.
+func otherDB(key, own string) bool {
+	rest, ok := strings.CutPrefix(key, "db")
+	if !ok {
+		return false
+	}
+	n := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' })
+	if n < 0 {
+		n = len(rest)
+	}
+	if n == 0 || (n < len(rest) && rest[n] != '_') {
+		return false
+	}
+	return "db"+rest[:n] != own
 }
 
 // fieldInt is the integer value of key in s, or 0.

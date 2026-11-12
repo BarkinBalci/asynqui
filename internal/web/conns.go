@@ -32,6 +32,10 @@ type ConnectionLister interface {
 var (
 	ErrQueueNotFound = errors.New("web: queue not found")
 	ErrQueueNotEmpty = errors.New("web: queue not empty")
+	// ErrUnreachable marks a read that failed because the server could
+	// not be reached or timed out, as opposed to an error reply (NOPERM,
+	// LOADING): only it shows the connection down on the read-only pages.
+	ErrUnreachable = errors.New("web: connection unreachable")
 )
 
 // Queue is one queue of a connection.

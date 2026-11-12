@@ -1,10 +1,8 @@
 package web
 
 import (
-	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"slices"
@@ -25,7 +23,7 @@ type SchedulerSource interface {
 	SchedulerEntries(ctx context.Context, name string) ([]SchedulerEntry, error)
 	// SchedulerEnqueueEvents returns page page (from 1) of size enqueue
 	// events of an entry, newest first. queue is the entry's queue, where
-	// each event's task is looked up.
+	// each event's task is looked up; empty (unknown) looks none up.
 	SchedulerEnqueueEvents(ctx context.Context, name, entryID, queue string, page, size int) (EnqueuePage, error)
 }
 
@@ -36,12 +34,21 @@ type SchedulerEntry struct {
 	Spec     string
 	TaskType string
 	Payload  []byte
-	// Options are as asynq writes them: "Queue(\"reports\")", "MaxRetry(3)".
-	Options []string
-	Queue   string
-	Next    time.Time
+	// Options are the registered options, named in snake_case ("queue",
+	// "max_retry").
+	Options []EntryOption
+	// Queue is the Queue option; empty means unknown (asynq does not
+	// record a queue set on the task), never "default".
+	Queue string
+	Next  time.Time
 	// Prev is zero before the first enqueue.
 	Prev time.Time
+}
+
+// EntryOption is one option of a scheduler entry.
+type EntryOption struct {
+	Name  string
+	Value string
 }
 
 // EnqueueEvent is a task an entry enqueued.
@@ -60,6 +67,19 @@ type EnqueuePage struct {
 
 // historyPageSize is the number of enqueue events per page.
 const historyPageSize = 20
+
+// maxEnqueueEvents is how many enqueue events asynq keeps per entry.
+const maxEnqueueEvents = 1000
+
+// historyMaxPage is the last history page: ceil(1000/size). Pages past
+// it are out of range.
+const historyMaxPage = (maxEnqueueEvents + historyPageSize - 1) / historyPageSize
+
+// Payload previews in the schedulers table: the cell and its title.
+const (
+	payloadCellRunes  = 60
+	payloadTitleRunes = 300
+)
 
 // entriesSort is the schedulers table's sort: every column but Payload and
 // Options, by Next run ascending by default; every column sorts ascending
@@ -92,31 +112,48 @@ func (d *deps) schedulersModel(r *http.Request, a access, spec sortSpec, ans ans
 	st := spec.parse(r.URL.Query())
 	q := url.Values{}
 	spec.set(q, st)
-	entries, rd := readLive(d, r, a, func(ctx context.Context) ([]SchedulerEntry, error) { return d.conns.SchedulerEntries(ctx, name) })
+	ctx, cancel := d.pageContext(r.Context())
+	defer cancel()
+	entries, rd := readLive(ctx, a, func(ctx context.Context) ([]SchedulerEntry, error) { return d.conns.SchedulerEntries(ctx, name) })
 	m := pages.Schedulers{
 		Layout: d.liveLayout(r, a, components.SectionSchedulers, rd, sectionCrumb(d, components.SectionSchedulers, "c", name, "schedulers")),
-		Live:   d.live(ans, pages.SchedulersPageID, pages.SchedulersPollID, rd, q, "c", name, "schedulers"),
+		Live:   d.live(ans, pages.SchedulersPageID, pages.SchedulersPollID, rd, rd.state == pages.DataReady, q, "c", name, "schedulers"),
 	}
 	sorted := slices.Clone(entries)
 	slices.SortStableFunc(sorted, func(x, y SchedulerEntry) int { return compareEntries(x, y, pages.EntryColumn(st.col), st.desc) })
 	for _, e := range sorted {
+		text := format.Text(e.Payload)
 		m.Rows = append(m.Rows, pages.EntryRow{
-			ID:       e.ID,
-			ShortID:  format.ShortID(e.ID),
-			URL:      d.url("c", name, "schedulers", e.ID),
-			LinkID:   components.HexID("elink-", e.ID),
-			Spec:     e.Spec,
-			TaskType: e.TaskType,
-			Payload:  strings.ToValidUTF8(string(e.Payload), "�"),
-			Options:  e.Options,
-			Next:     e.Next,
-			Prev:     e.Prev,
+			ID:           e.ID,
+			ShortID:      format.ShortID(e.ID),
+			URL:          d.url("c", name, "schedulers", e.ID),
+			LinkID:       components.HexID("elink-", e.ID),
+			Spec:         e.Spec,
+			TaskType:     e.TaskType,
+			Payload:      format.Preview(text, payloadCellRunes),
+			PayloadTitle: format.Preview(text, payloadTitleRunes),
+			Options:      optionTokens(e.Options, false),
+			Next:         e.Next,
+			Prev:         e.Prev,
 		})
 	}
 	heads := spec.heads(st, url.Values{}, func(int) bool { return false },
 		func(q url.Values) string { return d.urlQuery(q, "c", name, "schedulers") })
 	copy(m.Heads[:], heads)
 	return m
+}
+
+// optionTokens are an entry's options for display; withoutQueue leaves
+// the queue option out (the details show it on its own row).
+func optionTokens(opts []EntryOption, withoutQueue bool) []pages.OptionToken {
+	var out []pages.OptionToken
+	for _, o := range opts {
+		if withoutQueue && o.Name == "queue" {
+			continue
+		}
+		out = append(out, pages.OptionToken{Name: o.Name, Value: o.Value})
+	}
+	return out
 }
 
 // compareEntries orders two entries by column c, ties by ID.
@@ -140,8 +177,8 @@ func compareEntries(x, y SchedulerEntry, c pages.EntryColumn, desc bool) int {
 	return cmp.Or(r, strings.Compare(x.ID, y.ID))
 }
 
-// handleSchedulerEntry serves GET /c/{conn}/schedulers/{id}?page=, the
-// Scheduler entry page. A stale or unknown ID shows "Entry not found"
+// handleSchedulerEntry serves GET /c/{conn}/schedulers/{id}?page=&payload=,
+// the Scheduler entry page. A stale or unknown ID shows "Entry not found"
 // (404 for the page itself; a poll gets the notice out of band).
 func handleSchedulerEntry(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -159,92 +196,136 @@ func handleSchedulerEntry(d *deps) http.Handler {
 	})
 }
 
-// historyPage is the ?page= value, 1 when absent or invalid.
-func historyPage(q url.Values) int {
-	if n, err := strconv.Atoi(q.Get("page")); err == nil && n > 1 {
-		return n
-	}
-	return 1
+// entryView is the Scheduler entry page's state in its URL query: ?page=
+// (the history page, default 1) and ?payload=raw (the raw payload view).
+type entryView struct {
+	page int
+	raw  bool
 }
 
-// pageQuery is the query of history page n; page 1 is the default.
-func pageQuery(n int) url.Values {
+func parseEntryView(q url.Values) entryView {
+	v := entryView{page: 1, raw: q.Get("payload") == "raw"}
+	if n, err := strconv.Atoi(q.Get("page")); err == nil && n > 1 {
+		v.page = n
+	}
+	return v
+}
+
+// values is the query of v, without defaults.
+func (v entryView) values() url.Values {
 	q := url.Values{}
-	if n > 1 {
-		q.Set("page", strconv.Itoa(n))
+	if v.page > 1 {
+		q.Set("page", strconv.Itoa(v.page))
+	}
+	if v.raw {
+		q.Set("payload", "raw")
 	}
 	return q
 }
 
+func (d *deps) entryURL(conn, id string, v entryView) string {
+	return d.urlQuery(v.values(), "c", conn, "schedulers", id)
+}
+
 func (d *deps) entryModel(r *http.Request, a access, ans answer) pages.SchedulerEntry {
 	name, id := a.conn.Name, r.PathValue("id")
-	page := historyPage(r.URL.Query())
-	deadline := time.Now().Add(d.pageBudget) // shared by both reads
-	entries, rd := readLive(d, r, a, func(ctx context.Context) ([]SchedulerEntry, error) { return d.conns.SchedulerEntries(ctx, name) })
+	v := parseEntryView(r.URL.Query())
+	ctx, cancel := d.pageContext(r.Context()) // shared by both reads
+	defer cancel()
+	entries, rd := readLive(ctx, a, func(ctx context.Context) ([]SchedulerEntry, error) { return d.conns.SchedulerEntries(ctx, name) })
 	i := slices.IndexFunc(entries, func(e SchedulerEntry) bool { return e.ID == id })
 
+	ready := rd.state == pages.DataReady
 	crumb := components.Crumb{Text: format.ShortID(id), Mono: true, Title: id}
 	m := pages.SchedulerEntry{
 		Layout: d.liveLayout(r, a, components.SectionSchedulers, rd,
 			sectionCrumb(d, components.SectionSchedulers, "c", name, "schedulers"), crumb),
-		Live:          d.live(ans, pages.EntryPageID, pages.EntryPollID, rd, pageQuery(page), "c", name, "schedulers", id),
+		Live:          d.live(ans, pages.EntryPageID, pages.EntryPollID, rd, ready && i >= 0, v.values(), "c", name, "schedulers", id),
 		SchedulersURL: d.url("c", name, "schedulers"),
 		Found:         i >= 0,
+		Whole:         ans.init || !ready || i < 0,
+		Now:           d.now(),
 	}
 	if i < 0 {
 		return m
 	}
 	e := entries[i]
 	m.ID, m.TaskType, m.Spec, m.Queue = e.ID, e.TaskType, e.Spec, e.Queue
-	m.QueueURL = d.url("c", name, "queues", e.Queue)
-	m.Payload = payloadText(e.Payload)
+	if e.Queue != "" {
+		m.QueueURL = d.url("c", name, "queues", e.Queue)
+	}
+	m.Options = optionTokens(e.Options, true)
 	m.Next, m.Prev = e.Next, e.Prev
-	for _, o := range e.Options {
-		if !strings.HasPrefix(o, "Queue(") { // shown as Queue
-			m.Options = append(m.Options, o)
-		}
-	}
-
-	ctx, cancel := context.WithDeadline(r.Context(), deadline)
-	defer cancel()
-	ev, err := d.conns.SchedulerEnqueueEvents(ctx, name, e.ID, e.Queue, page, historyPageSize)
-	h := &m.History
-	switch {
-	case err != nil && ctx.Err() != nil:
-		h.State = pages.DataChecking
-	case err != nil:
-		h.State, h.Error = pages.DataFailed, errText(err)
-	default:
-		for _, x := range ev.Events {
-			row := pages.EventRow{TaskID: x.TaskID, ShortID: format.ShortID(x.TaskID), EnqueuedAt: x.EnqueuedAt}
-			if x.TaskExists {
-				row.TaskURL = d.url("c", name, "queues", e.Queue, "tasks", x.TaskID)
-				row.LinkID = components.HexID("etask-", x.TaskID)
-			}
-			h.Events = append(h.Events, row)
-		}
-		if n := len(h.Events); n > 0 {
-			h.From = int64((page-1)*historyPageSize + 1)
-			h.To = h.From + int64(n) - 1
-		}
-		if page > 1 {
-			h.PrevURL = d.urlQuery(pageQuery(page-1), "c", name, "schedulers", id)
-		}
-		if ev.HasNext {
-			h.NextURL = d.urlQuery(pageQuery(page+1), "c", name, "schedulers", id)
-		}
-	}
+	d.entryPayload(&m, name, id, v, e.Payload)
+	m.History = d.entryHistory(ctx, name, e, v)
 	return m
 }
 
-// payloadText is a payload as shown: indented when it is JSON, otherwise
-// as text with invalid UTF-8 replaced.
-func payloadText(b []byte) string {
-	if json.Valid(b) {
-		var buf bytes.Buffer
-		if err := json.Indent(&buf, b, "", "  "); err == nil {
-			return buf.String()
-		}
+// entryPayload fills the payload card: indented JSON with a link to the
+// raw text, or the raw text (with a link back) for ?payload=raw; a payload
+// that is not JSON is shown raw, without the toggle.
+func (d *deps) entryPayload(m *pages.SchedulerEntry, conn, id string, v entryView, payload []byte) {
+	if len(payload) == 0 {
+		m.NoPayload = true
+		return
 	}
-	return strings.ToValidUTF8(string(b), "�")
+	jsonView, rawView := v, v
+	jsonView.raw, rawView.raw = false, true
+	pretty, ok := format.PrettyJSON(payload)
+	switch {
+	case ok && !v.raw:
+		m.Payload = pretty
+	default:
+		m.Payload, m.Raw = format.Text(payload), ok
+	}
+	if ok {
+		m.PayloadJSON = true
+		m.JSONURL, m.RawURL = d.entryURL(conn, id, jsonView), d.entryURL(conn, id, rawView)
+	}
+}
+
+// entryHistory reads one page of the entry's enqueue history. A page past
+// historyMaxPage is out of range: it is not read, and links back to the
+// last page.
+func (d *deps) entryHistory(ctx context.Context, conn string, e SchedulerEntry, v entryView) pages.History {
+	var h pages.History
+	page := v.page
+	if page > historyMaxPage {
+		last := v
+		last.page = historyMaxPage
+		h.PrevURL = d.entryURL(conn, e.ID, last)
+		return h
+	}
+	ev, err := d.conns.SchedulerEnqueueEvents(ctx, conn, e.ID, e.Queue, page, historyPageSize)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		h.State = pages.DataChecking
+		return h
+	case err != nil:
+		h.State, h.Error = pages.DataFailed, errText(err)
+		return h
+	}
+	for _, x := range ev.Events {
+		row := pages.EventRow{TaskID: x.TaskID, ShortID: format.ShortID(x.TaskID), EnqueuedAt: x.EnqueuedAt}
+		if x.TaskExists && e.Queue != "" {
+			row.TaskURL = d.url("c", conn, "queues", e.Queue, "tasks", x.TaskID)
+			row.LinkID = components.HexID("etask-", x.TaskID)
+		}
+		h.Events = append(h.Events, row)
+	}
+	if n := len(h.Events); n > 0 {
+		h.From = int64((page-1)*historyPageSize + 1)
+		h.To = h.From + int64(n) - 1
+	}
+	if page > 1 {
+		prev := v
+		prev.page = page - 1
+		h.PrevURL = d.entryURL(conn, e.ID, prev)
+	}
+	if ev.HasNext && page < historyMaxPage {
+		next := v
+		next.page = page + 1
+		h.NextURL = d.entryURL(conn, e.ID, next)
+	}
+	return h
 }
