@@ -203,8 +203,8 @@ func handleQueues(d *deps) http.Handler {
 			d.render(w, r, http.StatusOK, pages.QueuesPoll(m))
 			return
 		}
-		if failures, ok := d.takeFlash(w, r, a.conn.Name); ok {
-			m.Layout.Toasts = pages.FailureToasts(failures)
+		if f, ok := d.takeFlash(w, r, a.conn.Name); ok {
+			m.Layout.Toasts = pages.FlashToasts(f)
 		}
 		d.render(w, r, http.StatusOK, pages.QueuesPage(m))
 	})
@@ -413,14 +413,25 @@ func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 			plainError(w, http.StatusBadRequest)
 			return
 		}
-		names := uniqueQueues(r.PostForm["queue"])
+		names := uniqueValues(r.PostForm["queue"])
 		// Only the state of next is used; the path is always this
 		// connection's page, so it cannot redirect elsewhere.
 		v := defaultQueuesView()
-		if u, err := url.Parse(r.PostForm.Get("next")); err == nil {
-			v = parseQueuesView(u.Query())
+		next, nextErr := url.Parse(r.PostForm.Get("next"))
+		if nextErr == nil {
+			v = parseQueuesView(next.Query())
 		}
 		back := d.queuesURL(a.conn.Name, v)
+		// The Queue page's Pause/Resume button posts one queue with
+		// from=queue: the answer is that page's.
+		if from := r.PostForm.Get("from"); from == "queue" && len(names) == 1 && verb != pages.VerbDelete {
+			qv := defaultQueueView()
+			if nextErr == nil {
+				qv = parseQueueView(next.Query())
+			}
+			d.queuePageAction(w, r, a, verb, names[0], qv)
+			return
+		}
 
 		if verb == pages.VerbDelete && r.PostForm.Get("confirm") != "1" {
 			switch {
@@ -449,8 +460,8 @@ func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 	})
 }
 
-// uniqueQueues drops blank and repeated names, keeping the order.
-func uniqueQueues(in []string) []string {
+// uniqueValues drops blank and repeated form values, keeping the order.
+func uniqueValues(in []string) []string {
 	var out []string
 	for _, q := range in {
 		if strings.TrimSpace(q) != "" && !slices.Contains(out, q) {

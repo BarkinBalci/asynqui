@@ -49,6 +49,8 @@ type fakeConns struct {
 
 	// infra are the Servers, Schedulers and Info reads (infra_test.go).
 	infra fakeInfra
+	// tasks backs the TaskSource methods (tasks_helpers_test.go).
+	tasks *fakeTasks
 }
 
 func (f *fakeConns) Queues(ctx context.Context, name string) ([]Queue, error) {
@@ -166,6 +168,7 @@ func defaultConns() *fakeConns {
 		queues:  map[string][]Queue{"main": defaultQueues()},
 		history: map[string][]DailyStat{"main": testHistory(90)},
 		actErrs: map[string]error{},
+		tasks:   defaultTasks(),
 	}
 }
 

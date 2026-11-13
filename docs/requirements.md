@@ -202,10 +202,10 @@ authz:
 ### Tables
 1. **Select, then act.** A checkbox column plus a toolbar showing "N selected" and the bulk action buttons. There are no per-row action buttons or kebab menus. Read-only tables have no checkboxes.
 2. **Row click** opens the detail page. Row links are styled as links.
-3. **Gmail-style select all** (task tables): the header checkbox selects the current page and shows a banner, "All N on this page are selected. Select all {total} {state} tasks". Once clicked, the banner reads "All {total} {state} tasks are selected. Clear selection", and actions then apply to the whole state through the `*All*` APIs.
+3. **Gmail-style select all** (task tables): the header checkbox selects the current page and shows a banner, "All N on this page are selected. Select all {total} {state} tasks". Once clicked, the banner reads "All {total} {state} tasks are selected. Clear selection", and actions then apply to the whole state through the `*All*` APIs. Not on the Active tab (no `*All*` cancel in asynq).
 4. **Sorting:**
    - The queues table sorts by any column.
-   - Task tables sort only by their time column.
+   - Task tables do not sort: rows come in asynq's order for the state (§6.3), and the Inspector cannot list in reverse.
    - Servers: every column except Queues is sortable.
    - Schedulers: every column except Payload and Options is sortable.
    - Sort state lives in the URL query.
@@ -263,23 +263,27 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - a "Pause queue" or "Resume queue" button (operator)
   - stat cards: Size, Latency, Memory, Processed today, Failed today
 - **Tabs, each with a count:** Active, Pending (default), Aggregating, Scheduled, Retry, Archived, Completed.
-- **Search:** "Search by ID or type".
-  - An exact task ID jumps to that task, via `GetTaskInfo`.
-  - Any other input filters the current page by type (client-side).
-- **Table:** checkbox, Task ID (shortened, mono, links to the task), Type, Payload (mono, truncated to one line), then two columns that depend on the tab. Only the time column sorts.
+- **Find task:** a secondary "Find task" button in the header opens a dialog "Find task in {queue}" with one Task ID field. The lookup is `GetTaskInfo(queue, id)`, an exact ID in this queue: a match opens the Task page, a miss shows "Task not found" inline. `/` opens it outside text fields, the field is focused, Enter submits, Escape closes it and focus returns to the button. Without JS the button links to a page with the same form (`/c/{conn}/queues/{queue}/find`).
+- **Table:** checkbox, Task ID (shortened, mono, links to the task), Type, Payload (mono, truncated to one line), then the columns that depend on the tab. Rows come in asynq's order for the state (pending and active oldest first, scheduled and retry by next process time, archived newest first, completed by expiry, latest first); the Inspector has no reverse order, so no column sorts.
 
-| Tab | Column A (sortable) | Column B | Bulk actions | "All" actions |
-|---|---|---|---|---|
-| Active | Started | Running for | Cancel | — |
-| Pending | Enqueued | Retried | Archive, Delete | Archive all, Delete all |
-| Scheduled | Process at | In | Run now, Archive, Delete | Run all, Archive all, Delete all |
-| Retry | Next retry | Last error | Run now, Archive, Delete | Run all, Archive all, Delete all |
-| Archived | Archived at | Last error | Run now, Delete | Run all, Delete all |
-| Completed | Completed at | Result kept until | Delete | Delete all |
-| Aggregating | — | — | — | — |
+| Tab | Columns | Bulk actions | "All" actions |
+|---|---|---|---|
+| Active | Started, Running for (from the servers' worker lists; "—" for a task no server reports) | Cancel | — |
+| Pending | Retried | Archive, Delete | Archive all, Delete all |
+| Scheduled | Process at, In | Run now, Archive, Delete | Run all, Archive all, Delete all |
+| Retry | Next retry, Last error | Run now, Archive, Delete | Run all, Archive all, Delete all |
+| Archived | Last failed, Last error | Run now, Delete | Run all, Delete all |
+| Completed | Completed at, Result kept until | Delete | Delete all |
+| Aggregating | — | — | — |
+
+- **asynq limits:** `TaskInfo` has no enqueue time and no archive time, so Pending has no time column and Archived shows Last failed (asynq's `LastFailedAt`).
+- **Active:** no "select all N" and no "Cancel all" (asynq has no `CancelProcessing` for a state); Cancel sends `CancelProcessing` per selected task.
 
 - **Aggregating tab:** lists groups (`Groups(queue)`) with their sizes. Empty state: "No aggregating tasks".
-- **After an action:** an inline result notice ("Archived 12 tasks"). The table refreshes and the selection clears.
+- **After an action:** an inline result notice ("Archived 12 tasks"). The table refreshes and the selection clears. Failures show one toast per task ("Task {shortId} not found", "Could not run {shortId}" with asynq's error).
+- **Pagination:** a page past the end (tasks moved on) shows the last page, or the first when the state has no tasks.
+- **"All" actions** run asynq's `*All*` call when the dialog is confirmed: they act on whatever tasks the state holds at that moment (tasks may have arrived or left since the count was shown), and the notice reports the count asynq returns. The "all" selection stays while its dialog is open, whatever a poll changes on the page.
+- **Untrusted text:** task IDs, types, queue and group names, payload previews and errors are isolated with `<bdi>`, and bidirectional control characters in IDs and names show as U+FFFD (the title and Copy keep the real value).
 
 ### 6.4 Task `/c/{conn}/queues/{queue}/tasks/{id}`
 - **Breadcrumb:** `Overview / {conn} / {queue} / {state} / {shortId}`.
@@ -295,10 +299,14 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 - **Details card:**
   - Queue, State, Retried `n / max`, Last failed
   - Next process at, as absolute plus relative
-  - Timeout, Deadline, Unique key, Group, Enqueued at
-  - Completed at and Result kept until, when relevant
+  - Timeout, Deadline, Group
+  - Completed at and Result kept until, when relevant; Orphaned (Yes/No) for an active task; Headers
   - Missing values show "—".
+  - `TaskInfo` has no unique key and no enqueue time, so neither is shown.
+- **Actions** follow asynq: Run now for scheduled, retry, archived and aggregating tasks; Archive for pending, scheduled, retry and aggregating ones; Delete for any but active ones; Cancel for active ones. Deleting the task returns to its queue's tab.
 - **Unknown or deleted ID:** shows "Task not found".
+- **IDs "." and "..":** asynq accepts any custom task ID, but a path segment of `.` or `..` is resolved away by browsers and by Go's router, so such a task has no reachable Task page; it still lists and its actions still work from the Queue page.
+- **Last error "attempt N":** asynq counts a failure in Retried when it schedules a retry, not when it archives. So it is Retried for a retry task, Retried + 1 for an archived one, and for a task run back to pending Retried + 1 when its retries were used up, else Retried.
 
 ### 6.5 Servers `/c/{conn}/servers`
 - **Header:** "Servers" and a "Filter servers" input.

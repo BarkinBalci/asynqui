@@ -1,6 +1,9 @@
 package format
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPrettyJSON(t *testing.T) {
 	tests := []struct {
@@ -52,5 +55,29 @@ func TestPreview(t *testing.T) {
 		if got := Preview(tt.in, tt.n); got != tt.want {
 			t.Errorf("Preview(%q, %d) = %q, want %q", tt.in, tt.n, got, tt.want)
 		}
+	}
+}
+
+func TestPreviewBytes(t *testing.T) {
+	big := []byte(strings.Repeat("é", 10000))
+	if got := PreviewBytes(big, 5); got != "ééééé…" {
+		t.Errorf("big = %q", got)
+	}
+	// A prefix that collapses below n runes still shows it was cut.
+	spaces := append([]byte("ab"), []byte(strings.Repeat(" ", 100))...)
+	if got := PreviewBytes(spaces, 10); got != "ab…" {
+		t.Errorf("cut spaces = %q", got)
+	}
+	if got := PreviewBytes([]byte("{\"a\":\n1}"), 120); got != `{"a": 1}` {
+		t.Errorf("small = %q", got)
+	}
+}
+
+func TestVisibleID(t *testing.T) {
+	if got := VisibleID("abc\u202Edef\u2066"); got != "abc\uFFFDdef\uFFFD" {
+		t.Errorf("VisibleID = %q", got)
+	}
+	if got := VisibleID("plain-id"); got != "plain-id" {
+		t.Errorf("plain = %q", got)
 	}
 }

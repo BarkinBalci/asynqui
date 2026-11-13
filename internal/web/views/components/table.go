@@ -56,6 +56,10 @@ type RowSelect struct {
 	Form  string
 	Name  string
 	Value string
+	// Fresh leaves out hx-preserve, so the swap replaces the checkbox
+	// with an unchecked one: for the answer to an action, after which the
+	// selection clears.
+	Fresh bool
 }
 
 // Enable is when a selection toolbar button is enabled, given the
@@ -86,10 +90,20 @@ type Action struct {
 	// State is the data-state a selected row needs for EnableState.
 	State  string
 	Danger bool
+	// Primary is the accent button; Large the 38px one (header actions)
+	// instead of the 32px toolbar size.
+	Primary bool
+	Large   bool
 	// Confirm is the id of the ConfirmDialog that asks first. Without JS
 	// the button posts directly and the server answers with a
 	// confirmation page.
 	Confirm string
+	// ConfirmAll is the id of the ConfirmDialog app.js opens instead while
+	// the selection is "all N" of a state (Gmail-style select all).
+	ConfirmAll string
+	// Conn, when set, names the connection in the disabled button's title
+	// ("Requires admin on main"), as on the Task page.
+	Conn string
 }
 
 // Dialog is a confirmation dialog, opened by app.js from an Action with

@@ -96,6 +96,10 @@ func TestSelectCells(t *testing.T) {
 	if l := doc.Find(`label.sr-only[for=qsel-612062]`); text(l) != "Select queue a b" {
 		t.Errorf("label = %q", text(l))
 	}
+	doc = render(t, inRow(withChildren(SelectCell(RowSelect{ID: "x", Form: "f", Name: "id", Value: "v", Fresh: true}), "Select")))
+	if _, ok := doc.Find("input#x").Attr("hx-preserve"); ok {
+		t.Error("a fresh checkbox is preserved")
+	}
 	doc = render(t, inHead(withChildren(SelectAllHeader("qsel-all", "f"), "Select all queues")))
 	if v, _ := doc.Find("th.cb-col input#qsel-all").Attr("data-select-all"); v != "f" {
 		t.Errorf("select-all form = %q", v)
@@ -147,6 +151,15 @@ func TestActionButton(t *testing.T) {
 			return a
 		}, map[string]string{"type": "submit", "data-confirm": "dlg", "data-enable": "any", "formaction": "/c/main/queues/pause", "class": "btn sm danger"},
 			[]string{"hx-post", "disabled", "title", "data-state"}},
+		{"task page: large, primary, named connection", func(a Action) Action {
+			a.Large, a.Primary, a.Conn, a.Need = true, true, "main", RoleAdmin
+			return a
+		}, map[string]string{"type": "button", "title": "Requires admin on main", "aria-label": "Pause (requires admin on main)", "class": "btn primary"},
+			[]string{"hx-post"}},
+		{"select all N confirmation", func(a Action) Action {
+			a.Allowed, a.ConfirmAll = true, "all-dlg"
+			return a
+		}, map[string]string{"data-confirm-all": "all-dlg", "hx-post": "/c/main/queues/pause"}, []string{"data-confirm"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -176,7 +189,8 @@ func TestSelectionToolbar(t *testing.T) {
 		t.Error("filter input wrong")
 	}
 	sel := bar.Find(".selc[data-sel-label]")
-	if _, hidden := sel.Attr("hidden"); !hidden || text(sel) != "0 selected" || sel.Find("[data-sel-count]").Length() != 1 {
+	if _, hidden := sel.Attr("hidden"); !hidden || text(sel) != "All 0 selected" || sel.Find("[data-sel-count]").Length() != 1 ||
+		sel.Find("[data-sel-all][hidden]").Length() != 1 {
 		t.Errorf("selected label = %q", text(sel))
 	}
 	if bar.Find(".tacts button").Length() != 1 || bar.Find(".selc-live[role=status] > .selc[data-sel-label]").Length() != 1 {

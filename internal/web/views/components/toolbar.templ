@@ -10,7 +10,7 @@ templ SelectionToolbar(form string, filter templ.Component) {
 			@filter
 		}
 		<div class="tacts">
-			<span class="selc-live" role="status"><span class="selc" data-sel-label hidden><span data-sel-count>0</span> selected</span></span>
+			<span class="selc-live" role="status"><span class="selc" data-sel-label hidden><span data-sel-all hidden>All </span><span data-sel-count>0</span> selected</span></span>
 			{ children... }
 		</div>
 	</div>
@@ -30,9 +30,13 @@ templ FilterInput(id, target, label string) {
 // title, also folded into its accessible name ("Delete (requires admin)").
 templ ActionButton(a Action, icon templ.Component, label string) {
 	if !a.Allowed {
-		switch a.Need {
-			case RoleAdmin:
+		switch {
+			case a.Need == RoleAdmin && a.Conn != "":
+				@lockedAction(a, icon, label, "Requires admin on "+a.Conn, label+" (requires admin on "+a.Conn+")")
+			case a.Need == RoleAdmin:
 				@lockedAction(a, icon, label, "Requires admin", label+" (requires admin)")
+			case a.Conn != "":
+				@lockedAction(a, icon, label, "Requires operator on "+a.Conn, label+" (requires operator on "+a.Conn+")")
 			default:
 				@lockedAction(a, icon, label, "Requires operator", label+" (requires operator)")
 		}
@@ -45,10 +49,24 @@ templ ActionButton(a Action, icon templ.Component, label string) {
 }
 
 templ lockedAction(a Action, icon templ.Component, label, title, name string) {
-	<button id={ a.ID } type="button" class={ "btn", "sm", templ.KV("danger", a.Danger) } disabled title={ title } aria-label={ name }>
+	<button id={ a.ID } type="button" class={ actionClass(a) } disabled title={ title } aria-label={ name }>
 		@icon
 		{ label }
 	</button>
+}
+
+func actionClass(a Action) string {
+	c := "btn"
+	if !a.Large {
+		c += " sm"
+	}
+	if a.Primary {
+		c += " primary"
+	}
+	if a.Danger {
+		c += " danger"
+	}
+	return c
 }
 
 func actionAttrs(a Action) templ.Attributes {
@@ -57,10 +75,7 @@ func actionAttrs(a Action) templ.Attributes {
 		"type":       "submit",
 		"form":       a.Form,
 		"formaction": a.URL,
-		"class":      "btn sm",
-	}
-	if a.Danger {
-		attrs["class"] = "btn sm danger"
+		"class":      actionClass(a),
 	}
 	switch a.Enable {
 	case EnableState:
@@ -68,6 +83,9 @@ func actionAttrs(a Action) templ.Attributes {
 		attrs["data-state"] = a.State
 	default:
 		attrs["data-enable"] = "any"
+	}
+	if a.ConfirmAll != "" {
+		attrs["data-confirm-all"] = a.ConfirmAll
 	}
 	if a.Confirm != "" {
 		attrs["data-confirm"] = a.Confirm
@@ -89,7 +107,7 @@ templ ConfirmDialog(d Dialog, title, confirm templ.Component) {
 			<h2 id={ d.TitleID() } class="dlgtitle">
 				@title
 			</h2>
-			<button type="button" class="iconbtn" data-dialog-close aria-label="Close">
+			<button id={ d.ID + "-close" } type="button" class="iconbtn" data-dialog-close aria-label="Close">
 				@IconClose("16")
 			</button>
 		</div>
@@ -97,7 +115,7 @@ templ ConfirmDialog(d Dialog, title, confirm templ.Component) {
 			{ children... }
 		</div>
 		<div class="dlgacts">
-			<button type="button" class="btn" data-dialog-close autofocus>Cancel</button>
+			<button id={ d.ID + "-cancel" } type="button" class="btn" data-dialog-close autofocus>Cancel</button>
 			<button id={ d.ConfirmID() } type="submit" form={ d.Form } formaction={ templ.SafeURL(d.ConfirmURL) } hx-post={ d.ConfirmURL } hx-swap="none" name="confirm" value="1" class={ "btn", templ.KV("danger", d.Danger), templ.KV("primary", !d.Danger) }>
 				@confirm
 			</button>

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/securecookie"
+
 	"github.com/BarkinBalci/asynqui/internal/auth"
 	"github.com/BarkinBalci/asynqui/internal/authz"
 	"github.com/BarkinBalci/asynqui/internal/config"
@@ -70,6 +72,8 @@ type deps struct {
 	secureCookies bool
 	assets        *static.Assets
 	urls          views.Assets
+	// flashCodec signs the flash cookie; nil without session keys.
+	flashCodec *securecookie.SecureCookie
 }
 
 // NewServer returns the root handler with every route and the global
@@ -114,6 +118,13 @@ func newServer(d Deps) (*deps, http.Handler, error) {
 	}
 	if dd.version == "" {
 		dd.version = "dev"
+	}
+	if d.Config.Auth.Session.HashKey.Reveal() != "" {
+		keys, err := d.Config.Auth.Session.KeyPairs()
+		if err != nil {
+			return nil, nil, fmt.Errorf("web: auth.session: %w", err)
+		}
+		dd.flashCodec = newFlashCodec(keys[0])
 	}
 	if dd.now == nil {
 		dd.now = time.Now

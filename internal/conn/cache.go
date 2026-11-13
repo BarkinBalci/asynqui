@@ -18,8 +18,10 @@ const sweepInterval = 10 * time.Second
 // with the same name but different T are different keys.
 type cacheKey[T any] string
 
-// Cache keys. History keys are built per queue and range (historyKey), and
-// enqueue event keys per entry and page (enqueueKey).
+// Cache keys. History keys are built per queue and range (historyKey),
+// enqueue event keys per entry and page (enqueueKey), and the Queue and
+// Task pages' keys per queue, state, page and task (queueKey, tasksKey,
+// groupsKey, taskKey in tasks.go).
 const (
 	queuesKey           cacheKey[[]Queue]          = "queues"
 	infoKey             cacheKey[*Info]            = "info"

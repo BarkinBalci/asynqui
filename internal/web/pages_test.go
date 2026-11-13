@@ -347,6 +347,12 @@ func TestNoInlineStyleOrScript(t *testing.T) {
 		"/c/main/servers", "/c/main/servers/host:1234:abcdef", "/c/main/schedulers", "/c/main/schedulers/abc",
 		"/c/main/info", "/c/nope", "/no/such/page",
 		"/c/main?sort=name&dir=asc&range=90d&queue=low", "/c/analytics", "/c/local",
+		"/c/main/queues/default?state=active", "/c/main/queues/default?state=aggregating", "/c/main/queues/default?state=scheduled",
+		"/c/main/queues/default?state=retry&size=50", "/c/main/queues/default?state=archived", "/c/main/queues/default?state=completed",
+		"/c/main/queues/nope", "/c/main/queues/default/find", "/c/main/queues/default/find?id=nope",
+		"/c/main/queues/default/tasks/a0", "/c/main/queues/default/tasks/x0", "/c/main/queues/default/tasks/c0",
+		"/c/main/queues/default/tasks/nope", "/c/main/queues/default/tasks/c3e81b90-04aa-4f1e-9d27-6b52e0c8a113?payload=raw",
+		"/c/analytics/queues/default", "/c/analytics/queues/default/tasks/p00",
 	} {
 		cases = append(cases,
 			page{testOpts{}, request{path: p}},
@@ -389,6 +395,14 @@ func TestNoInlineStyleOrScript(t *testing.T) {
 		)
 	}
 	cases = append(cases,
+		page{testOpts{}, request{path: "/c/main/queues/default", htmx: true}},
+		page{testOpts{}, request{path: "/c/main/queues/default", htmx: true, header: map[string]string{"HX-Trigger": "queue-poll"}}},
+		page{testOpts{}, request{path: "/c/main/queues/default/tasks/p00?seen=retry", htmx: true, header: map[string]string{"HX-Trigger": "task-poll"}}},
+		page{testOpts{}, request{path: "/c/main/queues/default/find?id=nope", htmx: true}},
+		page{testOpts{authz: proxyAuthz}, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/archive", htmx: true, form: "id=p00&id=gone"}},
+		page{testOpts{authz: proxyAuthz}, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete", form: "id=p00"}},
+		page{testOpts{authz: proxyAuthz}, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/run", form: "all=1&state=retry"}},
+		page{testOpts{authz: proxyAuthz}, request{method: http.MethodPost, path: "/c/main/queues/pause", htmx: true, form: "queue=default&from=queue"}},
 		page{testOpts{provider: config.ProviderBasic}, request{path: "/login"}},
 		page{testOpts{provider: config.ProviderBasic}, request{path: "/no/such/page"}},
 		page{testOpts{provider: config.ProviderBasic}, request{method: http.MethodPost, path: "/login", form: "username=a&password=b"}},

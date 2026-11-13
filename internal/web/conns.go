@@ -9,8 +9,9 @@ import (
 // registry (package conn), so tests can pass a fake. Each area declares
 // its part next to its handlers: ConnectionLister (the shell and access
 // checks), OverviewSource (the Overview), QueueSource (the Connection
-// page), ServerSource, SchedulerSource and InfoSource (the Servers,
-// Schedulers and Redis info pages).
+// page), TaskSource (the Queue and Task pages), ServerSource,
+// SchedulerSource and InfoSource (the Servers, Schedulers and Redis info
+// pages).
 type ConnectionSource interface {
 	ConnectionLister
 	OverviewSource
@@ -18,6 +19,7 @@ type ConnectionSource interface {
 	ServerSource
 	SchedulerSource
 	InfoSource
+	TaskSource
 }
 
 // ConnectionLister lists the configured connections.

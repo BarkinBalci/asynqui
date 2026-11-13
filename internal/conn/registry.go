@@ -163,6 +163,7 @@ type Conn struct {
 	pinger     pinger             // redis, or a fake in tests
 	info       infoReader         // redis, or a fake in tests
 	queues     queueInspector     // inspector, or a fake in tests
+	tasks      taskInspector      // inspector, or a fake in tests
 	servers    serverInspector    // inspector, or a fake in tests
 	schedulers schedulerInspector // inspector, or a fake in tests
 	cache      *cache
@@ -249,6 +250,7 @@ func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 		pinger:     redisPinger{rc},
 		info:       redisInfo{rc},
 		queues:     inspector,
+		tasks:      inspector,
 		servers:    inspector,
 		schedulers: inspector,
 		cache:      newCache(),

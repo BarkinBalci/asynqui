@@ -1,6 +1,7 @@
 // asynqui client script: htmx configuration, theme and auto-refresh
 // controls, visibility-gated polling, local times, copy buttons, the
-// client-side filters, row selection, confirmation dialogs and toasts.
+// client-side filters, row selection (with "select all N" for tasks),
+// confirmation dialogs, the Find task dialog and toasts.
 // Loaded with defer after htmx, so htmx exists and the config below is
 // applied before htmx initialises on DOMContentLoaded.
 // Everything here is progressive enhancement: pages read fine without it.
@@ -167,26 +168,32 @@
 
 	// ---- copy buttons ----
 	// <button data-copy="text" hidden> copies its value: the full ID, never
-	// the shortened text shown. Copy buttons are rendered hidden and shown
-	// only where the Clipboard API exists (secure contexts), so no button
-	// does nothing.
+	// the shortened text shown. <button data-copy-from="#id"> copies that
+	// element's text (a code block), so large text is not repeated in an
+	// attribute. Copy buttons are rendered hidden and shown only where the
+	// Clipboard API exists (secure contexts), so no button does nothing.
 	function revealCopy(scope) {
 		if (!navigator.clipboard) {
 			return;
 		}
-		var buttons = scope.querySelectorAll("[data-copy][hidden]");
+		var buttons = scope.querySelectorAll("[data-copy][hidden], [data-copy-from][hidden]");
 		for (var i = 0; i < buttons.length; i++) {
 			buttons[i].hidden = false;
 		}
 	}
 
 	document.addEventListener("click", function (e) {
-		var b = e.target.closest("[data-copy]");
+		var b = e.target.closest("[data-copy], [data-copy-from]");
 		if (!b || !navigator.clipboard) {
 			return;
 		}
 		e.preventDefault();
-		navigator.clipboard.writeText(b.getAttribute("data-copy")).then(function () {
+		var text = b.getAttribute("data-copy");
+		if (b.hasAttribute("data-copy-from")) {
+			var src = document.querySelector(b.getAttribute("data-copy-from"));
+			text = src ? src.textContent : "";
+		}
+		navigator.clipboard.writeText(text).then(function () {
 			b.classList.add("copied");
 			setTimeout(function () { b.classList.remove("copied"); }, 1500);
 		});
@@ -264,10 +271,15 @@
 				states[tr.getAttribute("data-state")] = true;
 			}
 		}
+		var everything = syncEverything(formId, shown, shownChecked);
 		var label = bar.querySelector("[data-sel-label]");
 		if (label) {
 			label.hidden = n === 0;
-			label.querySelector("[data-sel-count]").textContent = String(n);
+			label.querySelector("[data-sel-count]").textContent = everything || String(n);
+			var allWord = label.querySelector("[data-sel-all]");
+			if (allWord) {
+				allWord.hidden = !everything;
+			}
 		}
 		var buttons = bar.querySelectorAll("button[data-enable]");
 		for (var j = 0; j < buttons.length; j++) {
@@ -345,6 +357,190 @@
 			setTimeout(function () { d.close(); }, 0);
 		}
 	});
+
+	// ---- task tables: "select all N" ----
+	// The [data-select-banner=form-id] banner of a task table shows once
+	// every row of the page is selected. Its [data-select-everything]
+	// button sets the form's [data-everything] field to "1": the toolbar
+	// then counts the banner's data-total, and a button with
+	// data-confirm-all opens that dialog (the *All* actions) instead of
+	// acting on the rows. Unchecking a row or [data-clear-everything]
+	// leaves the mode. syncEverything runs on every selection update and
+	// returns the "all" count while the mode is on.
+	function byForm(selector, attr, formId) {
+		var els = document.querySelectorAll(selector);
+		for (var i = 0; i < els.length; i++) {
+			if (els[i].getAttribute(attr) === formId) {
+				return els[i];
+			}
+		}
+		return null;
+	}
+
+	function syncEverything(formId, shown, shownChecked) {
+		var input = byForm("input[data-everything]", "data-everything", formId);
+		if (!input) {
+			return "";
+		}
+		var banner = byForm("[data-select-banner]", "data-select-banner", formId);
+		var pageAll = shown > 0 && shownChecked === shown;
+		// While an "all" dialog is open the mode stays, whatever a poll
+		// did to the page: its confirm button posts all=1. Closing the
+		// dialog updates the selection again.
+		if ((!banner || !pageAll) && !allDialogOpen(formId)) {
+			input.value = "";
+		}
+		if (!banner) {
+			return "";
+		}
+		var on = input.value === "1";
+		banner.hidden = !pageAll;
+		var parts = banner.querySelectorAll("[data-banner-page], [data-banner-all]");
+		for (var i = 0; i < parts.length; i++) {
+			parts[i].hidden = parts[i].hasAttribute("data-banner-page") === on;
+		}
+		return on ? banner.getAttribute("data-total") : "";
+	}
+
+	// allDialogOpen reports whether a data-confirm-all dialog of the form
+	// is open.
+	function allDialogOpen(formId) {
+		var buttons = document.querySelectorAll("button[data-confirm-all]");
+		for (var i = 0; i < buttons.length; i++) {
+			if (buttons[i].getAttribute("form") !== formId) {
+				continue;
+			}
+			var d = document.getElementById(buttons[i].getAttribute("data-confirm-all"));
+			if (d && d.open) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	document.addEventListener("close", function () {
+		updateSelections();
+	}, true);
+
+	// everythingTotal is the "all" count while the mode is on, else "".
+	function everythingTotal(formId) {
+		var input = byForm("input[data-everything]", "data-everything", formId);
+		var banner = byForm("[data-select-banner]", "data-select-banner", formId);
+		return input && banner && input.value === "1" ? banner.getAttribute("data-total") : "";
+	}
+
+	document.addEventListener("click", function (e) {
+		var sel = e.target.closest("[data-select-everything]");
+		var clear = e.target.closest("[data-clear-everything]");
+		var formId, input, i;
+		if (sel) {
+			formId = sel.getAttribute("data-select-everything");
+			input = byForm("input[data-everything]", "data-everything", formId);
+			if (input) {
+				input.value = "1";
+				updateSelections();
+				var back = byForm("[data-clear-everything]", "data-clear-everything", formId);
+				if (back) {
+					back.focus();
+				}
+			}
+		} else if (clear) {
+			formId = clear.getAttribute("data-clear-everything");
+			var boxes = rowBoxes(formId);
+			for (i = 0; i < boxes.length; i++) {
+				boxes[i].checked = false;
+			}
+			updateSelections();
+			var head = byForm("input[data-select-all]", "data-select-all", formId);
+			if (head) {
+				head.focus();
+			}
+		}
+	});
+
+	// In "all" mode a toolbar button opens its data-confirm-all dialog,
+	// with the total filled in, before htmx or the delete dialog sees the
+	// click (capture phase).
+	document.addEventListener("click", function (e) {
+		var btn = e.target.closest("button[data-confirm-all]");
+		if (!btn || btn.disabled) {
+			return;
+		}
+		var total = everythingTotal(btn.getAttribute("form"));
+		var dlg = document.getElementById(btn.getAttribute("data-confirm-all"));
+		if (!total || !dlg || typeof dlg.showModal !== "function") {
+			return;
+		}
+		e.preventDefault();
+		e.stopPropagation();
+		var spans = dlg.querySelectorAll("[data-all-total]");
+		for (var i = 0; i < spans.length; i++) {
+			spans[i].textContent = total;
+		}
+		dlg.showModal();
+	}, true);
+
+	// ---- Find task dialog ----
+	// <dialog data-find-opener="button-id"> opens from its
+	// [data-dialog-open] link (a page without JS) or the "/" key outside
+	// text fields, empty and with its field focused. Enter submits; Escape
+	// closes it, and focus goes back to the button.
+	function openFind(dlg) {
+		if (!dlg || dlg.open || typeof dlg.showModal !== "function") {
+			return false;
+		}
+		var input = dlg.querySelector("input[name=id]");
+		if (input) {
+			input.value = "";
+			input.removeAttribute("aria-invalid");
+			input.removeAttribute("aria-describedby");
+		}
+		var stale = dlg.querySelectorAll(".find-miss, .conn-error");
+		for (var i = 0; i < stale.length; i++) {
+			stale[i].remove();
+		}
+		dlg.showModal();
+		if (input) {
+			input.focus();
+		}
+		return true;
+	}
+
+	document.addEventListener("click", function (e) {
+		var a = e.target.closest("[data-dialog-open]");
+		if (a && openFind(document.getElementById(a.getAttribute("data-dialog-open")))) {
+			e.preventDefault();
+		}
+	});
+
+	document.addEventListener("keydown", function (e) {
+		if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) {
+			return;
+		}
+		var t = e.target;
+		// Only text fields take "/": checkboxes, radios and buttons do not.
+		var text = "textarea, select, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset])";
+		if (t.closest && t.closest(text)) {
+			return;
+		}
+		if (document.querySelector("dialog[open]")) {
+			return;
+		}
+		if (openFind(document.querySelector("dialog[data-find-opener]"))) {
+			e.preventDefault();
+		}
+	});
+
+	// close does not bubble: listen in the capture phase.
+	document.addEventListener("close", function (e) {
+		var dlg = e.target;
+		if (dlg.matches && dlg.matches("dialog[data-find-opener]")) {
+			var b = document.getElementById(dlg.getAttribute("data-find-opener"));
+			if (b) {
+				b.focus();
+			}
+		}
+	}, true);
 
 	// ---- toasts ----
 	// Toasts arrive in #toasts (out of band, or with the page). Each goes

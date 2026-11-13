@@ -116,7 +116,11 @@ templ SelectAllHeader(id, form string) {
 // accessible label.
 templ SelectCell(s RowSelect) {
 	<td class="cb-col">
-		<input id={ s.ID } class="cb" type="checkbox" form={ s.Form } name={ s.Name } value={ s.Value } hx-preserve="true"/>
+		if s.Fresh {
+			<input id={ s.ID } class="cb" type="checkbox" form={ s.Form } name={ s.Name } value={ s.Value }/>
+		} else {
+			<input id={ s.ID } class="cb" type="checkbox" form={ s.Form } name={ s.Name } value={ s.Value } hx-preserve="true"/>
+		}
 		<label class="sr-only" for={ s.ID }>
 			{ children... }
 		</label>

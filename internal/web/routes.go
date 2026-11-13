@@ -3,7 +3,6 @@ package web
 import (
 	"net/http"
 
-	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
@@ -31,9 +30,10 @@ func addRoutes(mux *http.ServeMux, d *deps) {
 
 	// pages (viewer)
 	mux.Handle("GET /{$}", view(d, handleOverview(d)))
-	mux.Handle("GET /c/{conn}", view(d, handleQueues(d)))                                                               // ?sort=size&dir=desc&range=14d&queue=
-	mux.Handle("GET /c/{conn}/queues/{queue}", view(d, handleStub(d, stubPage{components.SectionQueues, queueCrumbs}))) // ?state=pending&page=2&size=20&sort=
-	mux.Handle("GET /c/{conn}/queues/{queue}/tasks/{id}", view(d, handleStub(d, stubPage{components.SectionQueues, taskCrumbs})))
+	mux.Handle("GET /c/{conn}", view(d, handleQueues(d)))                         // ?sort=size&dir=desc&range=14d&queue=
+	mux.Handle("GET /c/{conn}/queues/{queue}", view(d, handleQueue(d)))           // ?state=pending&page=2&size=20
+	mux.Handle("GET /c/{conn}/queues/{queue}/find", view(d, handleFindTask(d)))   // ?id=; the Find task lookup, a page without JS
+	mux.Handle("GET /c/{conn}/queues/{queue}/tasks/{id}", view(d, handleTask(d))) // ?payload=raw
 	mux.Handle("GET /c/{conn}/servers", view(d, handleServers(d)))                // ?sort=busy&dir=desc
 	mux.Handle("GET /c/{conn}/servers/{id}", view(d, handleServer(d)))            // ?sort=running&dir=desc
 	mux.Handle("GET /c/{conn}/schedulers", view(d, handleSchedulers(d)))          // ?sort=next&dir=asc
@@ -44,13 +44,13 @@ func addRoutes(mux *http.ServeMux, d *deps) {
 	// actions (operator)
 	mux.Handle("POST /c/{conn}/queues/pause", op(d, handleQueueAction(d, pages.VerbPause))) // form: queue=a&queue=b&next=
 	mux.Handle("POST /c/{conn}/queues/resume", op(d, handleQueueAction(d, pages.VerbResume)))
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleActionStub())) // ids or all=1&state=
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleActionStub()))
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleActionStub()))
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, TaskRun))) // form: id=a&id=b or all=1&state=, next=, from=task
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTaskAction(d, TaskArchive)))
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTaskAction(d, TaskCancel))) // ids only: no "all"
 
 	// admin
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleActionStub()))
-	mux.Handle("POST /c/{conn}/queues/delete", admin(d, handleQueueAction(d, pages.VerbDelete))) // + confirm=1
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleTaskAction(d, TaskDelete))) // + confirm=1
+	mux.Handle("POST /c/{conn}/queues/delete", admin(d, handleQueueAction(d, pages.VerbDelete)))        // + confirm=1
 
 	// assets
 	mux.Handle("GET /static/", http.StripPrefix("/static", d.assets))

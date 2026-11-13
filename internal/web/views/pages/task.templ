@@ -1,0 +1,288 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// TaskPage is the Task page.
+//
+// Polling: the hidden #task-poll element polls the page URL with what
+// the page shows (?seen=state.version, hx-swap none). The answer
+// (TaskPoll) replaces the badge and the last error, result and details
+// cards out of band only when the task changed, and the actions (with
+// the action form and the delete dialog) only when its state changed.
+// The payload card, its toggle and the copy buttons are left alone. A
+// task that is gone replaces the whole page body with "Task not found"
+// and stops the poll.
+templ TaskPage(m Task) {
+	@views.Page(m.Layout, lastCrumb(m.Layout)) {
+		<div id={ TaskPageID } class="content-region" hx-sync="this:queue last">
+			@taskPoll(m, false)
+			@taskBanner(m, false)
+			@taskMain(m, false)
+		</div>
+	}
+}
+
+// TaskPoll answers a poll, or an action posted with htmx (which gets
+// every region, actions included).
+templ TaskPoll(m Task) {
+	@taskPoll(m, true)
+	@taskBanner(m, true)
+	if m.NotFound || !m.Poll || m.Init {
+		@taskMain(m, true)
+	} else if !m.KeepPage {
+		if m.Changed {
+			@taskBadge(m, true)
+			@taskError(m, true)
+			@taskResult(m, true)
+			@taskDetails(m, true)
+		}
+		if m.StateChanged {
+			@taskActions(m, true)
+		}
+	}
+	@components.TimeID(components.UpdatedID, m.Layout.TopBar.UpdatedAt, true)
+	@components.SidebarConnList(m.Layout.Sidebar, true)
+}
+
+// TaskActionResult answers a Task page action posted with htmx.
+templ TaskActionResult(m Task, failures []TaskFailure) {
+	@TaskPoll(m)
+	if len(failures) > 0 {
+		@components.ToastsOOB() {
+			@TaskFailureToasts(failures)
+		}
+	}
+}
+
+// taskPoll stops polling once the task is gone.
+templ taskPoll(m Task, oob bool) {
+	if m.NotFound {
+		<div id={ TaskPollID } hidden { components.OOB(oob)... }></div>
+	} else {
+		<div id={ TaskPollID } data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-sync={ "#" + TaskPageID + ":abort" } hidden { components.OOB(oob)... }></div>
+	}
+}
+
+templ taskBanner(m Task, oob bool) {
+	<div id={ TaskBannerID } class="state-banner" { components.OOB(oob)... }>
+		if m.KeepPage {
+			<div class="card">
+				switch m.State {
+					case DataFailed:
+						@readError(m.Down, m.Error, taskFailed())
+					default:
+						<p class="checking">Checking</p>
+				}
+			</div>
+		}
+	</div>
+}
+
+templ taskMain(m Task, oob bool) {
+	<div id={ TaskMainID } class="content-region" { components.OOB(oob)... }>
+		switch {
+			case m.NotFound:
+				<div class="page-head">
+					<h1 class="h1">Task not found</h1>
+				</div>
+			case m.State == DataFailed:
+				<section class="card">
+					@readError(m.Down, m.Error, taskFailed())
+				</section>
+			case m.State == DataChecking:
+				<section class="card">
+					<p class="checking">Checking</p>
+				</section>
+			default:
+				<a id="task-back" class="back-link" href={ templ.SafeURL(m.TabURL) }>
+					@components.IconBack("16")
+					<bdi>{ m.Queue }</bdi>{ " › " + stateText(m.Status) }
+				</a>
+				<div class="page-head task-head">
+					<div class="detail-head">
+						<div class="detail-title">
+							<h1 class="h1"><bdi>{ format.VisibleID(m.Type) }</bdi></h1>
+							@taskBadge(m, false)
+						</div>
+						<div class="detail-id">
+							<span class="mono id-full"><bdi>{ format.VisibleID(m.ID) }</bdi></span>
+							@components.CopyIDButton("task-copy-id", m.ID)
+						</div>
+					</div>
+					@taskActions(m, false)
+				</div>
+				<div class="detail-cols">
+					<div class="detail-main detail-stack">
+						<section class="card" aria-labelledby="payload-title">
+							<div class="cardhead">
+								<h2 class="card-title" id="payload-title">Payload</h2>
+								if m.PayloadJSON {
+									<nav class="seg" aria-label="Payload view">
+										<a id="payload-json" href={ templ.SafeURL(m.JSONURL) } { onClass(!m.Raw)... } { currentAttr(!m.Raw)... }>JSON</a>
+										<a id="payload-raw" href={ templ.SafeURL(m.RawURL) } { onClass(m.Raw)... } { currentAttr(m.Raw)... }>Raw</a>
+									</nav>
+								}
+							</div>
+							if m.Payload == "" {
+								<p class="empty">No payload</p>
+							} else {
+								@components.CodeBlock("payload", m.Payload, "Payload", "Copy payload")
+							}
+						</section>
+						@taskError(m, false)
+						@taskResult(m, false)
+					</div>
+					@taskDetails(m, false)
+				</div>
+		}
+	</div>
+}
+
+templ deleteTaskTitle() {
+	Delete task
+}
+
+templ taskBadge(m Task, oob bool) {
+	<span id={ TaskBadgeID } { components.OOB(oob)... }>
+		@StateBadge(m.Status)
+	</span>
+}
+
+// taskActions is the action buttons with their form (the task's ID and
+// state) and the delete dialog: a state change replaces them together.
+templ taskActions(m Task, oob bool) {
+	<div id={ TaskActionsID } class="head-acts" hx-sync={ "#" + TaskPageID + ":queue all" } { components.OOB(oob)... }>
+		<form id={ TaskFormID } method="post" action={ templ.SafeURL(m.FormURL) } hidden>
+			for _, h := range m.Hidden {
+				<input type="hidden" name={ h.Name } value={ h.Value }/>
+			}
+		</form>
+		for _, b := range m.Actions {
+			@verbButton(b)
+		}
+		if m.DeleteDialog.ID != "" {
+			@components.ConfirmDialog(m.DeleteDialog, deleteTaskTitle(), verbLabel(TaskDelete)) {
+				<p class="mono dlg-id"><bdi>{ format.VisibleID(m.ID) }</bdi></p>
+			}
+		}
+	</div>
+}
+
+templ taskError(m Task, oob bool) {
+	if m.LastErr == "" {
+		<section id={ TaskErrorID } hidden { components.OOB(oob)... }></section>
+	} else {
+		<section id={ TaskErrorID } class="card" aria-labelledby="error-title" { components.OOB(oob)... }>
+			<div class="cardhead">
+				<h2 class="card-title" id="error-title">Last error</h2>
+				<span class="err-meta">
+					if !m.LastFailedAt.IsZero() {
+						@components.TimeAbs(m.LastFailedAt)
+					}
+					<span>attempt { format.Number(int64(m.Attempt)) }</span>
+				</span>
+			</div>
+			<div class="mono err-block"><bdi>{ m.LastErr }</bdi></div>
+		</section>
+	}
+}
+
+templ taskResult(m Task, oob bool) {
+	if !m.HasResult {
+		<section id={ TaskResultID } hidden { components.OOB(oob)... }></section>
+	} else {
+		<section id={ TaskResultID } class="card" aria-labelledby="result-title" { components.OOB(oob)... }>
+			<div class="cardhead">
+				<h2 class="card-title" id="result-title">Result</h2>
+			</div>
+			@components.CodeBlock("result", m.Result, "Result", "Copy result")
+		</section>
+	}
+}
+
+templ taskDetails(m Task, oob bool) {
+	<section id={ TaskDetailsID } class="card detail-side" aria-labelledby="details-title" { components.OOB(oob)... }>
+		<div class="cardhead">
+			<h2 class="card-title" id="details-title">Details</h2>
+		</div>
+		<dl class="dl">
+			<dt>Queue</dt>
+			<dd><a id="task-queue-link" href={ templ.SafeURL(m.QueueURL) }><bdi>{ m.Queue }</bdi></a></dd>
+			<dt>State</dt>
+			<dd>
+				@StateBadge(m.Status)
+			</dd>
+			<dt>Retried</dt>
+			<dd>{ format.Number(int64(m.Retried)) } / { format.Number(int64(m.MaxRetry)) }</dd>
+			<dt>Last failed</dt>
+			<dd>
+				@optTimeAbs(m.LastFailedAt)
+			</dd>
+			<dt>Next process at</dt>
+			<dd>
+				if m.NextProcessAt.IsZero() {
+					—
+				} else {
+					@components.TimeAbs(m.NextProcessAt)
+					<span class="muted rel">(<time datetime={ format.TimeAttr(m.NextProcessAt) }>{ format.TimeText(m.NextProcessAt) }</time>)</span>
+				}
+			</dd>
+			<dt>Timeout</dt>
+			<dd>
+				if m.Timeout > 0 {
+					{ format.Duration(m.Timeout) }
+				} else {
+					—
+				}
+			</dd>
+			<dt>Deadline</dt>
+			<dd>
+				@optTimeAbs(m.Deadline)
+			</dd>
+			<dt>Group</dt>
+			<dd>
+				if m.Group == "" {
+					—
+				} else {
+					<span class="mono"><bdi>{ format.VisibleID(m.Group) }</bdi></span>
+				}
+			</dd>
+			if m.Status == StateCompleted || !m.CompletedAt.IsZero() {
+				<dt>Completed at</dt>
+				<dd>
+					@optTimeAbs(m.CompletedAt)
+				</dd>
+				<dt>Result kept until</dt>
+				<dd>
+					@optTimeAbs(m.KeptUntil)
+				</dd>
+			}
+			if m.Status == StateActive {
+				<dt>Orphaned</dt>
+				<dd>
+					if m.Orphaned {
+						Yes
+					} else {
+						No
+					}
+				</dd>
+			}
+			<dt>Headers</dt>
+			<dd>
+				if len(m.Headers) == 0 {
+					—
+				} else {
+					<ul class="headers mono">
+						for _, h := range m.Headers {
+							<li><bdi>{ h.Name + ": " + h.Value }</bdi></li>
+						}
+					</ul>
+				}
+			</dd>
+		</dl>
+	</section>
+}

@@ -1,0 +1,302 @@
+package pages
+
+import (
+	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// TaskState is a task state, and the Queue page tab that lists it.
+type TaskState int
+
+// Task states, in tab order. The zero value is no state.
+const (
+	StateActive TaskState = iota + 1
+	StatePending
+	StateAggregating
+	StateScheduled
+	StateRetry
+	StateArchived
+	StateCompleted
+)
+
+// TaskStates lists the states in tab order.
+func TaskStates() []TaskState {
+	return []TaskState{StateActive, StatePending, StateAggregating, StateScheduled, StateRetry, StateArchived, StateCompleted}
+}
+
+// TaskVerb is a task action.
+type TaskVerb int
+
+// Task actions.
+const (
+	TaskRun TaskVerb = iota
+	TaskArchive
+	TaskDelete
+	TaskCancel
+)
+
+// Element ids of the Queue page. Polls replace the regions by id; the
+// focusable elements in them have stable ids (tlink-, tsel-, tab-,
+// page- prefixes).
+const (
+	// QueuePageID wraps the page: the hx-sync scope of its requests.
+	QueuePageID    = "queue-page"
+	QueuePollID    = "queue-poll"
+	QueueBadgeID   = "queue-badge"
+	QueueToggleID  = "queue-toggle"
+	QueueStatsID   = "queue-stats"
+	QueueBannerID  = "queue-banner"
+	TaskCardID     = "task-card"
+	TasksTableID   = "tasks-table"
+	TasksRowsID    = "tasks-rows"
+	TasksFormID    = "tasks-form"
+	TasksSelectAll = "tsel-all"
+	// TasksAllID is the hidden all=1 field of "select all N".
+	TasksAllID    = "tasks-all"
+	TasksBannerID = "tasks-banner"
+	TasksPagerID  = "tasks-pager"
+	TasksNoticeID = "tasks-notice"
+	TasksSizeID   = "tasks-size"
+	FindDialogID  = "find-task"
+	FindFormID    = "find-form"
+	FindBodyID    = "find-body"
+	FindInputID   = "find-id"
+	FindOpenID    = "find-open"
+	// TasksDeleteDialogID confirms deleting the selected tasks.
+	TasksDeleteDialogID = "tasks-delete"
+)
+
+// TabCountID is the id of a tab's count, which polls replace.
+func TabCountID(s TaskState) string { return "tab-count-" + StateParam(s) }
+
+// TabID is the id of a tab's link.
+func TabID(s TaskState) string { return "tab-" + StateParam(s) }
+
+// AllDialogID is the id of the dialog confirming verb on "all N".
+func AllDialogID(v TaskVerb) string { return "tasks-all-" + verbParam(v) }
+
+// StateParam is the ?state= value and id part of s.
+func StateParam(s TaskState) string {
+	switch s {
+	case StateActive:
+		return "active"
+	case StateAggregating:
+		return "aggregating"
+	case StateScheduled:
+		return "scheduled"
+	case StateRetry:
+		return "retry"
+	case StateArchived:
+		return "archived"
+	case StateCompleted:
+		return "completed"
+	}
+	return "pending"
+}
+
+func verbParam(v TaskVerb) string {
+	switch v {
+	case TaskRun:
+		return "run"
+	case TaskArchive:
+		return "archive"
+	case TaskCancel:
+		return "cancel"
+	}
+	return "delete"
+}
+
+// Queue is the Queue page: the queue's header and stats, the state tabs
+// and one state's tasks.
+type Queue struct {
+	Layout views.Layout
+	Name   string
+	// State is whether the queue was read. NotFound marks a queue the
+	// connection does not have.
+	State    DataState
+	Error    string
+	NotFound bool
+	// Down marks a failure to reach the server ("Connection failed");
+	// any other failure shows the read's own error.
+	Down bool
+
+	Paused bool
+	Stats  QueueStats
+	Toggle QueueToggle
+	// FindURL is the Find task page: the dialog's form target, and the
+	// button's link without JS.
+	FindURL string
+	Find    Find
+
+	Tabs []Tab
+	Tab  TaskState
+	// Total is the number of tasks in the tab's state.
+	Total int64
+	Rows  []TaskRow
+	// Groups are the Aggregating tab's rows.
+	Groups []GroupRow
+	// Actions are the toolbar's buttons, in order.
+	Actions []TaskActionButton
+	// AllowAll offers "select all N" for this state.
+	AllowAll bool
+	// FormURL is the selection form's default action.
+	FormURL      string
+	DeleteDialog components.Dialog
+	AllDialogs   []AllDialog
+	Pager        Pager
+	Sizes        SizePicker
+	// Next is the page's own URL, posted with actions.
+	Next    string
+	PollURL string
+	// Notice is the result of the action this answers, if any.
+	Notice *TaskNotice
+
+	// Poll, Init and KeepTable are as on the Connection page: a poll
+	// leaves the card's controls alone; Init is a poll from a page without
+	// data; KeepTable keeps the table of a page whose poll found no data.
+	Poll      bool
+	Init      bool
+	KeepTable bool
+}
+
+// QueueStats are the stat cards.
+type QueueStats struct {
+	Size, Processed, Failed, Memory int64
+	Latency                         time.Duration
+	LatencyHigh                     bool
+}
+
+// QueueToggle is the Pause queue / Resume queue button.
+type QueueToggle struct {
+	URL     string
+	Allowed bool
+	// Queue and Next are posted with it.
+	Queue string
+	Next  string
+}
+
+// Tab is one state tab.
+type Tab struct {
+	State TaskState
+	Count int64
+	URL   string
+	On    bool
+}
+
+// TaskRow is one task in the table. Which fields show depends on the tab.
+type TaskRow struct {
+	ID     string
+	URL    string
+	LinkID string
+	Select components.RowSelect
+	Type   string
+	// Payload is the raw payload; the template previews one line of it.
+	Payload       []byte
+	Retried       int
+	LastErr       string
+	LastFailedAt  time.Time
+	NextProcessAt time.Time
+	CompletedAt   time.Time
+	KeptUntil     time.Time
+	// Started is when the worker started an active task; zero when no
+	// server reports it. RunningFor is the time since.
+	Started    time.Time
+	RunningFor time.Duration
+}
+
+// GroupRow is one aggregation group.
+type GroupRow struct {
+	Name string
+	Size int64
+}
+
+// TaskActionButton is a toolbar button for verb.
+type TaskActionButton struct {
+	Verb   TaskVerb
+	Action components.Action
+}
+
+// AllDialog confirms verb on every task of the state.
+type AllDialog struct {
+	Verb   TaskVerb
+	Dialog components.Dialog
+}
+
+// Pager is the table's footer: the range shown and the page links.
+type Pager struct {
+	From, To, Total int64
+	// PrevURL and NextURL are empty on the first and last page.
+	PrevURL, NextURL string
+}
+
+// SizePicker is the rows-per-page select. It submits to FormURL with the
+// Hidden state (GET).
+type SizePicker struct {
+	FormURL string
+	Hidden  []Param
+	Size    int
+	Choices []int
+}
+
+// Find is the Find task form: the dialog's body and the no-JS page.
+type Find struct {
+	// Action is the form's GET target.
+	Action string
+	// Queue names the queue in the title.
+	Queue string
+	// ID is the looked-up ID; Missed shows "Task not found", Failed the
+	// error of a lookup that could not be made.
+	ID     string
+	Missed bool
+	Failed string
+	Down   bool
+}
+
+// FindPage is the Find task page, for browsers without JS.
+type FindPage struct {
+	Layout   views.Layout
+	Find     Find
+	QueueURL string
+}
+
+// TaskNotice is the result of a task action: how many tasks it acted on.
+type TaskNotice struct {
+	Verb  TaskVerb
+	Count int64
+}
+
+// TaskFailure is a task action that failed on one task, or on every task
+// of a state (ID empty).
+type TaskFailure struct {
+	Verb TaskVerb
+	ID   string
+	// NotFound marks a task (or queue) that does not exist; otherwise
+	// Detail is the error text.
+	NotFound bool
+	Detail   string
+}
+
+// Flash is what an action posted without JS leaves for the next page.
+type Flash struct {
+	Failures     []ActionFailure
+	TaskFailures []TaskFailure
+	Notice       *TaskNotice
+}
+
+// ConfirmTasks is the confirmation page of a delete or "all" action
+// posted without JS.
+type ConfirmTasks struct {
+	Layout views.Layout
+	Verb   TaskVerb
+	// IDs are the selected tasks; empty with All.
+	IDs   []string
+	All   bool
+	State TaskState
+	Total int64
+	// Action, Next and Hidden are what the confirm button posts.
+	Action    string
+	Hidden    []Param
+	CancelURL string
+}

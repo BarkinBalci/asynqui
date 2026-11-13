@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Text returns b as display text: invalid UTF-8 sequences and control
@@ -66,4 +67,49 @@ func Preview(s string, n int) string {
 		}
 	}
 	return sb.String()
+}
+
+// PreviewBytes is Preview of a payload read from a bounded prefix, so a
+// large payload costs no more than a small one. A cut prefix ends with
+// "…".
+func PreviewBytes(b []byte, n int) string {
+	limit := 4*n + 4 // enough bytes for n runes of UTF-8, plus a space
+	if len(b) <= limit {
+		return Preview(Text(b), n)
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(b[cut]) {
+		cut--
+	}
+	s := Preview(Text(b[:cut]), n)
+	if !strings.HasSuffix(s, "…") {
+		s += "…"
+	}
+	return s
+}
+
+// VisibleID is an ID (or other name) for display with its bidirectional
+// control characters (U+061C, U+200E, U+200F, U+202A–U+202E,
+// U+2066–U+2069) replaced by U+FFFD, so they cannot reorder the text
+// around them. Titles and copy buttons keep the real ID.
+func VisibleID(s string) string {
+	if !strings.ContainsFunc(s, isBidiControl) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if isBidiControl(r) {
+			return '\uFFFD'
+		}
+		return r
+	}, s)
+}
+
+func isBidiControl(r rune) bool {
+	switch {
+	case r == '\u061C', r == '\u200E', r == '\u200F':
+		return true
+	case r >= '\u202A' && r <= '\u202E', r >= '\u2066' && r <= '\u2069':
+		return true
+	}
+	return false
 }
