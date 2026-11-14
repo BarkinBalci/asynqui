@@ -70,7 +70,7 @@ func TestTaskPage(t *testing.T) {
 	if got := doc.Find("pre#payload").Text(); got != "{\n  \"order_id\": \"ORD-88213\",\n  \"amount\": 4200\n}" {
 		t.Errorf("payload = %q", got)
 	}
-	if doc.Find(`#payload-json.on[aria-current=page]`).Length() != 1 || doc.Find("#payload-raw").AttrOr("href", "") != uuidPath+"?payload=raw" {
+	if doc.Find(`#payload-json.on[aria-current=true]`).Length() != 1 || doc.Find("#payload-raw").AttrOr("href", "") != uuidPath+"?payload=raw" {
 		t.Error("JSON/Raw toggle")
 	}
 	if got := text(doc.Find("#task-error")); !strings.Contains(got, "Last error") || !strings.Contains(got, "attempt 3") ||

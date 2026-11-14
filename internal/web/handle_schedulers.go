@@ -217,32 +217,28 @@ func (d *deps) entryModel(r *http.Request, a access, ans answer) pages.Scheduler
 	}
 	m.Options = optionTokens(e.Options, true)
 	m.Next, m.Prev = e.Next, e.Prev
-	d.entryPayload(&m, name, id, v, e.Payload)
+	m.Payload = payloadView(e.Payload, v.raw, func(raw bool) string {
+		pv := v
+		pv.raw = raw
+		return d.entryURL(name, id, pv)
+	})
 	m.History = d.entryHistory(ctx, a.conn, e, v)
 	return m
 }
 
-// entryPayload fills the payload card: indented JSON with a link to the
-// raw text, or the raw text (with a link back) for ?payload=raw; a payload
-// that is not JSON is shown raw, without the toggle.
-func (d *deps) entryPayload(m *pages.SchedulerEntry, name, id string, v entryView, payload []byte) {
-	if len(payload) == 0 {
-		m.NoPayload = true
-		return
+// payloadView is a payload card: indented JSON with a link to the raw
+// text, or the raw text (with a link back) when raw; a payload that is not
+// JSON is shown raw, without the toggle. link is the page's URL in the raw
+// view or not.
+func payloadView(payload []byte, raw bool, link func(raw bool) string) pages.Payload {
+	p := pages.Payload{Text: format.Text(payload)}
+	if pretty, ok := format.PrettyJSON(payload); ok {
+		p.JSON, p.Raw, p.JSONURL, p.RawURL = true, raw, link(false), link(true)
+		if !raw {
+			p.Text = pretty
+		}
 	}
-	jsonView, rawView := v, v
-	jsonView.raw, rawView.raw = false, true
-	pretty, ok := format.PrettyJSON(payload)
-	switch {
-	case ok && !v.raw:
-		m.Payload = pretty
-	default:
-		m.Payload, m.Raw = format.Text(payload), ok
-	}
-	if ok {
-		m.PayloadJSON = true
-		m.JSONURL, m.RawURL = d.entryURL(name, id, jsonView), d.entryURL(name, id, rawView)
-	}
+	return p
 }
 
 // entryHistory reads one page of the entry's enqueue history. A page past

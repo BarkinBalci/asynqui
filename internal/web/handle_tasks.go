@@ -127,16 +127,7 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 	// A poll answer has no payload card, and has the result card only
 	// when the task changed: skip the formatting otherwise.
 	if !ans.poll || ans.init {
-		if pretty, ok := format.PrettyJSON(t.Payload); ok {
-			m.PayloadJSON = true
-			m.Payload = pretty
-			m.JSONURL = d.taskURL(name, queue, id, taskView{})
-			m.RawURL = d.taskURL(name, queue, id, taskView{raw: true})
-		}
-		if !m.PayloadJSON || v.raw {
-			m.Raw = m.PayloadJSON
-			m.Payload = format.Text(t.Payload)
-		}
+		m.Payload = payloadView(t.Payload, v.raw, func(raw bool) string { return d.taskURL(name, queue, id, taskView{raw: raw}) })
 	}
 	if len(t.Result) > 0 {
 		m.HasResult = true

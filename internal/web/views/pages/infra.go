@@ -249,21 +249,25 @@ type SchedulerEntry struct {
 	Queue    string
 	QueueURL string
 	Options  []OptionToken
-	// Payload is the payload as shown: indented JSON, or the raw text
-	// (Raw, or not JSON). PayloadJSON offers the JSON/Raw toggle, whose
-	// links are JSONURL and RawURL.
-	Payload     string
-	NoPayload   bool
-	PayloadJSON bool
-	Raw         bool
-	JSONURL     string
-	RawURL      string
-	Next        time.Time
-	Prev        time.Time
+	Payload  Payload
+	Next     time.Time
+	Prev     time.Time
 	// Now is the time the relative run times are written against.
 	Now time.Time
 	// History is the enqueue history page.
 	History History
+}
+
+// Payload is the payload card of the Task and Scheduler entry pages: the
+// payload as shown (indented JSON, or the raw text: Raw, or not JSON;
+// empty for no payload) and, for valid JSON, the JSON/Raw toggle, whose
+// links (?payload=raw) are JSONURL and RawURL.
+type Payload struct {
+	Text    string
+	JSON    bool
+	Raw     bool
+	JSONURL string
+	RawURL  string
 }
 
 // History is one page of an entry's enqueue history, newest first.

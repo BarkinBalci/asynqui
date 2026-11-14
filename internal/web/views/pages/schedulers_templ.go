@@ -828,7 +828,7 @@ func entryBody(m SchedulerEntry, oob bool) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = payloadCard(m).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = payloadCard(m.Payload).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -860,7 +860,7 @@ func entryBody(m SchedulerEntry, oob bool) templ.Component {
 
 // payloadCard is the payload with the JSON/Raw toggle: plain links
 // (?payload=raw), so it works without JS. It is not polled.
-func payloadCard(m SchedulerEntry) templ.Component {
+func payloadCard(p Payload) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -881,7 +881,7 @@ func payloadCard(m SchedulerEntry) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if m.PayloadJSON {
+		if p.JSON {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "<nav class=\"seg\" aria-label=\"Payload view\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
@@ -895,7 +895,7 @@ func payloadCard(m SchedulerEntry) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var37 string
-				templ_7745c5c3_Var37, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL(m.JSONURL)).ResolveURL(ctx)
+				templ_7745c5c3_Var37, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL(p.JSONURL)).ResolveURL(ctx)
 				if templ_7745c5c3_Err != nil {
 					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/pages/schedulers.templ`, Line: 162, Col: 57}
 				}
@@ -907,7 +907,7 @@ func payloadCard(m SchedulerEntry) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "a", toggleAttrs(!m.Raw))
+				templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "a", toggleAttrs(!p.Raw))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -934,7 +934,7 @@ func payloadCard(m SchedulerEntry) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var38 string
-				templ_7745c5c3_Var38, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL(m.RawURL)).ResolveURL(ctx)
+				templ_7745c5c3_Var38, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.SafeURL(p.RawURL)).ResolveURL(ctx)
 				if templ_7745c5c3_Err != nil {
 					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/pages/schedulers.templ`, Line: 163, Col: 55}
 				}
@@ -946,7 +946,7 @@ func payloadCard(m SchedulerEntry) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "a", toggleAttrs(m.Raw))
+				templ_7745c5c3_Err = templruntime.RenderAttributes(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_ElementWriter, "a", toggleAttrs(p.Raw))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -969,13 +969,13 @@ func payloadCard(m SchedulerEntry) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if m.NoPayload {
+		if p.Text == "" {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "<p class=\"empty\">No payload</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = components.CodeBlock(PayloadID, m.Payload, "Payload", "Copy payload").Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.CodeBlock(PayloadID, p.Text, "Payload", "Copy payload").Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

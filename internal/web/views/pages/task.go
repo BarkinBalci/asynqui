@@ -41,14 +41,8 @@ type Task struct {
 	Type   string
 	Status TaskState
 
-	// Payload is the shown payload text: indented JSON, or the raw text.
-	// PayloadJSON offers the JSON / Raw toggle (valid JSON only); Raw is
-	// the raw view.
-	Payload     string
-	PayloadJSON bool
-	Raw         bool
-	JSONURL     string
-	RawURL      string
+	// Payload is the payload card; a poll answer has none.
+	Payload Payload
 	// Result is the written result (indented when JSON), if HasResult.
 	Result    string
 	HasResult bool
