@@ -6,10 +6,29 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/BarkinBalci/asynqui/internal/conn"
+	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
+
+// TestTaskEnumsMatch pins the mapping web relies on: pages' task states
+// and verbs are conn's, in the same order.
+func TestTaskEnumsMatch(t *testing.T) {
+	qi := conn.QueueInfo{Queue: conn.Queue{Active: 1, Pending: 2, Scheduled: 4, Retry: 5, Archived: 6}, Aggregating: 3, Completed: 7}
+	want := map[string]int{"active": 1, "pending": 2, "aggregating": 3, "scheduled": 4, "retry": 5, "archived": 6, "completed": 7}
+	for _, s := range pages.TaskStates() {
+		if got := qi.Count(conn.TaskState(s)); got != want[pages.StateParam(s)] {
+			t.Errorf("%s maps onto the count %d", pages.StateParam(s), got)
+		}
+	}
+	for v, name := range map[conn.TaskVerb]string{conn.TaskRun: "run", conn.TaskArchive: "archive", conn.TaskDelete: "delete", conn.TaskCancel: "cancel"} {
+		if got := pages.VerbParam(pages.TaskVerb(v)); got != name {
+			t.Errorf("conn verb %d maps onto %q, want %q", v, got, name)
+		}
+	}
+}
 
 // fakeTasks backs fakeConns' TaskSource methods: the tasks of every queue
 // of "main", in list order.
@@ -189,7 +208,7 @@ func (f *fakeConns) taskAction(queue string, verb conn.TaskVerb, id string) erro
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.acted = append(t.acted, verbParam(verb)+" "+queue+"/"+id)
+	t.acted = append(t.acted, pages.VerbParam(pages.TaskVerb(verb))+" "+queue+"/"+id)
 	if err := t.actErr[id]; err != nil {
 		return err
 	}
@@ -221,7 +240,7 @@ func (f *fakeConns) allAction(queue string, verb conn.TaskVerb, state conn.TaskS
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.acted = append(t.acted, verbParam(verb)+"-all "+queue+"/"+stateParam(state))
+	t.acted = append(t.acted, pages.VerbParam(pages.TaskVerb(verb))+"-all "+queue+"/"+pages.StateParam(pages.TaskState(state)))
 	if err := t.actErr[""]; err != nil {
 		return 0, err
 	}
@@ -249,7 +268,7 @@ func (f *fakeConns) groupAction(queue string, verb conn.TaskVerb, group string) 
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.acted = append(t.acted, verbParam(verb)+"-all "+queue+"/group:"+group)
+	t.acted = append(t.acted, pages.VerbParam(pages.TaskVerb(verb))+"-all "+queue+"/group:"+group)
 	if err := t.actErr["group:"+group]; err != nil {
 		return 0, err
 	}

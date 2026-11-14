@@ -4,10 +4,12 @@ import (
 	"context"
 
 	"github.com/BarkinBalci/asynqui/internal/conn"
-	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
 // TaskSource is what the Queue and Task pages need from a connection.
+// Its TaskState and TaskVerb are conn's; pages has the same enums in the
+// same order (pages.TaskState(s) maps one onto the other), since views do
+// not import conn.
 type TaskSource interface {
 	// QueueInfo reads one queue's counters. An unknown queue is
 	// conn.ErrQueueNotFound.
@@ -41,8 +43,9 @@ type TaskSource interface {
 // "select all N" either. The "all" variants of aggregating tasks act on
 // one group (asynq's *AllAggregatingTasks).
 
-// tabVerbs are the Queue page toolbar's actions for a state, in button
-// order. Every one of them also has an "all" variant, except on Active.
+// tabVerbs are the actions for a state, in button order: the Queue page
+// toolbar's and the Task page's. Every one of them also has an "all"
+// variant, except on Active.
 func tabVerbs(s conn.TaskState) []conn.TaskVerb {
 	switch s {
 	case conn.TaskActive:
@@ -72,9 +75,6 @@ func allowsAll(s conn.TaskState, verb conn.TaskVerb) bool {
 	return false
 }
 
-// taskVerbs are the Task page's actions for a task in state s.
-func taskVerbs(s conn.TaskState) []conn.TaskVerb { return tabVerbs(s) }
-
 // sortable reports whether the state's table sorts by its time column:
 // scheduled and retry by the next process time, archived by when it was
 // archived, completed by when its result expires. Tasks applies desc for
@@ -90,60 +90,3 @@ func sortable(s conn.TaskState) bool {
 // taskDefaultDesc is the state's default direction: what is next first for
 // scheduled and retry, the most recent first for archived and completed.
 func taskDefaultDesc(s conn.TaskState) bool { return s == conn.TaskArchived || s == conn.TaskCompleted }
-
-func stateParam(s conn.TaskState) string { return pages.StateParam(pageState(s)) }
-
-// parseState is the state whose ?state= value is v.
-func parseState(v string) (conn.TaskState, bool) {
-	for _, s := range []conn.TaskState{conn.TaskActive, conn.TaskPending, conn.TaskAggregating, conn.TaskScheduled, conn.TaskRetry, conn.TaskArchived, conn.TaskCompleted} {
-		if stateParam(s) == v {
-			return s, true
-		}
-	}
-	return 0, false
-}
-
-func pageState(s conn.TaskState) pages.TaskState {
-	switch s {
-	case conn.TaskActive:
-		return pages.StateActive
-	case conn.TaskAggregating:
-		return pages.StateAggregating
-	case conn.TaskScheduled:
-		return pages.StateScheduled
-	case conn.TaskRetry:
-		return pages.StateRetry
-	case conn.TaskArchived:
-		return pages.StateArchived
-	case conn.TaskCompleted:
-		return pages.StateCompleted
-	}
-	return pages.StatePending
-}
-
-func pageVerb(v conn.TaskVerb) pages.TaskVerb {
-	switch v {
-	case conn.TaskRun:
-		return pages.TaskRun
-	case conn.TaskArchive:
-		return pages.TaskArchive
-	case conn.TaskCancel:
-		return pages.TaskCancel
-	}
-	return pages.TaskDelete
-}
-
-func verbParam(v conn.TaskVerb) string {
-	switch v {
-	case conn.TaskRun:
-		return "run"
-	case conn.TaskArchive:
-		return "archive"
-	case conn.TaskCancel:
-		return "cancel"
-	}
-	return "delete"
-}
-
-// taskVerbName names a verb in logs.
-func taskVerbName(v conn.TaskVerb) string { return verbParam(v) }

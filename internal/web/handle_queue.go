@@ -50,8 +50,8 @@ func tabView(s conn.TaskState, size int) queueView {
 // to the defaults.
 func parseQueueView(q url.Values) queueView {
 	v := defaultQueueView()
-	if s, ok := parseState(q.Get("state")); ok {
-		v.state = s
+	if s, ok := pages.ParseState(q.Get("state")); ok {
+		v.state = conn.TaskState(s)
 	}
 	v.desc = taskDefaultDesc(v.state)
 	if sortable(v.state) {
@@ -77,7 +77,7 @@ func parseQueueView(q url.Values) queueView {
 func (v queueView) values() url.Values {
 	q := url.Values{}
 	if v.state != conn.TaskPending {
-		q.Set("state", stateParam(v.state))
+		q.Set("state", pages.StateParam(pages.TaskState(v.state)))
 	}
 	if v.state == conn.TaskAggregating && v.group != "" {
 		q.Set("group", v.group)
@@ -233,7 +233,7 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 		return m
 	}
 
-	m.Tab = pageState(v.state)
+	m.Tab = pages.TaskState(v.state)
 	m.Group = v.group
 	m.GroupsURL = d.queueURL(name, queue, tabView(conn.TaskAggregating, v.size))
 	m.Next = d.queueURL(name, queue, v)
@@ -262,8 +262,9 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 	m.Toggle = pages.QueueToggle{
 		URL: d.url("c", name, "queues", toggle), Allowed: a.role >= authz.RoleOperator, Queue: queue, Next: m.Next,
 	}
-	for _, s := range []conn.TaskState{conn.TaskActive, conn.TaskPending, conn.TaskAggregating, conn.TaskScheduled, conn.TaskRetry, conn.TaskArchived, conn.TaskCompleted} {
-		m.Tabs = append(m.Tabs, pages.Tab{State: pageState(s), Count: int64(qi.Count(s)), URL: d.queueURL(name, queue, tabView(s, v.size)), On: s == v.state})
+	for _, p := range pages.TaskStates() {
+		s := conn.TaskState(p)
+		m.Tabs = append(m.Tabs, pages.Tab{State: p, Count: int64(qi.Count(s)), URL: d.queueURL(name, queue, tabView(s, v.size)), On: s == v.state})
 	}
 	m.Total = int64(total)
 	if v.groupList() {
@@ -348,7 +349,8 @@ func (d *deps) taskActions(m *pages.Queue, a access, queue string, v queueView) 
 	s := v.state
 	for _, verb := range tabVerbs(s) {
 		act := d.verbAction(a, queue, verb, pages.TasksFormID)
-		act.ID = "act-" + verbParam(verb)
+		pv := pages.TaskVerb(verb)
+		act.ID = "act-" + pages.VerbParam(pv)
 		switch verb {
 		case conn.TaskDelete:
 			act.Confirm = pages.TasksDeleteDialogID
@@ -358,13 +360,13 @@ func (d *deps) taskActions(m *pages.Queue, a access, queue string, v queueView) 
 			m.ArchiveDialog = components.Dialog{ID: pages.TasksArchiveDialogID, ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: true}
 		}
 		if allowsAll(s, verb) {
-			act.ConfirmAll = pages.AllDialogID(pageVerb(verb))
-			m.AllDialogs = append(m.AllDialogs, pages.AllDialog{Verb: pageVerb(verb), Dialog: components.Dialog{
-				ID: pages.AllDialogID(pageVerb(verb)), ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: act.Danger,
+			act.ConfirmAll = pages.AllDialogID(pv)
+			m.AllDialogs = append(m.AllDialogs, pages.AllDialog{Verb: pv, Dialog: components.Dialog{
+				ID: act.ConfirmAll, ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: act.Danger,
 			}})
 			m.AllowAll = true
 		}
-		m.Actions = append(m.Actions, pages.TaskActionButton{Verb: pageVerb(verb), Action: act})
+		m.Actions = append(m.Actions, pages.TaskActionButton{Verb: pv, Action: act})
 	}
 }
 
@@ -374,12 +376,13 @@ func (d *deps) taskActions(m *pages.Queue, a access, queue string, v queueView) 
 func (d *deps) groupActions(m *pages.Queue, a access, queue string) {
 	for _, verb := range tabVerbs(conn.TaskAggregating) {
 		act := d.verbAction(a, queue, verb, pages.TasksFormID)
-		act.ID = "act-all-" + verbParam(verb)
-		act.Confirm = pages.GroupDialogID(pageVerb(verb))
-		m.AllDialogs = append(m.AllDialogs, pages.AllDialog{Verb: pageVerb(verb), Dialog: components.Dialog{
+		pv := pages.TaskVerb(verb)
+		act.ID = "act-all-" + pages.VerbParam(pv)
+		act.Confirm = pages.GroupDialogID(pv)
+		m.AllDialogs = append(m.AllDialogs, pages.AllDialog{Verb: pv, Dialog: components.Dialog{
 			ID: act.Confirm, ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: act.Danger,
 		}})
-		m.Actions = append(m.Actions, pages.TaskActionButton{Verb: pageVerb(verb), Action: act, All: true})
+		m.Actions = append(m.Actions, pages.TaskActionButton{Verb: pv, Action: act, All: true})
 	}
 }
 
@@ -392,7 +395,7 @@ func (d *deps) verbAction(a access, queue string, verb conn.TaskVerb, form strin
 		need, role = components.RoleAdmin, authz.RoleAdmin
 	}
 	return components.Action{
-		URL:     d.url("c", a.conn.Name(), "queues", queue, "tasks", verbParam(verb)),
+		URL:     d.url("c", a.conn.Name(), "queues", queue, "tasks", pages.VerbParam(pages.TaskVerb(verb))),
 		Form:    form,
 		Allowed: a.role >= role,
 		Need:    need,

@@ -122,7 +122,7 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 		}
 		tab := d.queueURL(name, queue, tv)
 		m.TabURL = tab
-		crumbs = append(crumbs, components.Crumb{Label: pages.StateName(pageState(t.State)), URL: tab})
+		crumbs = append(crumbs, components.Crumb{Label: pages.StateName(pages.TaskState(t.State)), URL: tab})
 	}
 	crumbs = append(crumbs, components.Crumb{Text: format.ShortID(format.VisibleID(id)), Mono: true, Title: id})
 	m.Layout = d.layoutWith(r, a, components.SectionQueues, crumbs, d.visible(a.id), override)
@@ -136,14 +136,15 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 		m.PollURL = d.urlQuery(pq, "c", name, "queues", queue, "tasks", id)
 		return m
 	}
-	seen := stateParam(t.State) + "." + taskVersion(t)
+	state := pages.StateParam(pages.TaskState(t.State))
+	seen := state + "." + taskVersion(t)
 	pq.Set("seen", seen)
 	m.PollURL = d.urlQuery(pq, "c", name, "queues", queue, "tasks", id)
 	seenState, _, _ := strings.Cut(ans.seen, ".")
 	m.Changed = ans.poll && ans.seen != seen
-	m.StateChanged = ans.poll && seenState != stateParam(t.State)
+	m.StateChanged = ans.poll && seenState != state
 
-	m.Type, m.Status = t.Type, pageState(t.State)
+	m.Type, m.Status = t.Type, pages.TaskState(t.State)
 	// A poll answer has no payload card, and has the result card only
 	// when the task changed: skip the formatting otherwise.
 	if !ans.poll || ans.init {
@@ -185,9 +186,9 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 	}
 
 	m.FormURL = d.url("c", name, "queues", queue, "tasks", "run")
-	for _, verb := range taskVerbs(t.State) {
+	for _, verb := range tabVerbs(t.State) {
 		act := d.verbAction(a, queue, verb, pages.TaskFormID)
-		act.ID, act.Large, act.Conn = "task-act-"+verbParam(verb), true, name
+		act.ID, act.Large, act.Conn = "task-act-"+pages.VerbParam(pages.TaskVerb(verb)), true, name
 		switch verb {
 		case conn.TaskDelete:
 			act.Confirm = pages.TaskDeleteDialogID
@@ -196,11 +197,11 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 			act.Confirm = pages.TaskArchiveDialogID
 			m.ArchiveDialog = components.Dialog{ID: pages.TaskArchiveDialogID, ConfirmURL: act.URL, Form: pages.TaskFormID, Danger: true}
 		}
-		m.Actions = append(m.Actions, pages.TaskActionButton{Verb: pageVerb(verb), Action: act})
+		m.Actions = append(m.Actions, pages.TaskActionButton{Verb: pages.TaskVerb(verb), Action: act})
 	}
 	m.Hidden = []pages.Param{
 		{Name: "id", Value: id},
-		{Name: "state", Value: stateParam(t.State)},
+		{Name: "state", Value: state},
 		{Name: "from", Value: "task"},
 		{Name: "next", Value: d.taskURL(name, queue, id, v)},
 	}
@@ -275,7 +276,8 @@ func parseTaskForm(r *http.Request) taskForm {
 		confirm:   r.PostForm.Get("confirm") == "1",
 		queueView: defaultQueueView(),
 	}
-	f.state, f.stateOK = parseState(r.PostForm.Get("state"))
+	s, ok := pages.ParseState(r.PostForm.Get("state"))
+	f.state, f.stateOK = conn.TaskState(s), ok
 	f.fromTask = r.PostForm.Get("from") == "task" && len(f.ids) == 1 && !f.all
 	// Only the state of next is used; the answer is always this queue's
 	// page (or its task's), so it cannot redirect elsewhere.
@@ -395,11 +397,11 @@ func handleTaskAction(d *deps, verb conn.TaskVerb) http.Handler {
 func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, queue string, verb conn.TaskVerb, f taskForm, back string) {
 	name := a.conn.Name()
 	m := pages.ConfirmTasks{
-		Verb:      pageVerb(verb),
+		Verb:      pages.TaskVerb(verb),
 		IDs:       f.ids,
 		All:       f.all,
-		State:     pageState(f.state),
-		Action:    d.url("c", name, "queues", queue, "tasks", verbParam(verb)),
+		State:     pages.TaskState(f.state),
+		Action:    d.url("c", name, "queues", queue, "tasks", pages.VerbParam(pages.TaskVerb(verb))),
 		CancelURL: back,
 	}
 	for _, id := range f.ids {
@@ -418,7 +420,7 @@ func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, qu
 		cancel()
 	}
 	if f.stateOK {
-		m.Hidden = append(m.Hidden, pages.Param{Name: "state", Value: stateParam(f.state)})
+		m.Hidden = append(m.Hidden, pages.Param{Name: "state", Value: pages.StateParam(m.State)})
 	}
 	if f.fromTask {
 		m.Hidden = append(m.Hidden, pages.Param{Name: "from", Value: "task"})
@@ -438,7 +440,7 @@ func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, qu
 // task of the state, and returns the notice (how many it acted on; nil
 // when it acted on none of several) and the failures.
 func (d *deps) runTaskAction(ctx context.Context, c Conn, queue string, verb conn.TaskVerb, f taskForm) (*pages.TaskNotice, []pages.TaskFailure) {
-	pv := pageVerb(verb)
+	pv := pages.TaskVerb(verb)
 	var failures []pages.TaskFailure
 	failGroup := func(id, group string, err error) {
 		tf := pages.TaskFailure{Verb: pv, ID: id, Group: group}
@@ -447,7 +449,7 @@ func (d *deps) runTaskAction(ctx context.Context, c Conn, queue string, verb con
 		} else {
 			tf.Detail = errText(err)
 			d.logger.WarnContext(ctx, "task action failed", slog.String("conn", c.Name()), slog.String("queue", queue),
-				slog.String("task", id), slog.String("group", group), slog.String("verb", taskVerbName(verb)), slog.Any("error", err))
+				slog.String("task", id), slog.String("group", group), slog.String("verb", pages.VerbParam(pv)), slog.Any("error", err))
 		}
 		failures = append(failures, tf)
 	}
@@ -512,7 +514,7 @@ func taskVersion(t conn.Task) string {
 	for _, k := range keys {
 		w(k, t.Headers[k])
 	}
-	w(stateParam(t.State), t.LastErr, string(t.Result), t.Group,
+	w(pages.StateParam(pages.TaskState(t.State)), t.LastErr, string(t.Result), t.Group,
 		strconv.Itoa(t.Retried), strconv.Itoa(t.MaxRetry), strconv.FormatBool(t.IsOrphaned),
 		t.LastFailedAt.UTC().String(), t.NextProcessAt.UTC().String(), t.Deadline.UTC().String(),
 		t.CompletedAt.UTC().String(), t.Timeout.String(), t.Retention.String())

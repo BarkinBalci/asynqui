@@ -83,7 +83,7 @@ const (
 
 // GroupDialogID is the id of the dialog confirming verb on every task of
 // the selected aggregation groups.
-func GroupDialogID(v TaskVerb) string { return "groups-" + verbParam(v) }
+func GroupDialogID(v TaskVerb) string { return "groups-" + VerbParam(v) }
 
 // TabCountID is the id of a tab's count, which polls replace.
 func TabCountID(s TaskState) string { return "tab-count-" + StateParam(s) }
@@ -92,7 +92,7 @@ func TabCountID(s TaskState) string { return "tab-count-" + StateParam(s) }
 func TabID(s TaskState) string { return "tab-" + StateParam(s) }
 
 // AllDialogID is the id of the dialog confirming verb on "all N".
-func AllDialogID(v TaskVerb) string { return "tasks-all-" + verbParam(v) }
+func AllDialogID(v TaskVerb) string { return "tasks-all-" + VerbParam(v) }
 
 // StateParam is the ?state= value and id part of s.
 func StateParam(s TaskState) string {
@@ -113,7 +113,18 @@ func StateParam(s TaskState) string {
 	return "pending"
 }
 
-func verbParam(v TaskVerb) string {
+// ParseState is the state whose ?state= value is v.
+func ParseState(v string) (TaskState, bool) {
+	for _, s := range TaskStates() {
+		if StateParam(s) == v {
+			return s, true
+		}
+	}
+	return 0, false
+}
+
+// VerbParam is a verb's path segment and id part ("run", "archive").
+func VerbParam(v TaskVerb) string {
 	switch v {
 	case TaskRun:
 		return "run"
