@@ -249,8 +249,8 @@ func TestRawForDB(t *testing.T) {
 	if i.Raw != want {
 		t.Errorf("Raw =\n%q\nwant\n%q", i.Raw, want)
 	}
-	if ks, _ := i.Section("Keyspace"); len(ks.Fields) != 3 {
-		t.Error("Sections lost other DBs")
+	if i.Keyspace != (Keyspace{DB: 2, Keys: 7}) {
+		t.Errorf("Keyspace = %+v", i.Keyspace)
 	}
 }
 
