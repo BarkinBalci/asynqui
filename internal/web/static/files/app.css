@@ -423,7 +423,6 @@ summary.account-btn:hover{background:var(--control-hover)}
 .content-region{display:flex;flex-direction:column;gap:24px}
 .page-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
 .h1{font-size:24px;font-weight:700;letter-spacing:-0.02em}
-.lead{color:var(--muted)}
 .empty{padding:32px 20px;color:var(--muted);text-align:center}
 
 /* cards */

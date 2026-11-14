@@ -132,6 +132,11 @@ func (d *deps) liveLayout(r *http.Request, a access, section components.Section,
 	return d.layoutWith(r, a, section, all, d.visible(a.id), health)
 }
 
+// sectionCrumb is the breadcrumb of a connection's section page.
+func sectionCrumb(d *deps, s components.Section, segments ...string) components.Crumb {
+	return components.Crumb{Section: s, URL: d.url(segments...)}
+}
+
 // sortSpec describes a table's ?sort=&dir= state: its sortable columns'
 // parameter values in header order, the default sort, and the direction
 // a column takes when first picked.

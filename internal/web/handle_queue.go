@@ -136,9 +136,7 @@ func handleQueue(d *deps) http.Handler {
 		}
 		if f, ok := d.takeFlash(w, r, a.conn.Name()); ok {
 			m.Layout.Toasts = pages.FlashToasts(f)
-			if f.Notice != nil && !m.NotFound {
-				m.Notice = f.Notice
-			}
+			m.Notice = f.Notice
 		}
 		d.render(w, r, status, pages.QueuePage(m))
 	})
