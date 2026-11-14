@@ -152,8 +152,8 @@ func addRoutes(mux *http.ServeMux, d deps) {
 	mux.Handle("POST /c/{conn}/queues/pause", op(d, handleQueueAction(d, pages.VerbPause)))  // form: queue=a&queue=b&next=
 	mux.Handle("POST /c/{conn}/queues/resume", op(d, handleQueueAction(d, pages.VerbResume)))
 	mux.Handle("POST /c/{conn}/queues/pause", …)                                             // + from=queue: the Queue page's Pause/Resume
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, TaskRun)))  // id=a&id=b or all=1&state= (+ group=g&group=h for aggregating); next=, from=task; archive also needs confirm=1
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTaskAction(d, TaskArchive)))
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, TaskRun)))  // id=a&id=b or all=1&state= (+ group=g&group=h for aggregating); next=, from=task
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTaskAction(d, TaskArchive))) // + confirm=1
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTaskAction(d, TaskCancel))) // ids only
 
 	// admin
