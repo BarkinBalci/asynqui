@@ -85,14 +85,7 @@ func cached[T any](ctx context.Context, c *cache, key cacheKey[T], ttl time.Dura
 	// The type is part of the key: the same name with another T is
 	// another key.
 	ch := flight.DoChan(fmt.Sprintf("%T/%s", key, key), func() (any, error) {
-		c.mu.Lock()
-		gen := c.gen
-		c.mu.Unlock()
-		v, err := recovered(func() (T, error) { return fetch(fctx) })
-		if err == nil {
-			c.store(key, v, ttl, gen)
-		}
-		return v, err
+		return fill(c, key, ttl, func() (T, error) { return fetch(fctx) })
 	})
 	select {
 	case r := <-ch:
@@ -103,6 +96,26 @@ func cached[T any](ctx context.Context, c *cache, key cacheKey[T], ttl time.Dura
 	case <-ctx.Done():
 		return zero, ctx.Err()
 	}
+}
+
+// fill is the shared fetch of key's flight: it runs fetch, recovering a
+// panic, and stores a successful result. A value stored since the caller
+// missed the cache (by a flight that finished, and was forgotten, in
+// between) is served instead of fetching again; a reset clears the
+// entries, so it is never older than the last reset.
+func fill[T any](c *cache, key cacheKey[T], ttl time.Duration, fetch func() (T, error)) (any, error) {
+	c.mu.Lock()
+	gen := c.gen
+	if e, ok := c.entries[key]; ok && time.Now().Before(e.expires) {
+		c.mu.Unlock()
+		return e.val, nil
+	}
+	c.mu.Unlock()
+	v, err := recovered(fetch)
+	if err == nil {
+		c.store(key, v, ttl, gen)
+	}
+	return v, err
 }
 
 // store keeps v under key for ttl, unless a reset happened since gen.
