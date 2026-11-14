@@ -84,6 +84,10 @@ func TestValidate(t *testing.T) {
 			basic(c)
 			c.Auth.Basic.Users = append(c.Auth.Basic.Users, BasicUser{Username: "JDoe", PasswordHash: testBcrypt, Groups: []string{" "}})
 		}, []string{"auth.basic.users[1].username: duplicate (case-insensitive) of auth.basic.users[0]", "auth.basic.users[1].groups[0]: must not be empty"}},
+		{"basic usernames differ beyond ASCII case", func(c *Config) {
+			basic(c)
+			c.Auth.Basic.Users = []BasicUser{{Username: "Äda", PasswordHash: testBcrypt}, {Username: "äda", PasswordHash: testBcrypt}, {Username: "\u212Aim", PasswordHash: testBcrypt}, {Username: "kim", PasswordHash: testBcrypt}}
+		}, nil},
 		{"bcrypt", func(c *Config) { basic(c); c.Auth.Basic.Users[0].PasswordHash = Secret("$2b$99" + testBcrypt[6:]) }, []string{"auth.basic.users[0].password_hash: must be a bcrypt hash such as htpasswd -nbBC 12 prints"}},
 		{"proxy headers", func(c *Config) { proxy(c); c.Auth.Proxy.UserHeader, c.Auth.Proxy.GroupsHeader = "X User", "X:G" }, []string{"auth.proxy.user_header: must be a valid header name", "auth.proxy.groups_header: must be a valid header name"}},
 		{"proxy trusted required", func(c *Config) { proxy(c); c.Auth.Proxy.TrustedProxies = nil }, []string{"auth.proxy.trusted_proxies: at least one IP or CIDR is required"}},

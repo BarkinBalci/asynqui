@@ -228,7 +228,7 @@ func (p *problems) basic(b Basic) {
 	for i, u := range b.Users {
 		at := fmt.Sprintf("auth.basic.users[%d]", i)
 		if p.required(at+".username", u.Username) {
-			key := strings.ToLower(u.Username)
+			key := foldASCII(u.Username)
 			if j, dup := first[key]; dup {
 				p.add(at+".username", fmt.Sprintf("duplicate (case-insensitive) of auth.basic.users[%d]", j))
 			} else {
@@ -240,6 +240,17 @@ func (p *problems) basic(b Basic) {
 		}
 		p.nonEmptyEntries(at+".groups", u.Groups)
 	}
+}
+
+// foldASCII lowercases ASCII A–Z only, as authz.FoldUsername does: users
+// whose names differ only in ASCII case would share bindings.
+func foldASCII(s string) string {
+	return strings.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, s)
 }
 
 // isBcryptHash reports whether h is a well-formed bcrypt hash: a known

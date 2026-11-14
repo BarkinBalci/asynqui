@@ -12,8 +12,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/crypto/bcrypt"
-
-	"github.com/BarkinBalci/asynqui/internal/authz"
 )
 
 func TestBasicVerify(t *testing.T) {
@@ -245,16 +243,6 @@ func TestLimiterBounded(t *testing.T) {
 	l.allow("fresh")
 	if n := l.len(); n != 1 {
 		t.Errorf("after a window the limiter holds %d keys, want 1", n)
-	}
-}
-
-// TestFoldMatchesAuthz: basic rejects usernames that authz would treat
-// alike, so both packages must fold the same way.
-func TestFoldMatchesAuthz(t *testing.T) {
-	for _, s := range []string{"", "jdoe", "JDoe@Example.COM", "\u212Aevin", "adm\u0130n", "\u212Bngström", "ÄBC"} {
-		if got, want := foldUsername(s), authz.FoldUsername(s); got != want {
-			t.Errorf("foldUsername(%q) = %q, authz.FoldUsername = %q", s, got, want)
-		}
 	}
 }
 

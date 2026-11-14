@@ -9,6 +9,8 @@ import (
 	"slices"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/BarkinBalci/asynqui/internal/authz"
 )
 
 // maxPasswordBytes is bcrypt's input limit; longer passwords would be
@@ -52,7 +54,7 @@ func newBasic(o BasicOptions) (*basicProvider, error) {
 		}
 		// Authorization matches usernames case-insensitively, so two users
 		// differing only in case would share bindings.
-		if other, dup := folded[foldUsername(u.Username)]; dup {
+		if other, dup := folded[authz.FoldUsername(u.Username)]; dup {
 			return nil, fmt.Errorf("basic: usernames %q and %q differ only in case", other, u.Username)
 		}
 		c, err := bcrypt.Cost([]byte(u.PasswordHash))
@@ -68,7 +70,7 @@ func newBasic(o BasicOptions) (*basicProvider, error) {
 		cost = c
 		u.Groups = slices.Clone(u.Groups)
 		users[u.Username] = u
-		folded[foldUsername(u.Username)] = u.Username
+		folded[authz.FoldUsername(u.Username)] = u.Username
 	}
 	dummy, err := bcrypt.GenerateFromPassword([]byte(rand.Text()), cost)
 	if err != nil {
@@ -120,16 +122,4 @@ func (u BasicUser) identity() Identity {
 func (u BasicUser) version() string {
 	sum := sha256.Sum256([]byte(u.PasswordHash))
 	return base64.RawURLEncoding.EncodeToString(sum[:12])
-}
-
-// foldUsername lowercases ASCII A–Z only. It must match
-// authz.FoldUsername, which decides which usernames bindings treat alike.
-func foldUsername(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if 'A' <= c && c <= 'Z' {
-			b[i] = c + ('a' - 'A')
-		}
-	}
-	return string(b)
 }

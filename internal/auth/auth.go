@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/authz"
 )
 
 // Kind names an authentication provider.
@@ -285,7 +287,7 @@ func (a *Authenticator) basicLogin(w http.ResponseWriter, r *http.Request, next 
 	ok, retry := a.ipLimit.allow(clientKey(r.RemoteAddr))
 	if ok {
 		var r2 time.Duration
-		ok, r2 = a.usrLimit.allow(foldUsername(username))
+		ok, r2 = a.usrLimit.allow(authz.FoldUsername(username))
 		retry = max(retry, r2)
 	}
 	if !ok {
