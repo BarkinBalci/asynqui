@@ -8,10 +8,10 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .DEFAULT_GOAL := help
-.PHONY: help generate lint test test-race run build docker tidy
+.PHONY: help generate lint test test-race e2e run build docker tidy
 
 help: ## List targets
-	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 generate: ## Generate templ code
 	$(TOOL) templ generate
@@ -25,6 +25,9 @@ test: ## Run all tests (Redis-backed tests need Docker)
 
 test-race: ## Run all tests with the race detector (needs cgo and a C compiler)
 	CGO_ENABLED=1 $(GO) test -race ./...
+
+e2e: ## Run the browser tests (Chromium + a throwaway Redis; see docs/contributing.md)
+	$(GO) test -tags e2e -count=1 ./e2e/...
 
 run: generate ## Run locally against localhost:6379 with config.dev.yaml
 	$(GO) run ./cmd/asynqui -config config.dev.yaml

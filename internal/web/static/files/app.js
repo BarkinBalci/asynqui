@@ -373,7 +373,9 @@
 			closer.closest("dialog").close();
 			return;
 		}
-		var confirm = e.target.closest("dialog button[type=submit]");
+		// Only a confirmation dialog's own confirm button: the Find task
+		// dialog stays open on submit so a miss can show inline.
+		var confirm = e.target.closest("dialog button[type=submit][name=confirm]");
 		if (confirm) {
 			var d = confirm.closest("dialog");
 			setTimeout(function () { d.close(); }, 0);
@@ -679,40 +681,6 @@
 	}
 	document.addEventListener("htmx:afterSettle", afterSwap);
 	document.addEventListener("htmx:oobAfterSwap", afterSwap);
-
-	// ---- copy from an element (Servers, Schedulers, Info pages) ----
-	// <button data-copy-from="#id" hidden> copies the text of that element
-	// (a code block), so long text such as the raw INFO is not repeated in
-	// an attribute. Shown, like data-copy buttons, only where the
-	// Clipboard API exists.
-	function revealCopyFrom(scope) {
-		if (!navigator.clipboard) {
-			return;
-		}
-		var buttons = scope.querySelectorAll("[data-copy-from][hidden]");
-		for (var i = 0; i < buttons.length; i++) {
-			buttons[i].hidden = false;
-		}
-	}
-
-	document.addEventListener("click", function (e) {
-		var b = e.target.closest("[data-copy-from]");
-		if (!b || !navigator.clipboard) {
-			return;
-		}
-		var src = document.querySelector(b.getAttribute("data-copy-from"));
-		if (!src) {
-			return;
-		}
-		e.preventDefault();
-		navigator.clipboard.writeText(src.textContent).then(function () {
-			b.classList.add("copied");
-			setTimeout(function () { b.classList.remove("copied"); }, 1500);
-		});
-	});
-	document.addEventListener("htmx:afterSettle", function () { revealCopyFrom(document); });
-	document.addEventListener("htmx:oobAfterSwap", function () { revealCopyFrom(document); });
-	revealCopyFrom(document);
 
 	renderTimes(document);
 	revealCopy(document);

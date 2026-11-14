@@ -43,3 +43,31 @@ jobs:
         run: go test -race ./...
       - name: build
         run: CGO_ENABLED=0 go build -trimpath ./cmd/asynqui
+
+  e2e:
+    # Browser smoke tests (e2e/, build tag e2e): app.js and htmx behaviour
+    # in Chromium against a real Redis and the built binary.
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: install Chromium
+        # The playwright-go version in go.mod picks the matching driver and
+        # browser build.
+        run: go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps chromium
+      - name: browser tests
+        env:
+          ASYNQUI_E2E_REDIS: localhost:6379
+        run: go test -tags e2e -count=1 ./e2e/...

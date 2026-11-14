@@ -15,6 +15,27 @@ Start each commit subject with a [Conventional Commits](https://www.conventional
 
 A scope and `!` for breaking changes are fine: `feat(auth)!: drop the session cookie fallback`. Keep the subject short, in the imperative, without a trailing period.
 
+## Browser tests
+
+`e2e/` holds the browser smoke tests: the behaviour of `app.js` and htmx (polling, focus and selection across polls, dialogs, copy, theme, login) and an axe-core and CSP check of every page. They sit behind the `e2e` build tag, so `go test ./...` needs no browser. CI runs them in the `e2e` job.
+
+The harness flushes and seeds a Redis with asynq (a worker and a scheduler included), builds `cmd/asynqui`, starts it twice on random ports (auth `none` with admin, and basic auth with an admin and a viewer) and drives headless Chromium through [playwright-go](https://github.com/mxschmitt/playwright-go).
+
+1. Install the driver and Chromium once, at the version in `go.mod` (`--with-deps` also installs the system libraries, with sudo):
+
+   ```sh
+   go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps chromium
+   ```
+
+2. Point the tests at a **throwaway** Redis, which they flush, or leave `ASYNQUI_E2E_REDIS` unset to start one with testcontainers (Docker):
+
+   ```sh
+   ASYNQUI_E2E_REDIS=localhost:6379 make e2e
+   go test -tags e2e ./e2e -run 'TestBrowser/FindTask' -v   # one test
+   ```
+
+The axe-core build is vendored in `e2e/testdata` (never fetched at run time); to upgrade it, replace the directory with the new release's `axe.min.js` and `LICENSE` and update the path in `e2e/a11y_test.go`. The accessibility check fails on serious and critical violations and logs the rest (`-v`).
+
 ## Releases
 
 Push a tag `vX.Y.Z` (or `vX.Y.Z-rc.N` for a prerelease) on `main`. `.github/workflows/release.yml` runs the tests, then GoReleaser publishes the GitHub release, the archives and the images.

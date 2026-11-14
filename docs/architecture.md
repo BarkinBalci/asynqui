@@ -222,7 +222,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 | Real Redis | `github.com/testcontainers/testcontainers-go` (+ redis module) |
 | HTML assertions | `github.com/PuerkitoBio/goquery` |
 | Diffs | `github.com/google/go-cmp` (no assertion library) |
-| Browser smoke tests | `github.com/playwright-community/playwright-go` |
+| Browser smoke tests | `github.com/mxschmitt/playwright-go` (playwright-community/playwright-go moved there at v0.6100.0), axe-core vendored in `e2e/testdata` |
 | Lint | golangci-lint v2, pinned with a `tool` directive in `tools/go.mod` |
 | Releases | GoReleaser |
 
@@ -271,12 +271,13 @@ func addRoutes(mux *http.ServeMux, d deps) {
    - role enforcement (403/404)
    - actions mutating Redis
    - "not found" and "Connection failed" states
-4. **Browser smoke tests** (about 10, a separate CI job, milestone M7): playwright-go for the behaviour that lives in `app.js` and htmx and that Go tests cannot run (selection across polls, focus, dialogs, `hx-sync`); handler and component tests only check the markup that drives it:
-   - select-all then bulk action
-   - copy
-   - theme without a flash
-   - polling
-   - an axe-core accessibility check per page
+4. **Browser smoke tests** (`e2e/`, build tag `e2e`, the CI `e2e` job; see [contributing](contributing.md#browser-tests)): playwright-go and headless Chromium against the built binary and a seeded Redis, for the behaviour that lives in `app.js` and htmx and that Go tests cannot run (selection across polls, focus, dialogs, `hx-sync`); handler and component tests only check the markup that drives it:
+   - theme without a flash, System following `prefers-color-scheme`
+   - polling: Off sends nothing, 2s polls, a hidden tab pauses
+   - a sort or a picker during a poll, selection and focus across polls, the Delete rule
+   - "select all N" then Delete all, none on Active, the Archive warning, Find task
+   - copy, local times, login and a viewer's disabled actions, the account menu
+   - an axe-core check per page in both themes (vendored axe-core; fails on serious and critical), and no console error or CSP violation on any page
 
 Other conventions:
 - **No mock frameworks.** Use small hand-written fakes for error paths and a fake OIDC provider built on `httptest.Server`.
@@ -290,8 +291,8 @@ Other conventions:
 
 - **Tools module:** `tools/go.mod` pins templ and golangci-lint with `tool` directives. Run them as `go tool -modfile=tools/go.mod <tool>`; the main `go.mod` lists only runtime and test dependencies.
 - **Go version:** `go 1.26.0` with `toolchain go1.26.10` in both `go.mod` files. CI installs `1.26.x`.
-- **Makefile:** `make help` lists the targets (`generate`, `lint`, `test`, `test-race`, `run`, `build`, `docker`, `tidy`). `build` stamps `main.version` from `git describe`.
-- **CI** (`.github/workflows/ci.yml`, actions pinned by commit SHA): `go mod tidy -diff` for both modules, templ generate + `git status --porcelain` must be empty, vet, golangci-lint, `go test -race` with `ASYNQUI_REQUIRE_DOCKER=1` (integration tests fail rather than skip without Docker), static build.
+- **Makefile:** `make help` lists the targets (`generate`, `lint`, `test`, `test-race`, `e2e`, `run`, `build`, `docker`, `tidy`). `build` stamps `main.version` from `git describe`.
+- **CI** (`.github/workflows/ci.yml`, actions pinned by commit SHA): `go mod tidy -diff` for both modules, templ generate + `git status --porcelain` must be empty, vet, golangci-lint, `go test -race` with `ASYNQUI_REQUIRE_DOCKER=1` (integration tests fail rather than skip without Docker), static build. A separate `e2e` job runs the browser tests with a Redis service container.
 - **Release** (`.github/workflows/release.yml`, on `v*` tags, actions pinned by SHA, only `contents: write` and `packages: write`): tests, then GoReleaser at a pinned version (keep it in sync with the header of `.goreleaser.yaml`). Check the config with `go run github.com/goreleaser/goreleaser/v2@<version> check`.
 
 ## Documentation plan
