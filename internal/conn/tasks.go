@@ -186,24 +186,7 @@ func (c *Conn) QueueInfo(ctx context.Context, queue string) (QueueInfo, error) {
 		if err != nil {
 			return QueueInfo{}, fmt.Errorf("queue %s: %w", queue, queueErr(err))
 		}
-		return QueueInfo{
-			Queue: Queue{
-				Name:           qi.Queue,
-				Paused:         qi.Paused,
-				Size:           qi.Size,
-				Pending:        qi.Pending,
-				Active:         qi.Active,
-				Scheduled:      qi.Scheduled,
-				Retry:          qi.Retry,
-				Archived:       qi.Archived,
-				ProcessedToday: qi.Processed,
-				FailedToday:    qi.Failed,
-				Latency:        qi.Latency,
-				MemoryUsage:    qi.MemoryUsage,
-			},
-			Completed:   qi.Completed,
-			Aggregating: qi.Aggregating,
-		}, nil
+		return QueueInfo{Queue: newQueue(qi), Completed: qi.Completed, Aggregating: qi.Aggregating}, nil
 	})
 }
 
@@ -275,9 +258,7 @@ func (c *Conn) ListTasks(ctx context.Context, queue string, state TaskState, pag
 
 // listInspector is one page of tasks from an Inspector list method.
 func (c *Conn) listInspector(queue string, page, size int, list func(string, ...asynq.ListOption) ([]*asynq.TaskInfo, error)) ([]Task, error) {
-	infos, err := recovered(func() ([]*asynq.TaskInfo, error) {
-		return list(queue, asynq.PageSize(size), asynq.Page(page))
-	})
+	infos, err := list(queue, asynq.PageSize(size), asynq.Page(page))
 	if err != nil {
 		return nil, fmt.Errorf("list tasks of %s: %w", queue, taskErr(err))
 	}
@@ -391,17 +372,9 @@ func (c *Conn) ListGroupTasks(ctx context.Context, queue, group string, page, si
 		if err := c.checkQueue(queue); err != nil {
 			return nil, err
 		}
-		infos, err := recovered(func() ([]*asynq.TaskInfo, error) {
-			return c.tasks.ListAggregatingTasks(queue, group, asynq.PageSize(size), asynq.Page(page))
+		return c.listInspector(queue, page, size, func(q string, opts ...asynq.ListOption) ([]*asynq.TaskInfo, error) {
+			return c.tasks.ListAggregatingTasks(q, group, opts...)
 		})
-		if err != nil {
-			return nil, fmt.Errorf("list tasks of %s group %s: %w", queue, group, taskErr(err))
-		}
-		out := make([]Task, len(infos))
-		for i, ti := range infos {
-			out[i] = newTask(ti)
-		}
-		return out, nil
 	})
 }
 
@@ -428,7 +401,7 @@ func (c *Conn) Groups(ctx context.Context, queue string) ([]Group, error) {
 		if err := c.checkQueue(queue); err != nil {
 			return nil, err
 		}
-		gs, err := recovered(func() ([]*asynq.GroupInfo, error) { return c.tasks.Groups(queue) })
+		gs, err := c.tasks.Groups(queue)
 		if err != nil {
 			return nil, fmt.Errorf("groups of %s: %w", queue, err)
 		}
@@ -449,7 +422,7 @@ func (c *Conn) Task(ctx context.Context, queue, id string) (Task, error) {
 		return Task{}, ErrTaskNotFound
 	}
 	return cached(ctx, c.cache, taskKey(queue, id), cacheTTL, func(context.Context) (Task, error) {
-		ti, err := recovered(func() (*asynq.TaskInfo, error) { return c.tasks.GetTaskInfo(queue, id) })
+		ti, err := c.tasks.GetTaskInfo(queue, id)
 		if err != nil {
 			return Task{}, taskErr(err)
 		}
@@ -498,30 +471,19 @@ func (c *Conn) taskAction(ctx context.Context, queue, id string, act func(string
 // for a task that is not active, instead of publishing a signal no worker
 // listens for.
 func (c *Conn) CancelTask(ctx context.Context, queue, id string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if strings.TrimSpace(id) == "" {
-		return ErrTaskNotFound
-	}
-	_, err := recovered(func() (struct{}, error) {
+	return c.taskAction(ctx, queue, id, func(queue, id string) error {
 		ti, err := c.tasks.GetTaskInfo(queue, id)
 		if err != nil {
-			return struct{}{}, taskErr(err)
+			return err
 		}
 		if ti.State != asynq.TaskStateActive {
-			return struct{}{}, ErrTaskState
+			return ErrTaskState
 		}
 		if err := c.tasks.CancelProcessing(id); err != nil {
-			return struct{}{}, fmt.Errorf("cancel %s: %w", id, err)
+			return fmt.Errorf("cancel %s: %w", id, err)
 		}
-		return struct{}{}, nil
+		return nil
 	})
-	if err != nil {
-		return err
-	}
-	c.cache.reset()
-	return nil
 }
 
 // RunAllTasks moves every scheduled, retry or archived task of the queue

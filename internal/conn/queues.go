@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -106,24 +105,28 @@ func (c *Conn) fetchQueues(context.Context) ([]Queue, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Queue, 0, len(infos))
-	for _, qi := range infos {
-		out = append(out, Queue{
-			Name:           qi.Queue,
-			Paused:         qi.Paused,
-			Size:           qi.Size,
-			Pending:        qi.Pending,
-			Active:         qi.Active,
-			Scheduled:      qi.Scheduled,
-			Retry:          qi.Retry,
-			Archived:       qi.Archived,
-			ProcessedToday: qi.Processed,
-			FailedToday:    qi.Failed,
-			Latency:        qi.Latency,
-			MemoryUsage:    qi.MemoryUsage,
-		})
+	out := make([]Queue, len(infos))
+	for i, qi := range infos {
+		out[i] = newQueue(qi)
 	}
 	return out, nil
+}
+
+func newQueue(qi *asynq.QueueInfo) Queue {
+	return Queue{
+		Name:           qi.Queue,
+		Paused:         qi.Paused,
+		Size:           qi.Size,
+		Pending:        qi.Pending,
+		Active:         qi.Active,
+		Scheduled:      qi.Scheduled,
+		Retry:          qi.Retry,
+		Archived:       qi.Archived,
+		ProcessedToday: qi.Processed,
+		FailedToday:    qi.Failed,
+		Latency:        qi.Latency,
+		MemoryUsage:    qi.MemoryUsage,
+	}
 }
 
 // eachQueue calls fn for each name, at most queueConcurrency at a time,
@@ -296,16 +299,9 @@ func (c *Conn) queueAction(ctx context.Context, queue string, act func(string) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(queue) == "" {
-		return fmt.Errorf("%w: %q", ErrQueueNotFound, queue)
-	}
 	_, err := recovered(func() (struct{}, error) {
-		names, err := c.queues.Queues()
-		if err != nil {
-			return struct{}{}, fmt.Errorf("list queues: %w", err)
-		}
-		if !slices.Contains(names, queue) {
-			return struct{}{}, fmt.Errorf("%w: %q", ErrQueueNotFound, queue)
+		if err := c.checkQueue(queue); err != nil {
+			return struct{}{}, err
 		}
 		return struct{}{}, act(queue)
 	})

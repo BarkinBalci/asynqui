@@ -86,7 +86,7 @@ func (c *Conn) SchedulerEntries(ctx context.Context) ([]SchedulerEntry, error) {
 // Cost: one Lua script (listing the live scheduler keys and dropping
 // expired ones) and an LRANGE per scheduler.
 func (c *Conn) fetchSchedulerEntries(context.Context) ([]SchedulerEntry, error) {
-	entries, err := recovered(c.schedulers.SchedulerEntries)
+	entries, err := c.schedulers.SchedulerEntries()
 	if err != nil {
 		return nil, fmt.Errorf("list scheduler entries: %w", err)
 	}
@@ -202,18 +202,14 @@ func (c *Conn) SchedulerEnqueueEvents(ctx context.Context, entryID, queue string
 // GetTaskInfo per event (a SISMEMBER and a Lua script each, cached for
 // taskExistsTTL), up to queueConcurrency at a time.
 func (c *Conn) fetchEnqueueEvents(ctx context.Context, entryID, queue string, page, size int) (EnqueuePage, error) {
-	evs, err := recovered(func() ([]*asynq.SchedulerEnqueueEvent, error) {
-		return c.schedulers.ListSchedulerEnqueueEvents(entryID, asynq.PageSize(size), asynq.Page(page))
-	})
+	evs, err := c.schedulers.ListSchedulerEnqueueEvents(entryID, asynq.PageSize(size), asynq.Page(page))
 	if err != nil {
 		return EnqueuePage{}, fmt.Errorf("list enqueue events: %w", err)
 	}
 	var out EnqueuePage
 	if len(evs) == size && page < MaxEnqueuePage(size) {
 		// With a page size of 1, page n is the event at offset n-1.
-		next, err := recovered(func() ([]*asynq.SchedulerEnqueueEvent, error) {
-			return c.schedulers.ListSchedulerEnqueueEvents(entryID, asynq.PageSize(1), asynq.Page(page*size+1))
-		})
+		next, err := c.schedulers.ListSchedulerEnqueueEvents(entryID, asynq.PageSize(1), asynq.Page(page*size+1))
 		if err != nil {
 			return EnqueuePage{}, fmt.Errorf("list enqueue events: %w", err)
 		}
@@ -241,7 +237,7 @@ func (c *Conn) markExisting(ctx context.Context, queue string, events []EnqueueE
 			defer func() { <-sem }()
 			id := events[i].TaskID
 			ok, err := cached(ctx, c.cache, taskExistsKey(queue, id), taskExistsTTL, func(context.Context) (bool, error) {
-				_, err := recovered(func() (*asynq.TaskInfo, error) { return c.schedulers.GetTaskInfo(queue, id) })
+				_, err := c.schedulers.GetTaskInfo(queue, id)
 				switch {
 				case err == nil:
 					return true, nil

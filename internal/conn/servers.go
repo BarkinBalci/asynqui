@@ -68,7 +68,7 @@ func (c *Conn) Servers(ctx context.Context) ([]Server, error) {
 // also drop expired ones), then a GET per server and an HVALS per server's
 // worker hash. Like every Inspector call it takes no context; see newConn.
 func (c *Conn) fetchServers(context.Context) ([]Server, error) {
-	infos, err := recovered(c.servers.Servers)
+	infos, err := c.servers.Servers()
 	if err != nil {
 		return nil, fmt.Errorf("list servers: %w", err)
 	}
