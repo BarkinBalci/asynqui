@@ -118,8 +118,8 @@ func newAuth(ctx context.Context, cfg *config.Config, sessionGroups []string, lo
 	}
 	if kind == KindBasic {
 		a.basic, err = newBasic(c.Basic)
-		a.ipLimit = newLimiter(loginAttempts, loginWindow, limiterCap, now)
-		a.usrLimit = newLimiter(loginAttempts, loginWindow, limiterCap, now)
+		a.ipLimit = newLimiter(limiterCap, now)
+		a.usrLimit = newLimiter(limiterCap, now)
 	} else {
 		a.oidc, err = newOIDC(ctx, c.OIDC, logger, now)
 	}
@@ -239,8 +239,8 @@ func (a *Authenticator) Challenge(w http.ResponseWriter, r *http.Request) {
 }
 
 // LoginHandler serves POST /login, the basic login form: it checks the
-// "username" and "password" form fields (at most 5 attempts per minute
-// per client IP and per username), sets the session and redirects to
+// "username" and "password" form fields (per client IP and per username,
+// a burst of 5 attempts, then 1 every 12s), sets the session and redirects to
 // "next". Every other provider gets 404, oidc included: its flow starts
 // only at SSOHandler (GET /login/sso). fail may be nil, which writes a
 // plain-text error.

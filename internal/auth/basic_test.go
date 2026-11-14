@@ -129,7 +129,7 @@ func TestBasicLoginFailFunc(t *testing.T) {
 		w.WriteHeader(status)
 	})
 	do(t, h, login(url.Values{"username": {"u"}, "password": {strings.Repeat("x", maxFormBytes)}}))
-	for range loginAttempts + 1 {
+	for range loginBurst + 1 {
 		do(t, h, login(url.Values{"username": {"u"}, "password": {"x"}}))
 	}
 	want := []Failure{FailBadRequest, FailInvalidCredentials, FailInvalidCredentials, FailInvalidCredentials,
@@ -144,7 +144,7 @@ func TestBasicRateLimit(t *testing.T) {
 	users := []config.BasicUser{{Username: "u", PasswordHash: hash}, {Username: "v", PasswordHash: hash}}
 	type try struct{ remote, user, password string }
 	wrong := func(remote, user string) []try {
-		out := make([]try, loginAttempts)
+		out := make([]try, loginBurst)
 		for i := range out {
 			out[i] = try{remote, user, "wrong"}
 		}
@@ -162,14 +162,15 @@ func TestBasicRateLimit(t *testing.T) {
 		{"other IP, same user", wrong("192.0.2.1:1", "u"), 0, try{"192.0.2.2:1", "u", "p"}, http.StatusTooManyRequests},
 		{"same user spread over many /64s", func() []try {
 			var out []try
-			for i := range loginAttempts {
+			for i := range loginBurst {
 				out = append(out, try{fmt.Sprintf("[2001:db8:1:%x::1]:1", i), "U", "wrong"})
 			}
 			return out
 		}(), 0, try{"[2001:db8:1:ff::1]:1", "u", "p"}, http.StatusTooManyRequests},
 		{"same /64 shares a limit", wrong("[2001:db8::1]:1", "u"), 0, try{"[2001:db8::2]:1", "v", "p"}, http.StatusTooManyRequests},
 		{"shared proxy IP locks out everyone behind it", wrong("10.0.0.1:1", "u"), 0, try{"10.0.0.1:2", "v", "p"}, http.StatusTooManyRequests},
-		{"after the window", wrong("192.0.2.1:1", "u"), loginWindow + time.Second, try{"192.0.2.1:3", "u", "p"}, http.StatusSeeOther},
+		{"one more after a refill", wrong("192.0.2.1:1", "u"), loginRefill, try{"192.0.2.1:3", "u", "p"}, http.StatusSeeOther},
+		{"not before it", wrong("192.0.2.1:1", "u"), loginRefill - time.Second, try{"192.0.2.1:3", "u", "p"}, http.StatusTooManyRequests},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -189,8 +190,13 @@ func TestBasicRateLimit(t *testing.T) {
 			if res.status != tt.want {
 				t.Fatalf("attempt = %d, want %d", res.status, tt.want)
 			}
-			if tt.want == http.StatusTooManyRequests && res.header.Get("Retry-After") == "" {
-				t.Error("429 without Retry-After")
+			if tt.want == http.StatusTooManyRequests {
+				if ra := res.header.Get("Retry-After"); ra == "" || ra == "0" {
+					t.Errorf("429 with Retry-After %q", ra)
+				}
+				if !strings.Contains(res.body, "Too Many Requests") {
+					t.Errorf("429 body = %q", res.body)
+				}
 			}
 		})
 	}
@@ -198,7 +204,7 @@ func TestBasicRateLimit(t *testing.T) {
 
 func TestLimiterBounded(t *testing.T) {
 	clk := newClock()
-	l := newLimiter(loginAttempts, loginWindow, 100, clk.now)
+	l := newLimiter(100, clk.now)
 	for i := range 2000 {
 		l.allow(clientKey(fmt.Sprintf("[2001:db8:1:%x::1]:1", i)))
 	}
@@ -206,17 +212,11 @@ func TestLimiterBounded(t *testing.T) {
 		t.Errorf("limiter holds %d keys, want the cap 100", n)
 	}
 	// The most recent keys survive eviction; the oldest are gone.
-	for range loginAttempts - 1 {
+	for range loginBurst - 1 {
 		l.allow(clientKey("[2001:db8:1:7cf::1]:1")) // key 1999
 	}
-	if ok, _ := l.allow(clientKey("[2001:db8:1:7cf::1]:1")); ok {
-		t.Error("recent key lost its history")
-	}
-	// Stale entries are swept once a window has passed.
-	clk.add(loginWindow + time.Second)
-	l.allow("fresh")
-	if n := l.len(); n != 1 {
-		t.Errorf("after a window the limiter holds %d keys, want 1", n)
+	if ok, retry := l.allow(clientKey("[2001:db8:1:7cf::1]:1")); ok || retry <= 0 || retry > loginRefill {
+		t.Errorf("recent key lost its history: ok %v, retry %v", ok, retry)
 	}
 }
 

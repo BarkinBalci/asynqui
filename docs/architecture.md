@@ -197,6 +197,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 | Config | `go.yaml.in/yaml/v3`, the maintained successor to the archived `gopkg.in/yaml.v3` |
 | OIDC | `github.com/coreos/go-oidc/v3` + `golang.org/x/oauth2` |
 | Basic-auth hashes | `golang.org/x/crypto/bcrypt` |
+| Login rate limit | `golang.org/x/time/rate` token buckets |
 | Session cookie | `github.com/gorilla/securecookie` |
 | CSRF | stdlib `http.CrossOriginProtection` (Go 1.25+), based on `Sec-Fetch-Site`, so no tokens are needed |
 | Routing, logging, flags | stdlib `net/http`, `log/slog`, `flag` |

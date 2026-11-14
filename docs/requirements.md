@@ -68,7 +68,7 @@ This document is the source of truth for behaviour. When this file and the canva
 ### `basic`
 - Login form (username + password). Users are listed in config with **bcrypt** hashes and optional `groups`. All hashes must use the same bcrypt cost (startup fails otherwise; rehash at one cost), so a failed login takes the same time whichever user was tried. Usernames that differ only in ASCII case are rejected at startup.
 - Unknown usernames are compared against a dummy hash, so a miss costs the same as a hit.
-- **Rate limit:** 5 `POST /login` attempts per minute per client IP (`r.RemoteAddr`, IPv6 per /64) and 5 per minute per username. Further attempts get 429 and "Too many attempts. Try again later." Behind a proxy every user shares the proxy's IP, so one user's failures can lock out the others. Failed logins are logged with the username only when it exists.
+- **Rate limit:** `POST /login` attempts per client IP (`r.RemoteAddr`, IPv6 per /64) and per username: a burst of 5, then 1 every 12s. Further attempts get 429 and "Too many attempts. Try again later." Behind a proxy every user shares the proxy's IP, so one user's failures can lock out the others. Failed logins are logged with the username only when it exists.
 - bcrypt reads at most 72 bytes. Passwords longer than 72 bytes are rejected at login.
 - Every request re-checks the session's user against the current config: a user removed from config is signed out, and groups always come from config.
 - Invalid credentials show "Invalid username or password."
