@@ -560,34 +560,34 @@ func TestTaskActions(t *testing.T) {
 	if _, err := c.Task(t.Context(), "emails", "r1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.RunTask(t.Context(), "emails", "r1"); err != nil {
+	if err := c.TaskAction(t.Context(), "emails", TaskRun, "r1"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := c.Task(t.Context(), "emails", "r1")
 	if err != nil || got.State != TaskPending {
 		t.Errorf("after run: %+v, %v; want pending (cache dropped)", got, err)
 	}
-	if err := c.ArchiveTask(t.Context(), "emails", "p1"); err != nil {
+	if err := c.TaskAction(t.Context(), "emails", TaskArchive, "p1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.DeleteTask(t.Context(), "emails", "p1"); err != nil {
+	if err := c.TaskAction(t.Context(), "emails", TaskDelete, "p1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.DeleteTask(t.Context(), "emails", "p1"); !errors.Is(err, ErrTaskNotFound) {
+	if err := c.TaskAction(t.Context(), "emails", TaskDelete, "p1"); !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("delete twice: err = %v, want ErrTaskNotFound", err)
 	}
-	if err := c.DeleteTask(t.Context(), "emails", "a1"); err == nil || errors.Is(err, ErrTaskNotFound) {
+	if err := c.TaskAction(t.Context(), "emails", TaskDelete, "a1"); err == nil || errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("delete active: err = %v, want asynq's state error", err)
 	}
 
 	// Cancel: only active tasks of this queue get the signal.
-	if err := c.CancelTask(t.Context(), "emails", "a1"); err != nil {
+	if err := c.TaskAction(t.Context(), "emails", TaskCancel, "a1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.CancelTask(t.Context(), "emails", "r1"); !errors.Is(err, ErrTaskState) {
+	if err := c.TaskAction(t.Context(), "emails", TaskCancel, "r1"); !errors.Is(err, ErrTaskState) {
 		t.Errorf("cancel pending: err = %v, want ErrTaskState", err)
 	}
-	if err := c.CancelTask(t.Context(), "emails", "zz"); !errors.Is(err, ErrTaskNotFound) {
+	if err := c.TaskAction(t.Context(), "emails", TaskCancel, "zz"); !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("cancel unknown: err = %v, want ErrTaskNotFound", err)
 	}
 	if n := f.count("CancelProcessing"); n != 1 {
@@ -600,36 +600,40 @@ func TestAllActions(t *testing.T) {
 		ti("emails", "c1", asynq.TaskStateCompleted), ti("emails", "a1", asynq.TaskStateActive))
 	c := taskConn(t, f, "emails")
 
-	n, err := c.RunAllTasks(t.Context(), "emails", TaskScheduled)
+	n, err := c.AllAction(t.Context(), "emails", TaskRun, TaskScheduled)
 	if err != nil || n != 2 {
 		t.Errorf("RunAll scheduled = %d, %v; want 2", n, err)
 	}
-	n, err = c.DeleteAllTasks(t.Context(), "emails", TaskCompleted)
+	n, err = c.AllAction(t.Context(), "emails", TaskDelete, TaskCompleted)
 	if err != nil || n != 1 {
 		t.Errorf("DeleteAll completed = %d, %v; want 1", n, err)
 	}
-	n, err = c.ArchiveAllTasks(t.Context(), "emails", TaskPending)
+	n, err = c.AllAction(t.Context(), "emails", TaskArchive, TaskPending)
 	if err != nil || n != 2 {
 		t.Errorf("ArchiveAll pending = %d, %v; want 2 (the run ones)", n, err)
 	}
 
 	unsupported := []struct {
-		name string
-		fn   func() (int, error)
+		verb  TaskVerb
+		state TaskState
 	}{
-		{"run all pending", func() (int, error) { return c.RunAllTasks(t.Context(), "emails", TaskPending) }},
-		{"run all completed", func() (int, error) { return c.RunAllTasks(t.Context(), "emails", TaskCompleted) }},
-		{"archive all archived", func() (int, error) { return c.ArchiveAllTasks(t.Context(), "emails", TaskArchived) }},
-		{"archive all completed", func() (int, error) { return c.ArchiveAllTasks(t.Context(), "emails", TaskCompleted) }},
-		{"any all active", func() (int, error) { return c.DeleteAllTasks(t.Context(), "emails", TaskActive) }},
-		{"delete all aggregating", func() (int, error) { return c.DeleteAllTasks(t.Context(), "emails", TaskAggregating) }},
+		{TaskRun, TaskPending},
+		{TaskRun, TaskCompleted},
+		{TaskArchive, TaskArchived},
+		{TaskArchive, TaskCompleted},
+		{TaskDelete, TaskActive},
+		{TaskDelete, TaskAggregating},
+		{TaskCancel, TaskActive},
 	}
 	for _, u := range unsupported {
-		if _, err := u.fn(); !errors.Is(err, ErrUnsupported) {
-			t.Errorf("%s: err = %v, want ErrUnsupported", u.name, err)
+		if _, err := c.AllAction(t.Context(), "emails", u.verb, u.state); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("verb %d, state %d: err = %v, want ErrUnsupported", u.verb, u.state, err)
 		}
 	}
-	if _, err := c.DeleteAllTasks(t.Context(), "nope", TaskPending); !errors.Is(err, ErrQueueNotFound) {
+	if _, err := c.GroupAction(t.Context(), "emails", "g", TaskCancel); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("cancel a group: err = %v, want ErrUnsupported", err)
+	}
+	if _, err := c.AllAction(t.Context(), "nope", TaskDelete, TaskPending); !errors.Is(err, ErrQueueNotFound) {
 		t.Errorf("unknown queue: err = %v, want ErrQueueNotFound", err)
 	}
 	if f.count("DeleteAllPendingTasks") != 0 {
@@ -695,24 +699,24 @@ func TestGroupTasks(t *testing.T) {
 		t.Errorf("unknown queue: err = %v", err)
 	}
 
-	n, err := c.ArchiveAllGroupTasks(t.Context(), "emails", "b")
+	n, err := c.GroupAction(t.Context(), "emails", "b", TaskArchive)
 	if err != nil || n != 1 {
-		t.Errorf("ArchiveAllGroupTasks = %d, %v; want 1", n, err)
+		t.Errorf("GroupAction(Archive) = %d, %v; want 1", n, err)
 	}
 	if got, err := c.ListGroupTasks(t.Context(), "emails", "a", 1, 20); err != nil || len(got) != 3 {
 		t.Errorf("after archiving b, group a = %+v, %v", got, err)
 	}
-	n, err = c.RunAllGroupTasks(t.Context(), "emails", "a")
+	n, err = c.GroupAction(t.Context(), "emails", "a", TaskRun)
 	if err != nil || n != 3 {
-		t.Errorf("RunAllGroupTasks = %d, %v; want 3", n, err)
+		t.Errorf("GroupAction(Run) = %d, %v; want 3", n, err)
 	}
 	if got, err := c.ListGroupTasks(t.Context(), "emails", "a", 1, 20); err != nil || len(got) != 0 {
 		t.Errorf("after run all, group a = %+v, %v; want empty (cache dropped)", got, err)
 	}
-	if n, err := c.DeleteAllGroupTasks(t.Context(), "emails", "a"); err != nil || n != 0 {
-		t.Errorf("DeleteAllGroupTasks = %d, %v; want 0", n, err)
+	if n, err := c.GroupAction(t.Context(), "emails", "a", TaskDelete); err != nil || n != 0 {
+		t.Errorf("GroupAction(Delete) = %d, %v; want 0", n, err)
 	}
-	if _, err := c.DeleteAllGroupTasks(t.Context(), "nope", "a"); !errors.Is(err, ErrQueueNotFound) {
+	if _, err := c.GroupAction(t.Context(), "nope", "a", TaskDelete); !errors.Is(err, ErrQueueNotFound) {
 		t.Errorf("unknown queue: err = %v", err)
 	}
 	if f.count("DeleteAllAggregatingTasks") != 1 {

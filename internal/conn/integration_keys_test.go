@@ -97,7 +97,7 @@ func TestIntegrationKeys(t *testing.T) {
 		for time.Now().Unix() == before {
 			time.Sleep(20 * time.Millisecond)
 		}
-		if err := c.ArchiveTask(ctx, "q", id); err != nil {
+		if err := c.TaskAction(ctx, "q", conn.TaskArchive, id); err != nil {
 			t.Fatal(err)
 		}
 		archived = append(archived, entry{id, time.Now().Unix()})
@@ -210,7 +210,7 @@ func TestIntegrationKeys(t *testing.T) {
 	// A queue holding only completed tasks is not empty: asynq's own check
 	// would delete it and orphan them.
 	for _, s := range []conn.TaskState{conn.TaskRetry, conn.TaskArchived} {
-		if _, err := c.DeleteAllTasks(ctx, "work", s); err != nil {
+		if _, err := c.AllAction(ctx, "work", conn.TaskDelete, s); err != nil {
 			t.Fatal(err)
 		}
 	}

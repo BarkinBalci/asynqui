@@ -189,10 +189,10 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 		act := d.verbAction(a, queue, verb, pages.TaskFormID)
 		act.ID, act.Large, act.Conn = "task-act-"+verbParam(verb), true, name
 		switch verb {
-		case TaskDelete:
+		case conn.TaskDelete:
 			act.Confirm = pages.TaskDeleteDialogID
 			m.DeleteDialog = components.Dialog{ID: pages.TaskDeleteDialogID, ConfirmURL: act.URL, Form: pages.TaskFormID, Danger: true}
-		case TaskArchive:
+		case conn.TaskArchive:
 			act.Confirm = pages.TaskArchiveDialogID
 			m.ArchiveDialog = components.Dialog{ID: pages.TaskArchiveDialogID, ConfirmURL: act.URL, Form: pages.TaskFormID, Danger: true}
 		}
@@ -299,7 +299,7 @@ func parseTaskForm(r *http.Request) taskForm {
 // page), plus a toast per failure; a task deleted from its own page
 // redirects to the queue (HX-Redirect). Without JS it redirects back,
 // carrying the notice and failures in the flash cookie.
-func handleTaskAction(d *deps, verb TaskVerb) http.Handler {
+func handleTaskAction(d *deps, verb conn.TaskVerb) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
 		name, queue := a.conn.Name(), r.PathValue("queue")
@@ -335,7 +335,7 @@ func handleTaskAction(d *deps, verb TaskVerb) http.Handler {
 			http.Redirect(w, r, back, http.StatusSeeOther) //nolint:gosec // G710: built by d.url for this connection.
 			return
 		}
-		if (verb == TaskDelete || verb == TaskArchive || f.all) && !f.confirm {
+		if (verb == conn.TaskDelete || verb == conn.TaskArchive || f.all) && !f.confirm {
 			if isFragment(r) {
 				plainError(w, http.StatusBadRequest)
 				return
@@ -350,7 +350,7 @@ func handleTaskAction(d *deps, verb TaskVerb) http.Handler {
 		if f.stateOK {
 			tabState = f.state
 		}
-		if f.fromTask && verb == TaskDelete {
+		if f.fromTask && verb == conn.TaskDelete {
 			ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
 			if t, err := a.conn.Task(ctx, queue, f.ids[0]); err == nil && t.State != 0 {
 				tabState, tabGroup = t.State, t.Group
@@ -359,7 +359,7 @@ func handleTaskAction(d *deps, verb TaskVerb) http.Handler {
 		}
 		notice, failures := d.runTaskAction(r.Context(), a.conn, queue, verb, f)
 		switch {
-		case f.fromTask && verb == TaskDelete && len(failures) == 0:
+		case f.fromTask && verb == conn.TaskDelete && len(failures) == 0:
 			tab := tabView(tabState, pageSizes()[0])
 			if tabState == conn.TaskAggregating {
 				tab.group = tabGroup
@@ -392,7 +392,7 @@ func handleTaskAction(d *deps, verb TaskVerb) http.Handler {
 
 // confirmTasks answers a delete or "all" action posted without JS with a
 // confirmation page that posts it again with confirm=1.
-func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, queue string, verb TaskVerb, f taskForm, back string) {
+func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, queue string, verb conn.TaskVerb, f taskForm, back string) {
 	name := a.conn.Name()
 	m := pages.ConfirmTasks{
 		Verb:      pageVerb(verb),
@@ -437,7 +437,7 @@ func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, qu
 // runTaskAction applies verb to the selected tasks in turn, or to every
 // task of the state, and returns the notice (how many it acted on; nil
 // when it acted on none of several) and the failures.
-func (d *deps) runTaskAction(ctx context.Context, c Conn, queue string, verb TaskVerb, f taskForm) (*pages.TaskNotice, []pages.TaskFailure) {
+func (d *deps) runTaskAction(ctx context.Context, c Conn, queue string, verb conn.TaskVerb, f taskForm) (*pages.TaskNotice, []pages.TaskFailure) {
 	pv := pageVerb(verb)
 	var failures []pages.TaskFailure
 	failGroup := func(id, group string, err error) {
@@ -455,7 +455,7 @@ func (d *deps) runTaskAction(ctx context.Context, c Conn, queue string, verb Tas
 	if f.all && f.state == conn.TaskAggregating {
 		total, acted := 0, false
 		for _, g := range f.groups {
-			n, err := groupAction(ctx, c, queue, verb, g)
+			n, err := c.GroupAction(ctx, queue, g, verb)
 			total += n
 			if err != nil {
 				failGroup("", g, err)
@@ -471,7 +471,7 @@ func (d *deps) runTaskAction(ctx context.Context, c Conn, queue string, verb Tas
 		return &pages.TaskNotice{Verb: pv, Count: int64(total)}, failures
 	}
 	if f.all {
-		n, err := allAction(ctx, c, queue, verb, f.state)
+		n, err := c.AllAction(ctx, queue, verb, f.state)
 		if err != nil {
 			fail("", err)
 			if n == 0 {
@@ -482,7 +482,7 @@ func (d *deps) runTaskAction(ctx context.Context, c Conn, queue string, verb Tas
 	}
 	done := 0
 	for _, id := range f.ids {
-		if err := taskAction(ctx, c, queue, verb, id); err != nil {
+		if err := c.TaskAction(ctx, queue, verb, id); err != nil {
 			fail(id, err)
 			continue
 		}

@@ -232,7 +232,7 @@ func TestTaskPoll(t *testing.T) {
 	}
 	// The state changed (run elsewhere): the actions follow, with the
 	// action form's state and the delete dialog.
-	if err := conns.taskAction("default", TaskRun, uuidTask); err != nil {
+	if err := conns.taskAction("default", conn.TaskRun, uuidTask); err != nil {
 		t.Fatal(err)
 	}
 	changed := poll(second)
@@ -245,7 +245,7 @@ func TestTaskPoll(t *testing.T) {
 		t.Error("poll URL does not follow the state")
 	}
 	// Gone: the page says so and stops polling.
-	if err := conns.taskAction("default", TaskDelete, uuidTask); err != nil {
+	if err := conns.taskAction("default", conn.TaskDelete, uuidTask); err != nil {
 		t.Fatal(err)
 	}
 	gone := poll(second)
@@ -344,7 +344,7 @@ func TestTaskDeleteRedirectsToRealState(t *testing.T) {
 	h, conns := newTestServer(t, adminOpts())
 	// The page showed retry, but the task was run meanwhile: back to
 	// pending, where it was deleted from.
-	if err := conns.taskAction("default", TaskRun, uuidTask); err != nil {
+	if err := conns.taskAction("default", conn.TaskRun, uuidTask); err != nil {
 		t.Fatal(err)
 	}
 	rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete",

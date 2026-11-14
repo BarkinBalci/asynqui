@@ -185,7 +185,7 @@ func (c fakeConn) Task(ctx context.Context, queue, id string) (conn.Task, error)
 	return conn.Task{}, fmt.Errorf("%w: %s", conn.ErrTaskNotFound, id)
 }
 
-func (f *fakeConns) taskAction(queue string, verb TaskVerb, id string) error {
+func (f *fakeConns) taskAction(queue string, verb conn.TaskVerb, id string) error {
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -197,17 +197,17 @@ func (f *fakeConns) taskAction(queue string, verb TaskVerb, id string) error {
 		if task.Queue != queue || task.ID != id {
 			continue
 		}
-		if task.State == conn.TaskActive && verb != TaskCancel {
+		if task.State == conn.TaskActive && verb != conn.TaskCancel {
 			return errors.New("asynq: task is already running")
 		}
 		switch verb {
-		case TaskRun:
+		case conn.TaskRun:
 			t.tasks[i].State = conn.TaskPending
-		case TaskArchive:
+		case conn.TaskArchive:
 			t.tasks[i].State = conn.TaskArchived
-		case TaskDelete:
+		case conn.TaskDelete:
 			t.tasks = slices.Delete(t.tasks, i, i+1)
-		case TaskCancel:
+		case conn.TaskCancel:
 			if task.State != conn.TaskActive {
 				return errors.New("conn: action does not apply to the task state")
 			}
@@ -217,7 +217,7 @@ func (f *fakeConns) taskAction(queue string, verb TaskVerb, id string) error {
 	return fmt.Errorf("%w: %s", conn.ErrTaskNotFound, id)
 }
 
-func (f *fakeConns) allAction(queue string, verb TaskVerb, state conn.TaskState) (int, error) {
+func (f *fakeConns) allAction(queue string, verb conn.TaskVerb, state conn.TaskState) (int, error) {
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -231,11 +231,11 @@ func (f *fakeConns) allAction(queue string, verb TaskVerb, state conn.TaskState)
 		if task.Queue == queue && task.State == state {
 			n++
 			switch verb {
-			case TaskRun:
+			case conn.TaskRun:
 				task.State = conn.TaskPending
-			case TaskArchive:
+			case conn.TaskArchive:
 				task.State = conn.TaskArchived
-			case TaskDelete:
+			case conn.TaskDelete:
 				continue
 			}
 		}
@@ -245,7 +245,7 @@ func (f *fakeConns) allAction(queue string, verb TaskVerb, state conn.TaskState)
 	return n, nil
 }
 
-func (f *fakeConns) groupAction(queue string, verb TaskVerb, group string) (int, error) {
+func (f *fakeConns) groupAction(queue string, verb conn.TaskVerb, group string) (int, error) {
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -259,11 +259,11 @@ func (f *fakeConns) groupAction(queue string, verb TaskVerb, group string) (int,
 		if task.Queue == queue && task.State == conn.TaskAggregating && task.Group == group {
 			n++
 			switch verb {
-			case TaskRun:
+			case conn.TaskRun:
 				task.State = conn.TaskPending
-			case TaskArchive:
+			case conn.TaskArchive:
 				task.State = conn.TaskArchived
-			case TaskDelete:
+			case conn.TaskDelete:
 				continue
 			}
 		}
@@ -279,44 +279,16 @@ func (f *fakeConns) groupAction(queue string, verb TaskVerb, group string) (int,
 	return n, nil
 }
 
-func (c fakeConn) RunTask(_ context.Context, q, id string) error {
-	return c.f.taskAction(q, TaskRun, id)
+func (c fakeConn) TaskAction(_ context.Context, q string, verb conn.TaskVerb, id string) error {
+	return c.f.taskAction(q, verb, id)
 }
 
-func (c fakeConn) ArchiveTask(_ context.Context, q, id string) error {
-	return c.f.taskAction(q, TaskArchive, id)
+func (c fakeConn) AllAction(_ context.Context, q string, verb conn.TaskVerb, s conn.TaskState) (int, error) {
+	return c.f.allAction(q, verb, s)
 }
 
-func (c fakeConn) DeleteTask(_ context.Context, q, id string) error {
-	return c.f.taskAction(q, TaskDelete, id)
-}
-
-func (c fakeConn) CancelTask(_ context.Context, q, id string) error {
-	return c.f.taskAction(q, TaskCancel, id)
-}
-
-func (c fakeConn) RunAllTasks(_ context.Context, q string, s conn.TaskState) (int, error) {
-	return c.f.allAction(q, TaskRun, s)
-}
-
-func (c fakeConn) ArchiveAllTasks(_ context.Context, q string, s conn.TaskState) (int, error) {
-	return c.f.allAction(q, TaskArchive, s)
-}
-
-func (c fakeConn) DeleteAllTasks(_ context.Context, q string, s conn.TaskState) (int, error) {
-	return c.f.allAction(q, TaskDelete, s)
-}
-
-func (c fakeConn) RunAllGroupTasks(_ context.Context, q, g string) (int, error) {
-	return c.f.groupAction(q, TaskRun, g)
-}
-
-func (c fakeConn) ArchiveAllGroupTasks(_ context.Context, q, g string) (int, error) {
-	return c.f.groupAction(q, TaskArchive, g)
-}
-
-func (c fakeConn) DeleteAllGroupTasks(_ context.Context, q, g string) (int, error) {
-	return c.f.groupAction(q, TaskDelete, g)
+func (c fakeConn) GroupAction(_ context.Context, q, g string, verb conn.TaskVerb) (int, error) {
+	return c.f.groupAction(q, verb, g)
 }
 
 func (f *fakeConns) taskActions() []string {

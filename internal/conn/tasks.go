@@ -430,27 +430,41 @@ func (c *Conn) Task(ctx context.Context, queue, id string) (Task, error) {
 	})
 }
 
-// RunTask moves a scheduled, retry, archived or aggregating task to
-// pending. ArchiveTask archives a pending, scheduled, retry or aggregating
-// task. DeleteTask deletes a task in any state but active. Each returns
-// ErrTaskNotFound or ErrQueueNotFound (wrapping asynq's), or asynq's
-// untyped error for a state the action does not apply to. On success the
+// TaskVerb is a task action.
+type TaskVerb int
+
+// Task actions.
+const (
+	TaskRun TaskVerb = iota
+	TaskArchive
+	TaskDelete
+	TaskCancel
+)
+
+// TaskAction applies verb to one task of the queue. Run moves a
+// scheduled, retry, archived or aggregating task to pending; Archive
+// archives a pending, scheduled, retry or aggregating task; Delete deletes
+// a task in any state but active. Cancel asks the worker processing an
+// active task to stop it (asynq's CancelProcessing, best effort); it first
+// reads the task, so that a task that is not active is ErrTaskState
+// instead of a signal no worker listens for. Each returns ErrTaskNotFound
+// or ErrQueueNotFound (wrapping asynq's), or asynq's untyped error for a
+// state Run, Archive or Delete does not apply to. On success the
 // connection's cached reads are dropped.
-func (c *Conn) RunTask(ctx context.Context, queue, id string) error {
-	return c.taskAction(ctx, queue, id, c.tasks.RunTask)
-}
-
-// ArchiveTask archives a task; see RunTask.
-func (c *Conn) ArchiveTask(ctx context.Context, queue, id string) error {
-	return c.taskAction(ctx, queue, id, c.tasks.ArchiveTask)
-}
-
-// DeleteTask deletes a task; see RunTask.
-func (c *Conn) DeleteTask(ctx context.Context, queue, id string) error {
-	return c.taskAction(ctx, queue, id, c.tasks.DeleteTask)
-}
-
-func (c *Conn) taskAction(ctx context.Context, queue, id string, act func(string, string) error) error {
+func (c *Conn) TaskAction(ctx context.Context, queue string, verb TaskVerb, id string) error {
+	var act func(string, string) error
+	switch verb {
+	case TaskRun:
+		act = c.tasks.RunTask
+	case TaskArchive:
+		act = c.tasks.ArchiveTask
+	case TaskDelete:
+		act = c.tasks.DeleteTask
+	case TaskCancel:
+		act = c.cancel
+	default:
+		return ErrUnsupported
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -465,105 +479,85 @@ func (c *Conn) taskAction(ctx context.Context, queue, id string, act func(string
 	return nil
 }
 
-// CancelTask asks the worker processing an active task of the queue to
-// stop it (asynq's CancelProcessing, best effort). It first reads the task,
-// so that it returns ErrTaskNotFound, ErrQueueNotFound, or ErrTaskState
-// for a task that is not active, instead of publishing a signal no worker
-// listens for.
-func (c *Conn) CancelTask(ctx context.Context, queue, id string) error {
-	return c.taskAction(ctx, queue, id, func(queue, id string) error {
-		ti, err := c.tasks.GetTaskInfo(queue, id)
-		if err != nil {
-			return err
-		}
-		if ti.State != asynq.TaskStateActive {
-			return ErrTaskState
-		}
-		if err := c.tasks.CancelProcessing(id); err != nil {
-			return fmt.Errorf("cancel %s: %w", id, err)
-		}
-		return nil
-	})
+func (c *Conn) cancel(queue, id string) error {
+	ti, err := c.tasks.GetTaskInfo(queue, id)
+	if err != nil {
+		return err
+	}
+	if ti.State != asynq.TaskStateActive {
+		return ErrTaskState
+	}
+	if err := c.tasks.CancelProcessing(id); err != nil {
+		return fmt.Errorf("cancel %s: %w", id, err)
+	}
+	return nil
 }
 
-// RunAllTasks moves every scheduled, retry or archived task of the queue
-// to pending and returns how many it moved. Other states are
-// ErrUnsupported, a queue the connection does not have ErrQueueNotFound.
-// On success the cached reads are dropped.
-func (c *Conn) RunAllTasks(ctx context.Context, queue string, state TaskState) (int, error) {
+// AllAction applies verb to every task of the queue in state and returns
+// how many it acted on: Run to scheduled, retry or archived tasks,
+// Archive to pending, scheduled or retry ones, Delete to any but active
+// and aggregating ones (see GroupAction). Other pairs are ErrUnsupported,
+// a queue the connection does not have ErrQueueNotFound. The cached reads
+// are dropped even when it fails, since asynq may have moved some tasks
+// before failing.
+func (c *Conn) AllAction(ctx context.Context, queue string, verb TaskVerb, state TaskState) (int, error) {
+	t := c.tasks
 	var fn func(string) (int, error)
-	switch state {
-	case TaskScheduled:
-		fn = c.tasks.RunAllScheduledTasks
-	case TaskRetry:
-		fn = c.tasks.RunAllRetryTasks
-	case TaskArchived:
-		fn = c.tasks.RunAllArchivedTasks
+	switch verb {
+	case TaskRun:
+		switch state {
+		case TaskScheduled:
+			fn = t.RunAllScheduledTasks
+		case TaskRetry:
+			fn = t.RunAllRetryTasks
+		case TaskArchived:
+			fn = t.RunAllArchivedTasks
+		}
+	case TaskArchive:
+		switch state {
+		case TaskPending:
+			fn = t.ArchiveAllPendingTasks
+		case TaskScheduled:
+			fn = t.ArchiveAllScheduledTasks
+		case TaskRetry:
+			fn = t.ArchiveAllRetryTasks
+		}
+	case TaskDelete:
+		switch state {
+		case TaskPending:
+			fn = t.DeleteAllPendingTasks
+		case TaskScheduled:
+			fn = t.DeleteAllScheduledTasks
+		case TaskRetry:
+			fn = t.DeleteAllRetryTasks
+		case TaskArchived:
+			fn = t.DeleteAllArchivedTasks
+		case TaskCompleted:
+			fn = t.DeleteAllCompletedTasks
+		}
 	}
 	return c.allAction(ctx, queue, fn)
 }
 
-// ArchiveAllTasks archives every pending, scheduled or retry task of the
-// queue; see RunAllTasks.
-func (c *Conn) ArchiveAllTasks(ctx context.Context, queue string, state TaskState) (int, error) {
-	var fn func(string) (int, error)
-	switch state {
-	case TaskPending:
-		fn = c.tasks.ArchiveAllPendingTasks
-	case TaskScheduled:
-		fn = c.tasks.ArchiveAllScheduledTasks
-	case TaskRetry:
-		fn = c.tasks.ArchiveAllRetryTasks
+// GroupAction applies verb (Run, Archive or Delete) to every task of one
+// aggregation group of the queue (asynq's *AllAggregatingTasks); see
+// AllAction.
+func (c *Conn) GroupAction(ctx context.Context, queue, group string, verb TaskVerb) (int, error) {
+	var fn func(string, string) (int, error)
+	switch verb {
+	case TaskRun:
+		fn = c.tasks.RunAllAggregatingTasks
+	case TaskArchive:
+		fn = c.tasks.ArchiveAllAggregatingTasks
+	case TaskDelete:
+		fn = c.tasks.DeleteAllAggregatingTasks
+	default:
+		return 0, ErrUnsupported
 	}
-	return c.allAction(ctx, queue, fn)
-}
-
-// DeleteAllTasks deletes every pending, scheduled, retry, archived or
-// completed task of the queue; see RunAllTasks.
-func (c *Conn) DeleteAllTasks(ctx context.Context, queue string, state TaskState) (int, error) {
-	var fn func(string) (int, error)
-	switch state {
-	case TaskPending:
-		fn = c.tasks.DeleteAllPendingTasks
-	case TaskScheduled:
-		fn = c.tasks.DeleteAllScheduledTasks
-	case TaskRetry:
-		fn = c.tasks.DeleteAllRetryTasks
-	case TaskArchived:
-		fn = c.tasks.DeleteAllArchivedTasks
-	case TaskCompleted:
-		fn = c.tasks.DeleteAllCompletedTasks
-	}
-	return c.allAction(ctx, queue, fn)
-}
-
-// RunAllGroupTasks moves every task of one aggregation group of the queue
-// to pending (asynq's RunAllAggregatingTasks) and returns how many it
-// moved. ArchiveAllGroupTasks and DeleteAllGroupTasks archive or delete
-// them. A queue the connection does not have is ErrQueueNotFound. On
-// success the cached reads are dropped.
-func (c *Conn) RunAllGroupTasks(ctx context.Context, queue, group string) (int, error) {
-	return c.groupAction(ctx, queue, group, c.tasks.RunAllAggregatingTasks)
-}
-
-// ArchiveAllGroupTasks archives every task of a group; see
-// RunAllGroupTasks.
-func (c *Conn) ArchiveAllGroupTasks(ctx context.Context, queue, group string) (int, error) {
-	return c.groupAction(ctx, queue, group, c.tasks.ArchiveAllAggregatingTasks)
-}
-
-// DeleteAllGroupTasks deletes every task of a group; see RunAllGroupTasks.
-func (c *Conn) DeleteAllGroupTasks(ctx context.Context, queue, group string) (int, error) {
-	return c.groupAction(ctx, queue, group, c.tasks.DeleteAllAggregatingTasks)
-}
-
-func (c *Conn) groupAction(ctx context.Context, queue, group string, fn func(string, string) (int, error)) (int, error) {
 	return c.allAction(ctx, queue, func(q string) (int, error) { return fn(q, group) })
 }
 
 // allAction runs an "all" action after checking that the queue exists.
-// The cached reads are dropped even when it fails, since asynq may have
-// moved some tasks before failing.
 func (c *Conn) allAction(ctx context.Context, queue string, fn func(string) (int, error)) (int, error) {
 	if fn == nil {
 		return 0, ErrUnsupported

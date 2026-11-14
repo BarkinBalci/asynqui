@@ -350,10 +350,10 @@ func (d *deps) taskActions(m *pages.Queue, a access, queue string, v queueView) 
 		act := d.verbAction(a, queue, verb, pages.TasksFormID)
 		act.ID = "act-" + verbParam(verb)
 		switch verb {
-		case TaskDelete:
+		case conn.TaskDelete:
 			act.Confirm = pages.TasksDeleteDialogID
 			m.DeleteDialog = components.Dialog{ID: pages.TasksDeleteDialogID, ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: true}
-		case TaskArchive:
+		case conn.TaskArchive:
 			act.Confirm = pages.TasksArchiveDialogID
 			m.ArchiveDialog = components.Dialog{ID: pages.TasksArchiveDialogID, ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: true}
 		}
@@ -386,9 +386,9 @@ func (d *deps) groupActions(m *pages.Queue, a access, queue string) {
 // verbAction is the button posting verb to the task action route, for
 // the viewer's role: Delete needs admin, the others operator. Delete and
 // Archive are red.
-func (d *deps) verbAction(a access, queue string, verb TaskVerb, form string) components.Action {
+func (d *deps) verbAction(a access, queue string, verb conn.TaskVerb, form string) components.Action {
 	need, role := components.RoleOperator, authz.RoleOperator
-	if verb == TaskDelete {
+	if verb == conn.TaskDelete {
 		need, role = components.RoleAdmin, authz.RoleAdmin
 	}
 	return components.Action{
@@ -397,8 +397,8 @@ func (d *deps) verbAction(a access, queue string, verb TaskVerb, form string) co
 		Allowed: a.role >= role,
 		Need:    need,
 		Enable:  components.EnableAny,
-		Danger:  verb == TaskDelete || verb == TaskArchive,
-		Primary: verb == TaskRun,
+		Danger:  verb == conn.TaskDelete || verb == conn.TaskArchive,
+		Primary: verb == conn.TaskRun,
 	}
 }
 
