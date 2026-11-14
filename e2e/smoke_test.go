@@ -59,7 +59,7 @@ func (p *page) settledBG() string {
 func testThemeNoFlash(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
 	// Record data-theme as the parser creates <html>, before any script.
-	p.ok(p.ctx.AddInitScript(playwright.Script{Content: playwright.String(`
+	p.ok(p.ctx.AddInitScript(playwright.Script{Content: new(`
 		new MutationObserver(function (_, o) {
 			if (document.documentElement) {
 				window.__firstTheme = document.documentElement.getAttribute("data-theme");

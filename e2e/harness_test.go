@@ -80,7 +80,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("start playwright (install Chromium first, see docs/contributing.md): %v", err)
 	}
 	t.Cleanup(func() { _ = pw.Stop() })
-	h.browser, err = pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{Headless: playwright.Bool(true)})
+	h.browser, err = pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{Headless: new(true)})
 	if err != nil {
 		t.Fatalf("launch chromium: %v", err)
 	}

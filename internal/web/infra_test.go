@@ -420,7 +420,7 @@ func TestDetailHeadingsOutsidePolls(t *testing.T) {
 		{"/c/main/schedulers/" + entryA, "entry-poll", "entry-history entry-details"},
 	} {
 		doc := parse(t, do(t, h, request{path: p.path}))
-		for _, id := range strings.Fields(p.regions) {
+		for id := range strings.FieldsSeq(p.regions) {
 			if doc.Find("#"+id).Find("#copy-id, h1, #payload").Length() != 0 {
 				t.Errorf("%s: #%s holds the heading, the copy button or the payload", p.path, id)
 			}

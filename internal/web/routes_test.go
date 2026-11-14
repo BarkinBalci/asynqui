@@ -324,7 +324,7 @@ func TestRoutesPathEscaping(t *testing.T) {
 						t.Errorf("%s=%q is outside the base path", attr, v)
 						continue
 					}
-					for _, seg := range strings.Split(u.EscapedPath(), "/") {
+					for seg := range strings.SplitSeq(u.EscapedPath(), "/") {
 						if plain, err := url.PathUnescape(seg); err != nil || url.PathEscape(plain) != seg {
 							t.Errorf("%s=%q: segment %q is not escaped as one", attr, v, seg)
 						}
