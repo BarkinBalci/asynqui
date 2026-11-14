@@ -446,7 +446,7 @@ templ stateCells(s TaskState, r TaskRow) {
 				@optTimeAbs(r.Started)
 			</td>
 			<td class="num">
-				switch  {
+				switch true {
 					case r.Started.IsZero():
 						—
 					case r.RunningFor < time.Second:
@@ -876,7 +876,7 @@ templ ConfirmPage(m Confirm) {
 // names, or with all of every task in state s (total of them), or of
 // every task of the aggregation groups names.
 templ TasksConfirmTitle(v TaskVerb, all bool, s TaskState, total int64, names []string) {
-	switch  {
+	switch true {
 		case all && s == StateAggregating && len(names) == 1:
 			{ verbText(v, true) + " " + scopeTasks(StateAggregating, names[0], 0) }
 		case all && s == StateAggregating:

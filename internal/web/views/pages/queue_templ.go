@@ -2793,7 +2793,7 @@ func stateCells(s TaskState, r TaskRow) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			switch {
+			switch true {
 			case r.Started.IsZero():
 				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 158, "—")
 				if templ_7745c5c3_Err != nil {
@@ -5047,7 +5047,7 @@ func TasksConfirmTitle(v TaskVerb, all bool, s TaskState, total int64, names []s
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		switch {
+		switch true {
 		case all && s == StateAggregating && len(names) == 1:
 			var templ_7745c5c3_Var226 string
 			templ_7745c5c3_Var226, templ_7745c5c3_Err = templ.JoinStringErrs(verbText(v, true) + " " + scopeTasks(StateAggregating, names[0], 0))

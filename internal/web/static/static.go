@@ -31,7 +31,7 @@ const hashLen = 12
 // resolve as they are. Build it with New; it is immutable and safe for
 // concurrent use.
 type Assets struct {
-	fsys  fs.FS
+	names map[string]bool // every file, by name
 	hash  string
 	files http.Handler
 }
@@ -39,10 +39,12 @@ type Assets struct {
 // New hashes every file of fsys, names and contents.
 func New(fsys fs.FS) (*Assets, error) {
 	h := sha256.New()
+	names := map[string]bool{}
 	err := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
+		names[name] = true
 		body, err := fs.ReadFile(fsys, name)
 		if err != nil {
 			return err
@@ -55,7 +57,7 @@ func New(fsys fs.FS) (*Assets, error) {
 		return nil, fmt.Errorf("static: %w", err)
 	}
 	hash := hex.EncodeToString(h.Sum(nil))[:hashLen]
-	return &Assets{fsys: fsys, hash: hash, files: http.StripPrefix("/"+hash, http.FileServerFS(fsys))}, nil
+	return &Assets{names: names, hash: hash, files: http.StripPrefix("/"+hash, http.FileServerFS(fsys))}, nil
 }
 
 // Embedded returns the Assets of the embedded files directory.
@@ -72,7 +74,7 @@ func Embedded() (*Assets, error) {
 // fixed at build time, so a miss is a programming error caught by any test
 // that renders a page.
 func (a *Assets) Path(name string) string {
-	if st, err := fs.Stat(a.fsys, name); err != nil || st.IsDir() {
+	if !a.names[name] {
 		panic(fmt.Sprintf("static: unknown asset %q", name))
 	}
 	return a.hash + "/" + name
@@ -83,7 +85,7 @@ func (a *Assets) Path(name string) string {
 // unknown name is 404, so there are no directory listings.
 func (a *Assets) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name, ok := strings.CutPrefix(r.URL.Path, "/"+a.hash+"/")
-	if st, err := fs.Stat(a.fsys, name); !ok || err != nil || st.IsDir() {
+	if !ok || !a.names[name] {
 		w.Header().Set("Cache-Control", "no-store")
 		http.NotFound(w, r)
 		return

@@ -170,7 +170,7 @@ func ActionButton(a Action, icon templ.Component, label string) templ.Component 
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
 		if !a.Allowed {
-			switch {
+			switch true {
 			case a.Need == RoleAdmin && a.Conn != "":
 				templ_7745c5c3_Err = lockedAction(a, icon, label, "Requires admin on "+a.Conn, label+" (requires admin on "+a.Conn+")").Render(ctx, templ_7745c5c3_Buffer)
 				if templ_7745c5c3_Err != nil {

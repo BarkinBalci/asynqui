@@ -210,7 +210,7 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 	ctx, cancel := d.pageContext(r.Context())
 	defer cancel()
 	q, rd := readLive(ctx, a, func(ctx context.Context) (queueData, error) { return readQueue(ctx, a.conn, queue, v) })
-	m := pages.Queue{Name: queue, Notice: ans.notice, NotFound: missing(&rd, conn.ErrQueueNotFound)}
+	m := pages.Queue{Name: queue, Notice: ans.notice, NotFound: readyIfMissing(&rd, conn.ErrQueueNotFound)}
 	m.Layout = d.liveLayout(r, a, components.SectionQueues, rd, components.Crumb{Text: queue})
 	if m.NotFound {
 		return m

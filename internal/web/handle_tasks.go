@@ -89,7 +89,7 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 	ctx, cancel := d.pageContext(r.Context())
 	defer cancel()
 	t, rd := readLive(ctx, a, func(ctx context.Context) (conn.Task, error) { return a.conn.Task(ctx, queue, id) })
-	m := pages.Task{Queue: queue, ID: id, NotFound: missing(&rd, conn.ErrTaskNotFound, conn.ErrQueueNotFound)}
+	m := pages.Task{Queue: queue, ID: id, NotFound: readyIfMissing(&rd, conn.ErrTaskNotFound, conn.ErrQueueNotFound)}
 	found := rd.state == pages.DataReady && !m.NotFound
 
 	queueURL := d.url("c", name, "queues", queue)

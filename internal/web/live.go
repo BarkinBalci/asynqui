@@ -81,10 +81,10 @@ func readLive[T any](ctx context.Context, a access, fetch func(ctx context.Conte
 	return v, liveRead{state: pages.DataReady}
 }
 
-// missing reports whether the read found that its item does not exist
-// (its error is one of targets). That is an answer, not a failed read, so
-// rd becomes ready: the page shows "not found".
-func missing(rd *liveRead, targets ...error) bool {
+// readyIfMissing reports whether the read found that its item does not
+// exist (its error is one of targets), and then rewrites rd as a ready
+// read: that is an answer, not a failure, and the page shows "not found".
+func readyIfMissing(rd *liveRead, targets ...error) bool {
 	for _, t := range targets {
 		if errors.Is(rd.cause, t) {
 			*rd = liveRead{state: pages.DataReady}
