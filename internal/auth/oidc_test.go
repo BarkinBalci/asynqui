@@ -19,6 +19,8 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 const (
@@ -199,18 +201,18 @@ func (f *fakeIDP) sign(claims map[string]any) string {
 	return s
 }
 
-func (f *fakeIDP) options(base string) Options {
-	return Options{
-		Provider:      KindOIDC,
+func (f *fakeIDP) options(base string) testOpts {
+	return testOpts{
+		Provider:      config.ProviderOIDC,
 		Session:       testSession(),
 		SessionGroups: []string{"platform", "ops"},
 		BasePath:      base,
-		OIDC: OIDCOptions{
+		Client:        f.srv.Client(),
+		OIDC: config.OIDC{
 			Issuer:       f.srv.URL,
 			ClientID:     testClientID,
 			ClientSecret: testClientSecret,
 			RedirectURL:  "https://asynqui.example.com/auth/callback",
-			HTTPClient:   f.srv.Client(),
 		},
 	}
 }
@@ -325,17 +327,17 @@ func TestOIDCStartEntryPoints(t *testing.T) {
 }
 
 func TestSSOHandlerOtherProviders(t *testing.T) {
-	for _, o := range []Options{
-		{Provider: KindNone},
-		{Provider: KindBasic, Session: testSession(), Basic: BasicOptions{Users: []BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", 4)}}}},
-		{Provider: KindProxy, Proxy: ProxyOptions{TrustedProxies: []string{"10.0.0.1"}, LogoutURL: "https://sso.example/out"}},
+	for _, o := range []testOpts{
+		{Provider: config.ProviderNone},
+		{Provider: config.ProviderBasic, Session: testSession(), Basic: config.Basic{Users: []config.BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", 4)}}}},
+		{Provider: config.ProviderProxy, Proxy: config.Proxy{TrustedProxies: []string{"10.0.0.1"}, LogoutURL: "https://sso.example/out"}},
 	} {
 		a := mustNew(t, o)
 		if res := do(t, app(a), req{target: "/login/sso"}); res.status != http.StatusNotFound {
 			t.Errorf("%s: GET /login/sso = %d, want 404", o.Provider, res.status)
 		}
 		want := ""
-		if o.Provider == KindProxy {
+		if o.Provider == config.ProviderProxy {
 			want = "https://sso.example/out"
 		}
 		if got := a.ProxyLogoutURL(); got != want {
@@ -443,7 +445,7 @@ func TestOIDCReplay(t *testing.T) {
 func TestOIDCClaims(t *testing.T) {
 	tests := []struct {
 		name     string
-		opts     func(*Options)
+		opts     func(*testOpts)
 		claims   func(map[string]any)
 		userinfo map[string]any
 		want     Identity
@@ -490,7 +492,7 @@ func TestOIDCClaims(t *testing.T) {
 			c["hasgroups"] = true
 		}, map[string]any{"sub": "user-1", "groups": []string{"ops"}},
 			Identity{Subject: "user-1", Name: "jdoe@example.com", Email: "jdoe@example.com"}, "groups overage"},
-		{"custom claims", func(o *Options) {
+		{"custom claims", func(o *testOpts) {
 			o.OIDC.UsernameClaim = "preferred_username"
 			o.OIDC.GroupsClaim = "roles"
 		}, func(c map[string]any) {
@@ -558,18 +560,18 @@ func TestOIDCDiscovery(t *testing.T) {
 	idp := newFakeIDP(t)
 	tests := []struct {
 		name    string
-		edit    func(*Options)
+		edit    func(*testOpts)
 		wantErr string
 	}{
-		{"unreachable issuer", func(o *Options) { o.OIDC.Issuer = "http://127.0.0.1:1" }, "discovery"},
-		{"issuer mismatch", func(o *Options) { o.OIDC.Issuer = idp.srv.URL + "/" + "realm" }, "discovery"},
-		{"openid scope added", func(o *Options) { o.OIDC.Scopes = []string{"email"} }, ""},
+		{"unreachable issuer", func(o *testOpts) { o.OIDC.Issuer = "http://127.0.0.1:1" }, "discovery"},
+		{"issuer mismatch", func(o *testOpts) { o.OIDC.Issuer = idp.srv.URL + "/" + "realm" }, "discovery"},
+		{"openid scope added", func(o *testOpts) { o.OIDC.Scopes = []string{"email"} }, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			o := idp.options("")
 			tt.edit(&o)
-			a, err := New(t.Context(), o)
+			a, err := newTest(t.Context(), o)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatal(err)

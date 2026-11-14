@@ -9,15 +9,17 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
-func proxyAuth(t *testing.T, o ProxyOptions) *Authenticator {
+func proxyAuth(t *testing.T, o config.Proxy) *Authenticator {
 	t.Helper()
-	return mustNew(t, Options{Provider: KindProxy, Proxy: o})
+	return mustNew(t, testOpts{Provider: config.ProviderProxy, Proxy: o})
 }
 
 func TestProxyIdentify(t *testing.T) {
-	trusted := ProxyOptions{
+	trusted := config.Proxy{
 		GroupsHeader:   "X-Forwarded-Groups",
 		TrustedProxies: []string{"10.0.0.0/8", "192.0.2.7", "2001:db8::/32", "::ffff:172.16.0.0/108"},
 	}
@@ -30,7 +32,7 @@ func TestProxyIdentify(t *testing.T) {
 	}
 	tests := []struct {
 		name   string
-		opts   ProxyOptions
+		opts   config.Proxy
 		remote string
 		header http.Header
 		want   Identity
@@ -55,11 +57,11 @@ func TestProxyIdentify(t *testing.T) {
 		{"two user lines", trusted, "10.0.0.1:1", hdr("X-Forwarded-User", "admin", "X-Forwarded-User", "jdoe"), Identity{}, false},
 		{"two groups lines", trusted, "10.0.0.1:1",
 			hdr("X-Forwarded-User", "jdoe", "X-Forwarded-Groups", "platform", "X-Forwarded-Groups", "dev"), Identity{}, false},
-		{"two groups lines ignored when groups are off", ProxyOptions{TrustedProxies: []string{"10.0.0.0/8"}}, "10.0.0.1:1",
+		{"two groups lines ignored when groups are off", config.Proxy{TrustedProxies: []string{"10.0.0.0/8"}}, "10.0.0.1:1",
 			hdr("X-Forwarded-User", "jdoe", "X-Forwarded-Groups", "a", "X-Forwarded-Groups", "b"), Identity{Subject: "jdoe", Name: "jdoe"}, true},
-		{"groups header disabled", ProxyOptions{TrustedProxies: []string{"10.0.0.0/8"}}, "10.0.0.1:1",
+		{"groups header disabled", config.Proxy{TrustedProxies: []string{"10.0.0.0/8"}}, "10.0.0.1:1",
 			hdr("X-Forwarded-User", "jdoe", "X-Forwarded-Groups", "platform"), Identity{Subject: "jdoe", Name: "jdoe"}, true},
-		{"custom user header", ProxyOptions{UserHeader: "Remote-User", TrustedProxies: []string{"10.0.0.0/8"}}, "10.0.0.1:1",
+		{"custom user header", config.Proxy{UserHeader: "Remote-User", TrustedProxies: []string{"10.0.0.0/8"}}, "10.0.0.1:1",
 			hdr("Remote-User", "jdoe", "X-Forwarded-User", "admin"), Identity{Subject: "jdoe", Name: "jdoe"}, true},
 
 		{"untrusted remote with headers", trusted, "203.0.113.9:1", hdr("X-Forwarded-User", "admin", "X-Forwarded-Groups", "platform"), Identity{}, false},
@@ -94,15 +96,9 @@ func TestProxyIdentify(t *testing.T) {
 
 func TestProxyNewErrors(t *testing.T) {
 	for _, cidr := range []string{"10.0.0.0/33", "not-an-ip", "10.0.0.1/"} {
-		_, err := New(t.Context(), Options{Provider: KindProxy, Proxy: ProxyOptions{TrustedProxies: []string{cidr}}})
+		_, err := newTest(t.Context(), testOpts{Provider: config.ProviderProxy, Proxy: config.Proxy{TrustedProxies: []string{cidr}}})
 		if err == nil || !strings.Contains(err.Error(), cidr) {
 			t.Errorf("TrustedProxies %q: error = %v", cidr, err)
-		}
-	}
-	for _, tp := range [][]string{nil, {}} {
-		if _, err := New(t.Context(), Options{Provider: KindProxy, Proxy: ProxyOptions{TrustedProxies: tp}}); err == nil ||
-			!strings.Contains(err.Error(), "trusted_proxies is required") {
-			t.Errorf("TrustedProxies %#v: error = %v", tp, err)
 		}
 	}
 }
@@ -126,7 +122,7 @@ func TestProxyTrustedPrefixes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.cidr, func(t *testing.T) {
 			var logs bytes.Buffer
-			p, err := newProxy(t.Context(), ProxyOptions{TrustedProxies: []string{tt.cidr}},
+			p, err := newProxy(t.Context(), config.Proxy{TrustedProxies: []string{tt.cidr}},
 				slog.New(slog.NewTextHandler(&logs, nil)), time.Now)
 			if err != nil {
 				t.Fatal(err)
@@ -145,7 +141,7 @@ func TestProxyTrustedPrefixes(t *testing.T) {
 func TestProxyWarnings(t *testing.T) {
 	clk := newClock()
 	var buf bytes.Buffer
-	a := mustNew(t, Options{Provider: KindProxy, Proxy: ProxyOptions{TrustedProxies: []string{"10.0.0.0/8"}, GroupsHeader: "X-Forwarded-Groups"},
+	a := mustNew(t, testOpts{Provider: config.ProviderProxy, Proxy: config.Proxy{TrustedProxies: []string{"10.0.0.0/8"}, GroupsHeader: "X-Forwarded-Groups"},
 		Logger: slog.New(slog.NewTextHandler(&buf, nil)), Now: clk.now})
 	h := app(a)
 	spoof := func(hdr http.Header) {
@@ -189,7 +185,7 @@ func TestProxyLogout(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := proxyAuth(t, ProxyOptions{TrustedProxies: []string{"10.0.0.0/8"}, LogoutURL: tt.logoutURL})
+			a := proxyAuth(t, config.Proxy{TrustedProxies: []string{"10.0.0.0/8"}, LogoutURL: tt.logoutURL})
 			if a.SignOutVisible() != tt.wantVisible {
 				t.Errorf("SignOutVisible = %v", a.SignOutVisible())
 			}

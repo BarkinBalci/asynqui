@@ -3,8 +3,10 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,7 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 // clock is a settable time source shared by a test and the code under test.
@@ -36,24 +41,76 @@ func (c *clock) add(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
-func testKeys(b byte) KeyPair {
-	return KeyPair{HashKey: bytes.Repeat([]byte{b}, 32), BlockKey: bytes.Repeat([]byte{b + 1}, 32)}
+func testKeys(b byte) config.KeyPair {
+	return config.KeyPair{
+		HashKey:  config.Secret(hex.EncodeToString(bytes.Repeat([]byte{b}, 32))),
+		BlockKey: config.Secret(hex.EncodeToString(bytes.Repeat([]byte{b + 1}, 32))),
+	}
 }
 
-func testSession() SessionOptions { return SessionOptions{KeyPair: testKeys(1)} }
+// keySession is a session config with keys k (and previous ones), the
+// default TTL and Secure cookies.
+func keySession(k config.KeyPair, previous ...config.KeyPair) config.Session {
+	return config.Session{HashKey: k.HashKey, BlockKey: k.BlockKey, PreviousKeys: previous, TTL: config.DefaultSessionTTL, CookieSecure: true}
+}
 
-func mustHash(t *testing.T, password string, cost int) string {
+func testSession() config.Session { return keySession(testKeys(1)) }
+
+func mustHash(t *testing.T, password string, cost int) config.Secret {
 	t.Helper()
 	h, err := bcrypt.GenerateFromPassword([]byte(password), cost)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(h)
+	return config.Secret(h)
 }
 
-func mustNew(t *testing.T, o Options) *Authenticator {
+// testOpts is what a test builds an Authenticator from: the auth section,
+// with config's defaults for what it leaves empty, and New's other
+// arguments.
+type testOpts struct {
+	Provider      config.Provider
+	Session       config.Session
+	SessionGroups []string
+	Basic         config.Basic
+	Proxy         config.Proxy
+	OIDC          config.OIDC
+	BasePath      string
+	Logger        *slog.Logger
+	Now           func() time.Time
+	// Client talks to the IdP.
+	Client *http.Client
+}
+
+func newTest(ctx context.Context, o testOpts) (*Authenticator, error) {
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.Proxy.UserHeader == "" {
+		o.Proxy.UserHeader = config.DefaultUserHeader
+	}
+	if o.OIDC.Scopes == nil {
+		o.OIDC.Scopes = config.DefaultScopes()
+	}
+	if o.OIDC.UsernameClaim == "" {
+		o.OIDC.UsernameClaim = config.DefaultUsernameClaim
+	}
+	if o.OIDC.GroupsClaim == "" {
+		o.OIDC.GroupsClaim = config.DefaultGroupsClaim
+	}
+	if o.Client != nil {
+		ctx = oidc.ClientContext(ctx, o.Client)
+	}
+	cfg := &config.Config{
+		Server: config.Server{BasePath: o.BasePath},
+		Auth:   config.Auth{Provider: o.Provider, Session: o.Session, Basic: o.Basic, Proxy: o.Proxy, OIDC: o.OIDC},
+	}
+	return newAuth(ctx, cfg, o.SessionGroups, o.Logger, o.Now)
+}
+
+func mustNew(t *testing.T, o testOpts) *Authenticator {
 	t.Helper()
-	a, err := New(context.Background(), o)
+	a, err := newTest(context.Background(), o)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

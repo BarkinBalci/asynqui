@@ -12,11 +12,13 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 func TestBasicVerify(t *testing.T) {
 	pw72 := strings.Repeat("a", maxPasswordBytes)
-	b, err := newBasic(BasicOptions{Users: []BasicUser{
+	b, err := newBasic(config.Basic{Users: []config.BasicUser{
 		{Username: "jdoe", PasswordHash: mustHash(t, "secret", bcrypt.MinCost+1), Groups: []string{"payments"}},
 		{Username: "ops", PasswordHash: mustHash(t, "hunter2", bcrypt.MinCost+1)},
 		{Username: "long", PasswordHash: mustHash(t, pw72, bcrypt.MinCost+1)},
@@ -63,40 +65,12 @@ func TestBasicVerify(t *testing.T) {
 	}
 }
 
-func TestBasicValidation(t *testing.T) {
-	h := mustHash(t, "x", bcrypt.MinCost)
-	tests := []struct {
-		name    string
-		users   []BasicUser
-		wantErr string
-	}{
-		{"no users", nil, "no users configured"},
-		{"empty username", []BasicUser{{PasswordHash: h}}, "user 0: empty username"},
-		{"duplicate", []BasicUser{{Username: "a", PasswordHash: h}, {Username: "a", PasswordHash: h}}, `duplicate username "a"`},
-		{"plaintext password", []BasicUser{{Username: "a", PasswordHash: "secret"}}, `user "a": invalid bcrypt password hash`},
-		{"case collision", []BasicUser{{Username: "jdoe", PasswordHash: h}, {Username: "JDoe", PasswordHash: h}}, `"jdoe" and "JDoe" differ only in case`},
-		{"mixed costs", []BasicUser{{Username: "cheap", PasswordHash: h}, {Username: "dear", PasswordHash: mustHash(t, "x", bcrypt.MinCost+2)}},
-			`user "dear" has bcrypt cost 6, others 4; rehash all passwords at one cost`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := newBasic(BasicOptions{Users: tt.users})
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
-			}
-			if strings.Contains(err.Error(), "secret") {
-				t.Error("error leaks the configured hash")
-			}
-		})
-	}
-}
-
-func basicAuth(t *testing.T, users []BasicUser, now func() time.Time, base string) *Authenticator {
+func basicAuth(t *testing.T, users []config.BasicUser, now func() time.Time, base string) *Authenticator {
 	t.Helper()
-	return mustNew(t, Options{
-		Provider: KindBasic,
+	return mustNew(t, testOpts{
+		Provider: config.ProviderBasic,
 		Session:  testSession(),
-		Basic:    BasicOptions{Users: users},
+		Basic:    config.Basic{Users: users},
 		BasePath: base,
 		Now:      now,
 	})
@@ -107,7 +81,7 @@ func login(form url.Values) req {
 }
 
 func TestBasicLogin(t *testing.T) {
-	users := []BasicUser{{Username: "jdoe", PasswordHash: mustHash(t, "secret", bcrypt.MinCost), Groups: []string{"payments"}}}
+	users := []config.BasicUser{{Username: "jdoe", PasswordHash: mustHash(t, "secret", bcrypt.MinCost), Groups: []string{"payments"}}}
 	tests := []struct {
 		name         string
 		base         string
@@ -148,7 +122,7 @@ func TestBasicLogin(t *testing.T) {
 }
 
 func TestBasicLoginFailFunc(t *testing.T) {
-	a := basicAuth(t, []BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}, nil, "")
+	a := basicAuth(t, []config.BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}, nil, "")
 	var got []Failure
 	h := a.LoginHandler(func(w http.ResponseWriter, _ *http.Request, status int, reason Failure) {
 		got = append(got, reason)
@@ -167,7 +141,7 @@ func TestBasicLoginFailFunc(t *testing.T) {
 
 func TestBasicRateLimit(t *testing.T) {
 	hash := mustHash(t, "p", bcrypt.MinCost)
-	users := []BasicUser{{Username: "u", PasswordHash: hash}, {Username: "v", PasswordHash: hash}}
+	users := []config.BasicUser{{Username: "u", PasswordHash: hash}, {Username: "v", PasswordHash: hash}}
 	type try struct{ remote, user, password string }
 	wrong := func(remote, user string) []try {
 		out := make([]try, loginAttempts)
@@ -247,7 +221,7 @@ func TestLimiterBounded(t *testing.T) {
 }
 
 func TestBasicLoginLogging(t *testing.T) {
-	users := []BasicUser{{Username: "jdoe", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
+	users := []config.BasicUser{{Username: "jdoe", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
 	tests := []struct {
 		name     string
 		username string
@@ -259,7 +233,7 @@ func TestBasicLoginLogging(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var logs bytes.Buffer
-			a := mustNew(t, Options{Provider: KindBasic, Session: testSession(), Basic: BasicOptions{Users: users},
+			a := mustNew(t, testOpts{Provider: config.ProviderBasic, Session: testSession(), Basic: config.Basic{Users: users},
 				Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
 			do(t, app(a), login(url.Values{"username": {tt.username}, "password": {"wrong"}}))
 			if !strings.Contains(logs.String(), "login failed") {
@@ -274,19 +248,19 @@ func TestBasicLoginLogging(t *testing.T) {
 
 func TestBasicSessionRecheckedAgainstConfig(t *testing.T) {
 	hash := mustHash(t, "p", bcrypt.MinCost)
-	before := basicAuth(t, []BasicUser{{Username: "u", PasswordHash: hash, Groups: []string{"old"}}}, nil, "")
+	before := basicAuth(t, []config.BasicUser{{Username: "u", PasswordHash: hash, Groups: []string{"old"}}}, nil, "")
 	c := do(t, app(before), login(url.Values{"username": {"u"}, "password": {"p"}})).cookies[sessionCookie]
 
 	tests := []struct {
 		name   string
-		users  []BasicUser
+		users  []config.BasicUser
 		want   Identity
 		wantOK bool
 	}{
-		{"unchanged", []BasicUser{{Username: "u", PasswordHash: hash, Groups: []string{"old"}}}, Identity{Subject: "u", Name: "u", Groups: []string{"old"}}, true},
-		{"groups come from config", []BasicUser{{Username: "u", PasswordHash: hash, Groups: []string{"new"}}}, Identity{Subject: "u", Name: "u", Groups: []string{"new"}}, true},
-		{"user removed", []BasicUser{{Username: "other", PasswordHash: hash}}, Identity{}, false},
-		{"password changed", []BasicUser{{Username: "u", PasswordHash: mustHash(t, "p2", bcrypt.MinCost)}}, Identity{}, false},
+		{"unchanged", []config.BasicUser{{Username: "u", PasswordHash: hash, Groups: []string{"old"}}}, Identity{Subject: "u", Name: "u", Groups: []string{"old"}}, true},
+		{"groups come from config", []config.BasicUser{{Username: "u", PasswordHash: hash, Groups: []string{"new"}}}, Identity{Subject: "u", Name: "u", Groups: []string{"new"}}, true},
+		{"user removed", []config.BasicUser{{Username: "other", PasswordHash: hash}}, Identity{}, false},
+		{"password changed", []config.BasicUser{{Username: "u", PasswordHash: mustHash(t, "p2", bcrypt.MinCost)}}, Identity{}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -309,7 +283,7 @@ func TestBasicSessionRecheckedAgainstConfig(t *testing.T) {
 }
 
 func TestLogout(t *testing.T) {
-	users := []BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
+	users := []config.BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
 	h := app(basicAuth(t, users, nil, "/asynq"))
 	res := do(t, h, req{method: http.MethodPost, target: "/logout"})
 	c := res.cookies[sessionCookie]

@@ -1,28 +1,19 @@
 package authz
 
 import (
-	"errors"
 	"fmt"
 	"path"
 	"slices"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 // Identity is what the policy needs to know about a user. Name is the
-// username matched against Binding.Users after FoldUsername; Groups are
-// matched exactly against Binding.Groups.
+// username matched against a binding's users after FoldUsername; Groups
+// are matched exactly against its groups.
 type Identity struct {
 	Name   string
 	Groups []string
-}
-
-// Binding grants Role on every connection matching one of the Connections
-// globs (path.Match syntax) to the listed users and to members of the listed
-// groups.
-type Binding struct {
-	Users       []string
-	Groups      []string
-	Role        Role
-	Connections []string
 }
 
 // Policy resolves per-connection roles. It is immutable and safe for
@@ -39,55 +30,31 @@ type binding struct {
 	conns  []string
 }
 
-// New builds a Policy. def is the role of every user on every connection
-// when no binding grants more; RoleNone hides connections by default.
-//
-// New fails on a binding with an invalid or none role, no users and no
-// groups, an empty connections list, or a malformed glob.
-func New(def Role, bindings []Binding) (*Policy, error) {
-	if !def.valid() {
-		return nil, fmt.Errorf("authz: invalid default role %v", def)
+// New builds a Policy from config, which config.Load has validated.
+// authz.default is the role of every user on every connection when no
+// binding grants more; none hides connections by default. Each binding
+// grants its role on every connection matching one of its globs
+// (path.Match syntax) to the listed users and to members of the listed
+// groups.
+func New(a config.Authz) (*Policy, error) {
+	def, err := parseRole(a.Default)
+	if err != nil {
+		return nil, fmt.Errorf("authz.default: %w", err)
 	}
-	p := &Policy{def: def, bindings: make([]binding, 0, len(bindings))}
-	var errs []error
-	for i, b := range bindings {
-		if err := validate(b); err != nil {
-			errs = append(errs, fmt.Errorf("authz: binding %d: %w", i, err))
-			continue
+	p := &Policy{def: def, bindings: make([]binding, 0, len(a.Bindings))}
+	for i, b := range a.Bindings {
+		role, err := parseRole(b.Role)
+		if err != nil {
+			return nil, fmt.Errorf("authz.bindings[%d].role: %w", i, err)
 		}
 		p.bindings = append(p.bindings, binding{
 			users:  set(b.Users, FoldUsername),
 			groups: set(b.Groups, nil),
-			role:   b.Role,
+			role:   role,
 			conns:  slices.Clone(b.Connections),
 		})
 	}
-	if err := errors.Join(errs...); err != nil {
-		return nil, err
-	}
 	return p, nil
-}
-
-func validate(b Binding) error {
-	var errs []error
-	if !b.Role.valid() || b.Role == RoleNone {
-		errs = append(errs, fmt.Errorf("role must be viewer, operator or admin, got %v", b.Role))
-	}
-	if len(b.Users) == 0 && len(b.Groups) == 0 {
-		errs = append(errs, errors.New("needs users or groups"))
-	}
-	if slices.Contains(b.Users, "") || slices.Contains(b.Groups, "") {
-		errs = append(errs, errors.New("empty user or group name"))
-	}
-	if len(b.Connections) == 0 {
-		errs = append(errs, errors.New("connections must not be empty"))
-	}
-	for _, g := range b.Connections {
-		if _, err := path.Match(g, ""); err != nil {
-			errs = append(errs, fmt.Errorf("invalid connection glob %q: %w", g, err))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 func set(xs []string, norm func(string) string) map[string]struct{} {
@@ -176,7 +143,7 @@ func (b binding) matchesUser(u Identity) bool {
 
 func (b binding) matchesConn(conn string) bool {
 	for _, g := range b.conns {
-		// Patterns were validated in New, so the error is always nil.
+		// config.Load validated the patterns, so the error is always nil.
 		if ok, _ := path.Match(g, conn); ok {
 			return true
 		}

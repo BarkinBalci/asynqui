@@ -87,7 +87,8 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	ver := buildVersion(version, debug.ReadBuildInfo) // -ldflags, else the go command's module version, else "dev"
 	// --- fail fast: everything below can fail and runs before Listen ---
 	cfg, err := config.Load(opts.configPath, lookupEnv, overrides) // file > default; flags/env override
-	authn, err := auth.New(ctx, …)                               // OIDC discovery happens here
+	policy, err := authz.New(cfg.Authz)                           // both take the validated config types
+	authn, err := auth.New(ctx, cfg, policy.Groups(), logger)     // OIDC discovery happens here
 	reg, err := conn.NewRegistry(cfg.Connections, logger)          // no Redis I/O; fails only on unreadable TLS files
 	checker := newUpdateChecker(cfg.UpdateCheck, ver, logger)      // *update.Checker; nil when off or not a release
 	var updates web.UpdateSource                                  // stays a nil interface without a checker

@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -11,29 +10,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
-const (
-	defaultUserHeader = "X-Forwarded-User"
-	// untrustedLogEvery throttles the WARN for identity headers from
-	// untrusted peers, which an attacker can trigger at will.
-	untrustedLogEvery = time.Minute
-)
-
-// ProxyOptions configures the reverse-proxy provider.
-type ProxyOptions struct {
-	// UserHeader carries the username. Empty means "X-Forwarded-User".
-	UserHeader string
-	// GroupsHeader carries comma-separated groups. Empty disables groups.
-	GroupsHeader string
-	// TrustedProxies are the CIDRs (or bare IPs) whose requests may carry
-	// identity headers; required. Requests from any other address are
-	// unauthenticated.
-	TrustedProxies []string
-	// LogoutURL is where POST /logout sends the user, typically the proxy's
-	// own sign-out endpoint. Empty hides Sign out.
-	LogoutURL string
-}
+// untrustedLogEvery throttles the WARN for identity headers from untrusted
+// peers, which an attacker can trigger at will.
+const untrustedLogEvery = time.Minute
 
 type proxyProvider struct {
 	userHeader   string
@@ -47,21 +30,19 @@ type proxyProvider struct {
 	lastLogged time.Time
 }
 
-func newProxy(ctx context.Context, o ProxyOptions, logger *slog.Logger, now func() time.Time) (*proxyProvider, error) {
+// newProxy builds the provider from config: the user header carries the
+// username, the optional groups header comma-separated groups, and only
+// requests from the trusted proxies (CIDRs or bare IPs) may carry them. The
+// logout URL is where Sign out goes; empty hides it.
+func newProxy(ctx context.Context, c config.Proxy, logger *slog.Logger, now func() time.Time) (*proxyProvider, error) {
 	p := &proxyProvider{
-		userHeader:   o.UserHeader,
-		groupsHeader: o.GroupsHeader,
-		logoutURL:    o.LogoutURL,
+		userHeader:   c.UserHeader,
+		groupsHeader: c.GroupsHeader,
+		logoutURL:    c.LogoutURL,
 		logger:       logger,
 		now:          now,
 	}
-	if p.userHeader == "" {
-		p.userHeader = defaultUserHeader
-	}
-	if len(o.TrustedProxies) == 0 {
-		return nil, errors.New("proxy: trusted_proxies is required")
-	}
-	for _, s := range o.TrustedProxies {
+	for _, s := range c.TrustedProxies {
 		pfx, err := parsePrefix(s)
 		if err != nil {
 			return nil, fmt.Errorf("proxy: trusted proxy %q: %w", s, err)

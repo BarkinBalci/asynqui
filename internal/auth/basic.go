@@ -10,67 +10,37 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/BarkinBalci/asynqui/internal/authz"
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 // maxPasswordBytes is bcrypt's input limit; longer passwords would be
 // silently truncated, so they are rejected.
 const maxPasswordBytes = 72
 
-// BasicOptions lists the users of the basic provider.
-type BasicOptions struct {
-	Users []BasicUser
-}
-
-// BasicUser is one configured account with a bcrypt password hash. All
-// users must share one bcrypt cost.
-type BasicUser struct {
-	Username     string
-	PasswordHash string
-	Groups       []string
-}
-
 type basicProvider struct {
-	users map[string]BasicUser
+	users map[string]config.BasicUser
 	// dummy is compared against when the username is unknown or the
 	// password is too long, so a miss costs the same bcrypt work as a hit
 	// and does not reveal which usernames exist.
 	dummy []byte
 }
 
-func newBasic(o BasicOptions) (*basicProvider, error) {
-	if len(o.Users) == 0 {
+// newBasic indexes the users that config.Load validated: at least one,
+// distinct usernames, bcrypt hashes of one cost.
+func newBasic(b config.Basic) (*basicProvider, error) {
+	if len(b.Users) == 0 {
 		return nil, errors.New("basic: no users configured")
 	}
-	users := make(map[string]BasicUser, len(o.Users))
-	folded := make(map[string]string, len(o.Users))
-	cost := -1
-	for i, u := range o.Users {
-		if u.Username == "" {
-			return nil, fmt.Errorf("basic: user %d: empty username", i)
-		}
-		if _, dup := users[u.Username]; dup {
-			return nil, fmt.Errorf("basic: duplicate username %q", u.Username)
-		}
-		// Authorization matches usernames case-insensitively, so two users
-		// differing only in case would share bindings.
-		if other, dup := folded[authz.FoldUsername(u.Username)]; dup {
-			return nil, fmt.Errorf("basic: usernames %q and %q differ only in case", other, u.Username)
-		}
-		c, err := bcrypt.Cost([]byte(u.PasswordHash))
-		if err != nil {
-			// The hash itself is a secret; never echo it.
-			return nil, fmt.Errorf("basic: user %q: invalid bcrypt password hash", u.Username)
-		}
-		// One cost for everyone, so the timing of a failed login does not
-		// tell which user (or that no user) was tried.
-		if cost >= 0 && c != cost {
-			return nil, fmt.Errorf("basic: user %q has bcrypt cost %d, others %d; rehash all passwords at one cost", u.Username, c, cost)
-		}
-		cost = c
+	users := make(map[string]config.BasicUser, len(b.Users))
+	for _, u := range b.Users {
 		u.Groups = slices.Clone(u.Groups)
 		users[u.Username] = u
-		folded[authz.FoldUsername(u.Username)] = u.Username
+	}
+	// The dummy hash shares the users' cost, so the timing of a failed
+	// login does not tell which user (or that no user) was tried.
+	cost, err := bcrypt.Cost([]byte(b.Users[0].PasswordHash.Reveal()))
+	if err != nil {
+		return nil, errors.New("basic: invalid bcrypt password hash") // never echo the hash
 	}
 	dummy, err := bcrypt.GenerateFromPassword([]byte(rand.Text()), cost)
 	if err != nil {
@@ -87,13 +57,13 @@ func (b *basicProvider) verify(username, password string) (id Identity, version 
 	usable := known && len(password) <= maxPasswordBytes
 	hash := b.dummy
 	if usable {
-		hash = []byte(u.PasswordHash)
+		hash = []byte(u.PasswordHash.Reveal())
 	}
 	err := bcrypt.CompareHashAndPassword(hash, []byte(password))
 	if err != nil || !usable {
 		return Identity{}, "", false
 	}
-	return u.identity(), u.version(), true
+	return identity(u), hashVersion(u), true
 }
 
 // exists reports whether username is configured, so failures are logged
@@ -105,21 +75,21 @@ func (b *basicProvider) exists(username string) bool {
 
 // lookup re-checks a session against config: the user must still exist with
 // the same password hash. Groups always come from config.
-func (b *basicProvider) lookup(username, version string) (Identity, bool) {
+func (b *basicProvider) lookup(username, v string) (Identity, bool) {
 	u, ok := b.users[username]
-	if !ok || u.version() != version {
+	if !ok || hashVersion(u) != v {
 		return Identity{}, false
 	}
-	return u.identity(), true
+	return identity(u), true
 }
 
-func (u BasicUser) identity() Identity {
+func identity(u config.BasicUser) Identity {
 	return Identity{Subject: u.Username, Name: u.Username, Groups: slices.Clone(u.Groups)}
 }
 
-// version is a short fingerprint of the password hash. It reveals nothing
+// hashVersion is a short fingerprint of the password hash. It reveals nothing
 // useful: the hash is salted and the cookie is encrypted.
-func (u BasicUser) version() string {
-	sum := sha256.Sum256([]byte(u.PasswordHash))
+func hashVersion(u config.BasicUser) string {
+	sum := sha256.Sum256([]byte(u.PasswordHash.Reveal()))
 	return base64.RawURLEncoding.EncodeToString(sum[:12])
 }

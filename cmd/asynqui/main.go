@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/BarkinBalci/asynqui/internal/auth"
+	"github.com/BarkinBalci/asynqui/internal/authz"
 	"github.com/BarkinBalci/asynqui/internal/config"
 	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/update"
@@ -84,15 +85,11 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 			slog.String("addr", cfg.Server.Addr), slog.String("authz_default", string(cfg.Authz.Default)))
 	}
 
-	policy, err := newPolicy(cfg.Authz)
+	policy, err := authz.New(cfg.Authz)
 	if err != nil {
 		return err
 	}
-	authOpts, err := authOptions(cfg, policy.Groups(), logger)
-	if err != nil {
-		return err
-	}
-	authn, err := auth.New(ctx, authOpts) // OIDC discovery happens here
+	authn, err := auth.New(ctx, cfg, policy.Groups(), logger) // OIDC discovery happens here
 	if err != nil {
 		return err
 	}

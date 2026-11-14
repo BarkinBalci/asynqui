@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/BarkinBalci/asynqui/internal/auth"
@@ -299,38 +301,43 @@ func newTestDeps(t *testing.T, o testOpts) (*deps, http.Handler, *fakeConns) {
 	cfg := &config.Config{
 		Server:  config.Server{BasePath: o.basePath},
 		Refresh: config.Refresh{Default: "5s"},
-		Auth:    config.Auth{Session: config.Session{CookieSecure: o.cookieSecure}},
+		Auth:    config.Auth{Provider: o.provider, Session: config.Session{CookieSecure: o.cookieSecure}},
 		Authz:   o.authz,
 	}
 	policy := mustPolicy(t, o.authz)
-	opts := auth.Options{Provider: auth.Kind(o.provider), BasePath: o.basePath}
-	session := auth.SessionOptions{
-		KeyPair:  auth.KeyPair{HashKey: []byte(strings.Repeat("h", 32)), BlockKey: []byte(strings.Repeat("b", 32))},
-		Insecure: true,
+	session := config.Session{
+		HashKey:      config.Secret(hex.EncodeToString([]byte(strings.Repeat("h", 32)))),
+		BlockKey:     config.Secret(hex.EncodeToString([]byte(strings.Repeat("b", 32)))),
+		TTL:          config.DefaultSessionTTL,
+		CookieSecure: o.cookieSecure,
 	}
+	ctx := t.Context()
 	switch o.provider {
 	case config.ProviderProxy:
-		opts.Proxy = auth.ProxyOptions{TrustedProxies: []string{proxyPeer}, LogoutURL: o.proxyLogout}
+		cfg.Auth.Proxy = config.Proxy{UserHeader: config.DefaultUserHeader, TrustedProxies: []string{proxyPeer}, LogoutURL: o.proxyLogout}
 	case config.ProviderBasic:
 		hash, err := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.MinCost)
 		if err != nil {
 			t.Fatal(err)
 		}
-		opts.Basic = auth.BasicOptions{Users: []auth.BasicUser{{Username: testUser, PasswordHash: string(hash)}}}
-		opts.Session = session
+		cfg.Auth.Basic = config.Basic{Users: []config.BasicUser{{Username: testUser, PasswordHash: config.Secret(hash)}}}
+		cfg.Auth.Session = session
 	case config.ProviderOIDC:
 		if o.idp == nil {
 			o.idp = fakeIDP(t)
 		}
-		opts.Session = session
-		opts.OIDC = auth.OIDCOptions{
-			Issuer:      o.idp.URL,
-			ClientID:    "asynqui",
-			RedirectURL: "https://asynqui.example.com" + o.basePath + "/auth/callback",
-			HTTPClient:  o.idp.Client(),
+		cfg.Auth.Session = session
+		cfg.Auth.OIDC = config.OIDC{
+			Issuer:        o.idp.URL,
+			ClientID:      "asynqui",
+			RedirectURL:   "https://asynqui.example.com" + o.basePath + "/auth/callback",
+			Scopes:        config.DefaultScopes(),
+			UsernameClaim: config.DefaultUsernameClaim,
+			GroupsClaim:   config.DefaultGroupsClaim,
 		}
+		ctx = oidc.ClientContext(ctx, o.idp.Client())
 	}
-	authn, err := auth.New(t.Context(), opts)
+	authn, err := auth.New(ctx, cfg, policy.Groups(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,19 +384,7 @@ func fakeIDP(t *testing.T) *httptest.Server {
 
 func mustPolicy(t *testing.T, a config.Authz) *authz.Policy {
 	t.Helper()
-	def, err := authz.ParseRole(string(a.Default))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var bs []authz.Binding
-	for _, b := range a.Bindings {
-		r, err := authz.ParseRole(string(b.Role))
-		if err != nil {
-			t.Fatal(err)
-		}
-		bs = append(bs, authz.Binding{Users: b.Users, Groups: b.Groups, Role: r, Connections: b.Connections})
-	}
-	p, err := authz.New(def, bs)
+	p, err := authz.New(a)
 	if err != nil {
 		t.Fatal(err)
 	}
