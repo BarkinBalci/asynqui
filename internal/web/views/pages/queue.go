@@ -3,6 +3,8 @@ package pages
 import (
 	"time"
 
+	"github.com/a-h/templ"
+
 	"github.com/BarkinBalci/asynqui/internal/web/views"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
@@ -83,7 +85,7 @@ const (
 
 // GroupDialogID is the id of the dialog confirming verb on every task of
 // the selected aggregation groups.
-func GroupDialogID(v TaskVerb) string { return "groups-" + verbParam(v) }
+func GroupDialogID(v TaskVerb) string { return "groups-" + VerbParam(v) }
 
 // TabCountID is the id of a tab's count, which polls replace.
 func TabCountID(s TaskState) string { return "tab-count-" + StateParam(s) }
@@ -92,7 +94,7 @@ func TabCountID(s TaskState) string { return "tab-count-" + StateParam(s) }
 func TabID(s TaskState) string { return "tab-" + StateParam(s) }
 
 // AllDialogID is the id of the dialog confirming verb on "all N".
-func AllDialogID(v TaskVerb) string { return "tasks-all-" + verbParam(v) }
+func AllDialogID(v TaskVerb) string { return "tasks-all-" + VerbParam(v) }
 
 // StateParam is the ?state= value and id part of s.
 func StateParam(s TaskState) string {
@@ -113,7 +115,18 @@ func StateParam(s TaskState) string {
 	return "pending"
 }
 
-func verbParam(v TaskVerb) string {
+// ParseState is the state whose ?state= value is v.
+func ParseState(v string) (TaskState, bool) {
+	for _, s := range TaskStates() {
+		if StateParam(s) == v {
+			return s, true
+		}
+	}
+	return 0, false
+}
+
+// VerbParam is a verb's path segment and id part ("run", "archive").
+func VerbParam(v TaskVerb) string {
 	switch v {
 	case TaskRun:
 		return "run"
@@ -130,14 +143,10 @@ func verbParam(v TaskVerb) string {
 type Queue struct {
 	Layout views.Layout
 	Name   string
-	// State is whether the queue was read. NotFound marks a queue the
-	// connection does not have.
-	State    DataState
-	Error    string
+	// Live is the polling frame: a poll leaves the card's controls alone.
+	Live Live
+	// NotFound marks a queue the connection does not have.
 	NotFound bool
-	// Down marks a failure to reach the server ("Connection failed");
-	// any other failure shows the read's own error.
-	Down bool
 
 	Paused bool
 	Stats  QueueStats
@@ -173,17 +182,9 @@ type Queue struct {
 	Pager         Pager
 	Sizes         SizePicker
 	// Next is the page's own URL, posted with actions.
-	Next    string
-	PollURL string
+	Next string
 	// Notice is the result of the action this answers, if any.
 	Notice *TaskNotice
-
-	// Poll, Init and KeepTable are as on the Connection page: a poll
-	// leaves the card's controls alone; Init is a poll from a page without
-	// data; KeepTable keeps the table of a page whose poll found no data.
-	Poll      bool
-	Init      bool
-	KeepTable bool
 }
 
 // QueueStats are the stat cards.
@@ -319,19 +320,20 @@ type Flash struct {
 	Notice       *TaskNotice
 }
 
-// ConfirmTasks is the confirmation page of a delete or "all" action
-// posted without JS.
-type ConfirmTasks struct {
+// Confirm is the confirmation page of an action posted without JS (with
+// JS, a dialog confirms): a queue delete, or a task action that needs
+// one.
+type Confirm struct {
 	Layout views.Layout
-	Verb   TaskVerb
-	// IDs are the selected tasks; empty with All. Groups are the
-	// selected aggregation groups of an "all" action on them.
-	IDs    []string
-	Groups []string
-	All    bool
-	State  TaskState
-	Total  int64
-	// Action, Next and Hidden are what the confirm button posts.
+	// Title is the heading, the title and the last breadcrumb.
+	Title templ.Component
+	// Names are the selected queues, tasks or aggregation groups.
+	Names []string
+	// Verb and All label the confirm button; a queue delete is Delete.
+	Verb TaskVerb
+	All  bool
+	// Action and Hidden are what the confirm button posts, with
+	// confirm=1.
 	Action    string
 	Hidden    []Param
 	CancelURL string

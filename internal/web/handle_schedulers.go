@@ -8,61 +8,22 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/format"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// SchedulerSource is what the Schedulers pages need from the connection
-// registry.
+// SchedulerSource is what the Schedulers pages need from a connection.
 type SchedulerSource interface {
 	// SchedulerEntries lists the entries of the connection's running
 	// schedulers. It may be served from a short-lived cache.
-	SchedulerEntries(ctx context.Context, name string) ([]SchedulerEntry, error)
+	SchedulerEntries(ctx context.Context) ([]conn.SchedulerEntry, error)
 	// SchedulerEnqueueEvents returns page page (from 1) of size enqueue
 	// events of an entry, newest first. queue is the entry's queue, where
 	// each event's task is looked up; empty (unknown) looks none up.
-	SchedulerEnqueueEvents(ctx context.Context, name, entryID, queue string, page, size int) (EnqueuePage, error)
-}
-
-// SchedulerEntry is a periodic task registered by a running scheduler.
-// Its ID is regenerated when the scheduler restarts.
-type SchedulerEntry struct {
-	ID       string
-	Spec     string
-	TaskType string
-	Payload  []byte
-	// Options are the registered options, named in snake_case ("queue",
-	// "max_retry").
-	Options []EntryOption
-	// Queue is the Queue option; empty means unknown (asynq does not
-	// record a queue set on the task), never "default".
-	Queue string
-	Next  time.Time
-	// Prev is zero before the first enqueue.
-	Prev time.Time
-}
-
-// EntryOption is one option of a scheduler entry.
-type EntryOption struct {
-	Name  string
-	Value string
-}
-
-// EnqueueEvent is a task an entry enqueued.
-type EnqueueEvent struct {
-	TaskID     string
-	EnqueuedAt time.Time
-	// TaskExists reports whether the task is still stored.
-	TaskExists bool
-}
-
-// EnqueuePage is a page of enqueue events, newest first.
-type EnqueuePage struct {
-	Events  []EnqueueEvent
-	HasNext bool
+	SchedulerEnqueueEvents(ctx context.Context, entryID, queue string, page, size int) (conn.EnqueuePage, error)
 }
 
 // historyPageSize is the number of enqueue events per page.
@@ -108,19 +69,19 @@ func handleSchedulers(d *deps) http.Handler {
 }
 
 func (d *deps) schedulersModel(r *http.Request, a access, spec sortSpec, ans answer) pages.Schedulers {
-	name := a.conn.Name
+	name := a.conn.Name()
 	st := spec.parse(r.URL.Query())
 	q := url.Values{}
 	spec.set(q, st)
 	ctx, cancel := d.pageContext(r.Context())
 	defer cancel()
-	entries, rd := readLive(ctx, a, func(ctx context.Context) ([]SchedulerEntry, error) { return d.conns.SchedulerEntries(ctx, name) })
+	entries, rd := readLive(ctx, a, a.conn.SchedulerEntries)
 	m := pages.Schedulers{
 		Layout: d.liveLayout(r, a, components.SectionSchedulers, rd, sectionCrumb(d, components.SectionSchedulers, "c", name, "schedulers")),
 		Live:   d.live(ans, pages.SchedulersPageID, pages.SchedulersPollID, rd, rd.state == pages.DataReady, q, "c", name, "schedulers"),
 	}
 	sorted := slices.Clone(entries)
-	slices.SortStableFunc(sorted, func(x, y SchedulerEntry) int { return compareEntries(x, y, pages.EntryColumn(st.col), st.desc) })
+	slices.SortStableFunc(sorted, func(x, y conn.SchedulerEntry) int { return compareEntries(x, y, pages.EntryColumn(st.col), st.desc) })
 	for _, e := range sorted {
 		text := format.Text(e.Payload)
 		m.Rows = append(m.Rows, pages.EntryRow{
@@ -145,7 +106,7 @@ func (d *deps) schedulersModel(r *http.Request, a access, spec sortSpec, ans ans
 
 // optionTokens are an entry's options for display; withoutQueue leaves
 // the queue option out (the details show it on its own row).
-func optionTokens(opts []EntryOption, withoutQueue bool) []pages.OptionToken {
+func optionTokens(opts []conn.EntryOption, withoutQueue bool) []pages.OptionToken {
 	var out []pages.OptionToken
 	for _, o := range opts {
 		if withoutQueue && o.Name == "queue" {
@@ -157,7 +118,7 @@ func optionTokens(opts []EntryOption, withoutQueue bool) []pages.OptionToken {
 }
 
 // compareEntries orders two entries by column c, ties by ID.
-func compareEntries(x, y SchedulerEntry, c pages.EntryColumn, desc bool) int {
+func compareEntries(x, y conn.SchedulerEntry, c pages.EntryColumn, desc bool) int {
 	var r int
 	switch c {
 	case pages.EntColID:
@@ -223,17 +184,17 @@ func (v entryView) values() url.Values {
 	return q
 }
 
-func (d *deps) entryURL(conn, id string, v entryView) string {
-	return d.urlQuery(v.values(), "c", conn, "schedulers", id)
+func (d *deps) entryURL(name, id string, v entryView) string {
+	return d.urlQuery(v.values(), "c", name, "schedulers", id)
 }
 
 func (d *deps) entryModel(r *http.Request, a access, ans answer) pages.SchedulerEntry {
-	name, id := a.conn.Name, r.PathValue("id")
+	name, id := a.conn.Name(), r.PathValue("id")
 	v := parseEntryView(r.URL.Query())
 	ctx, cancel := d.pageContext(r.Context()) // shared by both reads
 	defer cancel()
-	entries, rd := readLive(ctx, a, func(ctx context.Context) ([]SchedulerEntry, error) { return d.conns.SchedulerEntries(ctx, name) })
-	i := slices.IndexFunc(entries, func(e SchedulerEntry) bool { return e.ID == id })
+	entries, rd := readLive(ctx, a, a.conn.SchedulerEntries)
+	i := slices.IndexFunc(entries, func(e conn.SchedulerEntry) bool { return e.ID == id })
 
 	ready := rd.state == pages.DataReady
 	crumb := components.Crumb{Text: format.ShortID(id), Mono: true, Title: id}
@@ -256,47 +217,44 @@ func (d *deps) entryModel(r *http.Request, a access, ans answer) pages.Scheduler
 	}
 	m.Options = optionTokens(e.Options, true)
 	m.Next, m.Prev = e.Next, e.Prev
-	d.entryPayload(&m, name, id, v, e.Payload)
-	m.History = d.entryHistory(ctx, name, e, v)
+	m.Payload = payloadView(e.Payload, v.raw, func(raw bool) string {
+		pv := v
+		pv.raw = raw
+		return d.entryURL(name, id, pv)
+	})
+	m.History = d.entryHistory(ctx, a.conn, e, v)
 	return m
 }
 
-// entryPayload fills the payload card: indented JSON with a link to the
-// raw text, or the raw text (with a link back) for ?payload=raw; a payload
-// that is not JSON is shown raw, without the toggle.
-func (d *deps) entryPayload(m *pages.SchedulerEntry, conn, id string, v entryView, payload []byte) {
-	if len(payload) == 0 {
-		m.NoPayload = true
-		return
+// payloadView is a payload card: indented JSON with a link to the raw
+// text, or the raw text (with a link back) when raw; a payload that is not
+// JSON is shown raw, without the toggle. link is the page's URL in the raw
+// view or not.
+func payloadView(payload []byte, raw bool, link func(raw bool) string) pages.Payload {
+	p := pages.Payload{Text: format.Text(payload)}
+	if pretty, ok := format.PrettyJSON(payload); ok {
+		p.JSON, p.Raw, p.JSONURL, p.RawURL = true, raw, link(false), link(true)
+		if !raw {
+			p.Text = pretty
+		}
 	}
-	jsonView, rawView := v, v
-	jsonView.raw, rawView.raw = false, true
-	pretty, ok := format.PrettyJSON(payload)
-	switch {
-	case ok && !v.raw:
-		m.Payload = pretty
-	default:
-		m.Payload, m.Raw = format.Text(payload), ok
-	}
-	if ok {
-		m.PayloadJSON = true
-		m.JSONURL, m.RawURL = d.entryURL(conn, id, jsonView), d.entryURL(conn, id, rawView)
-	}
+	return p
 }
 
 // entryHistory reads one page of the entry's enqueue history. A page past
 // historyMaxPage is out of range: it is not read, and links back to the
 // last page.
-func (d *deps) entryHistory(ctx context.Context, conn string, e SchedulerEntry, v entryView) pages.History {
+func (d *deps) entryHistory(ctx context.Context, c Conn, e conn.SchedulerEntry, v entryView) pages.History {
+	name := c.Name()
 	var h pages.History
 	page := v.page
 	if page > historyMaxPage {
 		last := v
 		last.page = historyMaxPage
-		h.PrevURL = d.entryURL(conn, e.ID, last)
+		h.PrevURL = d.entryURL(name, e.ID, last)
 		return h
 	}
-	ev, err := d.conns.SchedulerEnqueueEvents(ctx, conn, e.ID, e.Queue, page, historyPageSize)
+	ev, err := c.SchedulerEnqueueEvents(ctx, e.ID, e.Queue, page, historyPageSize)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		h.State = pages.DataChecking
@@ -308,7 +266,7 @@ func (d *deps) entryHistory(ctx context.Context, conn string, e SchedulerEntry, 
 	for _, x := range ev.Events {
 		row := pages.EventRow{TaskID: x.TaskID, ShortID: format.ShortID(x.TaskID), EnqueuedAt: x.EnqueuedAt}
 		if x.TaskExists && e.Queue != "" {
-			row.TaskURL = d.url("c", conn, "queues", e.Queue, "tasks", x.TaskID)
+			row.TaskURL = d.url("c", name, "queues", e.Queue, "tasks", x.TaskID)
 			row.LinkID = components.HexID("etask-", x.TaskID)
 		}
 		h.Events = append(h.Events, row)
@@ -320,12 +278,12 @@ func (d *deps) entryHistory(ctx context.Context, conn string, e SchedulerEntry, 
 	if page > 1 {
 		prev := v
 		prev.page = page - 1
-		h.PrevURL = d.entryURL(conn, e.ID, prev)
+		h.PrevURL = d.entryURL(name, e.ID, prev)
 	}
 	if ev.HasNext && page < historyMaxPage {
 		next := v
 		next.page = page + 1
-		h.NextURL = d.entryURL(conn, e.ID, next)
+		h.NextURL = d.entryURL(name, e.ID, next)
 	}
 	return h
 }

@@ -3,7 +3,6 @@ package web
 import (
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/BarkinBalci/asynqui/internal/config"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
 const uuidPath = "/c/main/queues/default/tasks/" + uuidTask
@@ -70,7 +70,7 @@ func TestTaskPage(t *testing.T) {
 	if got := doc.Find("pre#payload").Text(); got != "{\n  \"order_id\": \"ORD-88213\",\n  \"amount\": 4200\n}" {
 		t.Errorf("payload = %q", got)
 	}
-	if doc.Find(`#payload-json.on[aria-current=page]`).Length() != 1 || doc.Find("#payload-raw").AttrOr("href", "") != uuidPath+"?payload=raw" {
+	if doc.Find(`#payload-json.on[aria-current=true]`).Length() != 1 || doc.Find("#payload-raw").AttrOr("href", "") != uuidPath+"?payload=raw" {
 		t.Error("JSON/Raw toggle")
 	}
 	if got := text(doc.Find("#task-error")); !strings.Contains(got, "Last error") || !strings.Contains(got, "attempt 3") ||
@@ -232,7 +232,7 @@ func TestTaskPoll(t *testing.T) {
 	}
 	// The state changed (run elsewhere): the actions follow, with the
 	// action form's state and the delete dialog.
-	if err := conns.TaskAction(t.Context(), "main", "default", TaskRun, uuidTask); err != nil {
+	if err := conns.taskAction("default", conn.TaskRun, uuidTask); err != nil {
 		t.Fatal(err)
 	}
 	changed := poll(second)
@@ -245,7 +245,7 @@ func TestTaskPoll(t *testing.T) {
 		t.Error("poll URL does not follow the state")
 	}
 	// Gone: the page says so and stops polling.
-	if err := conns.TaskAction(t.Context(), "main", "default", TaskDelete, uuidTask); err != nil {
+	if err := conns.taskAction("default", conn.TaskDelete, uuidTask); err != nil {
 		t.Fatal(err)
 	}
 	gone := poll(second)
@@ -254,51 +254,22 @@ func TestTaskPoll(t *testing.T) {
 	}
 }
 
-// Every focusable element in a region an answer swaps has an id, so htmx
-// can give focus back after the swap.
-func TestTaskFocusablesHaveIDs(t *testing.T) {
-	h, _ := newTestServer(t, adminOpts())
-	for _, id := range []string{uuidTask, "a0", "c0", "x0"} {
-		path := "/c/main/queues/default/tasks/" + id
-		doc := parse(t, do(t, h, request{path: path}))
-		seen := map[string]bool{}
-		doc.Find("[id]").Each(func(_ int, s *goquery.Selection) {
-			v := s.AttrOr("id", "")
-			if seen[v] {
-				t.Errorf("%s: duplicate id %q", id, v)
-			}
-			seen[v] = true
-		})
-		n := 0
-		doc.Find("#task-page").Find("a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]").Each(func(_ int, s *goquery.Selection) {
-			n++
-			if s.AttrOr("id", "") == "" {
-				h, _ := goquery.OuterHtml(s)
-				t.Errorf("%s: focusable without id: %s", id, h)
-			}
-		})
-		if n < 4 {
-			t.Errorf("%s: only %d focusables", id, n)
-		}
-	}
-}
-
 func TestAttempt(t *testing.T) {
 	tests := []struct {
-		state             TaskState
+		state             conn.TaskState
 		retried, maxRetry int
 		want              int
 	}{
-		{TaskRetry, 3, 25, 3},
-		{TaskRetry, 25, 25, 25},
-		{TaskArchived, 25, 25, 26},
-		{TaskArchived, 0, 25, 1},  // SkipRetry on the first attempt
-		{TaskPending, 25, 25, 26}, // run back from archived
-		{TaskPending, 3, 25, 3},   // run back from retry
-		{TaskPending, 0, 25, 1},
+		{conn.TaskRetry, 3, 25, 3},
+		{conn.TaskRetry, 25, 25, 25},
+		{conn.TaskArchived, 25, 25, 26},
+		{conn.TaskArchived, 0, 25, 1},  // SkipRetry on the first attempt
+		{conn.TaskPending, 25, 25, 26}, // run back from archived
+		{conn.TaskPending, 3, 25, 3},   // run back from retry
+		{conn.TaskPending, 0, 25, 1},
 	}
 	for _, tt := range tests {
-		if got := attempt(Task{State: tt.state, Retried: tt.retried, MaxRetry: tt.maxRetry}); got != tt.want {
+		if got := attempt(conn.Task{State: tt.state, Retried: tt.retried, MaxRetry: tt.maxRetry}); got != tt.want {
 			t.Errorf("attempt(%v, %d/%d) = %d, want %d", tt.state, tt.retried, tt.maxRetry, got, tt.want)
 		}
 	}
@@ -344,7 +315,7 @@ func TestTaskDeleteRedirectsToRealState(t *testing.T) {
 	h, conns := newTestServer(t, adminOpts())
 	// The page showed retry, but the task was run meanwhile: back to
 	// pending, where it was deleted from.
-	if err := conns.TaskAction(t.Context(), "main", "default", TaskRun, uuidTask); err != nil {
+	if err := conns.taskAction("default", conn.TaskRun, uuidTask); err != nil {
 		t.Fatal(err)
 	}
 	rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete",
@@ -356,7 +327,7 @@ func TestTaskDeleteRedirectsToRealState(t *testing.T) {
 
 func TestUntrustedText(t *testing.T) {
 	conns := defaultConns()
-	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "abc\u202Eexe.txt", Queue: "default", Type: "t\u202Ex", State: TaskPending,
+	conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: "abc\u202Eexe.txt", Queue: "default", Type: "t\u202Ex", State: conn.TaskPending,
 		Payload: []byte("\u202Eevil")})
 	h, _ := newTestServer(t, testOpts{conns: conns})
 	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?page=2"}))
@@ -615,41 +586,6 @@ func TestGroupActionFailure(t *testing.T) {
 	}
 }
 
-func TestTaskActionRoles(t *testing.T) {
-	tests := []struct {
-		role   config.Role
-		path   string
-		status int
-	}{
-		{config.RoleViewer, "run", http.StatusForbidden},
-		{config.RoleViewer, "archive", http.StatusForbidden},
-		{config.RoleViewer, "cancel", http.StatusForbidden},
-		{config.RoleOperator, "run", http.StatusSeeOther},
-		{config.RoleOperator, "cancel", http.StatusSeeOther},
-		{config.RoleOperator, "delete", http.StatusForbidden},
-		{config.RoleAdmin, "delete", http.StatusSeeOther},
-	}
-	for _, tt := range tests {
-		h, conns := newTestServer(t, testOpts{authz: config.Authz{Default: tt.role}})
-		rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/" + tt.path, form: "id=s0&confirm=1"})
-		if rec.Code != tt.status {
-			t.Errorf("%s %s = %d, want %d", tt.role, tt.path, rec.Code, tt.status)
-		}
-		if tt.status == http.StatusForbidden && len(conns.taskActions()) != 0 {
-			t.Errorf("%s %s acted", tt.role, tt.path)
-		}
-	}
-}
-
-func TestTaskActionsCSRF(t *testing.T) {
-	h, conns := newTestServer(t, adminOpts())
-	rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete", form: "id=p00&confirm=1",
-		header: map[string]string{"Sec-Fetch-Site": "cross-site"}})
-	if rec.Code != http.StatusForbidden || len(conns.taskActions()) != 0 {
-		t.Errorf("cross-site post = %d, acted %v", rec.Code, conns.taskActions())
-	}
-}
-
 func flashOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	for _, c := range rec.Result().Cookies() {
@@ -663,43 +599,6 @@ func flashOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 	}
 	t.Fatal("no flash cookie")
 	return ""
-}
-
-// Only a server that cannot be reached shows as down; an error reply is
-// shown as the read's own error, and the connection stays up.
-func TestTaskPagesReadErrors(t *testing.T) {
-	tests := []struct {
-		name  string
-		err   error
-		title string
-		down  bool
-	}{
-		{"error reply", errors.New("NOPERM this user has no permissions"), "", false},
-		{"unreachable", fmt.Errorf("%w: dial tcp: i/o timeout", ErrUnreachable), "Connection failed", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			conns := defaultConns()
-			conns.tasks.readErr = tt.err
-			h, _ := newTestServer(t, testOpts{conns: conns})
-			for path, title := range map[string]string{"/c/main/queues/default": "Could not load the queue", uuidPath: "Could not load the task"} {
-				doc := parse(t, do(t, h, request{path: path}))
-				want := title
-				if tt.down {
-					want = tt.title
-				}
-				if got := text(doc.Find(".conn-error-title")); got != want {
-					t.Errorf("%s: title = %q, want %q", path, got, want)
-				}
-				if !strings.Contains(text(doc.Find(".conn-error-text")), tt.err.Error()) {
-					t.Errorf("%s: no error text", path)
-				}
-				if got := doc.Find("#nav-main .dot-down").Length() == 1; got != tt.down {
-					t.Errorf("%s: sidebar down = %v", path, got)
-				}
-			}
-		})
-	}
 }
 
 func TestTaskBackLinkAndCrumb(t *testing.T) {

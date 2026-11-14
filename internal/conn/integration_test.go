@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -229,18 +228,8 @@ func TestIntegrationInfo(t *testing.T) {
 			if info.Backend != tt.backend || !strings.HasPrefix(info.Version, tt.version) || !strings.HasPrefix(info.RedisVersion, tt.redisPrefix) {
 				t.Errorf("backend %v version %q redis_version %q, want %v %s* %s*", info.Backend, info.Version, info.RedisVersion, tt.backend, tt.version, tt.redisPrefix)
 			}
-			var names []string
-			for _, s := range info.Sections {
-				names = append(names, s.Name)
-			}
-			for _, want := range []string{"Server", "Clients", "Memory", "Keyspace"} {
-				if !slices.Contains(names, want) {
-					t.Errorf("sections %q lack %q", names, want)
-				}
-			}
-			server, _ := info.Section("server")
-			if mode, _ := server.Get(tt.modeKey); mode != "standalone" {
-				t.Errorf("%s = %q, want standalone", tt.modeKey, mode)
+			if info.Mode != "standalone" || info.UsedMemory == 0 || info.ConnectedClients == 0 {
+				t.Errorf("mode %q (from %s), used memory %d, clients %d", info.Mode, tt.modeKey, info.UsedMemory, info.ConnectedClients)
 			}
 			if !strings.HasPrefix(info.Raw, "# Server\r\n") {
 				t.Errorf("Raw does not start with the server section: %.40q", info.Raw)

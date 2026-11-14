@@ -3,6 +3,8 @@ package web
 import (
 	"net/http"
 
+	"github.com/BarkinBalci/asynqui/internal/conn"
+
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
@@ -44,13 +46,13 @@ func addRoutes(mux *http.ServeMux, d *deps) {
 	// actions (operator)
 	mux.Handle("POST /c/{conn}/queues/pause", op(d, handleQueueAction(d, pages.VerbPause))) // form: queue=a&queue=b&next=
 	mux.Handle("POST /c/{conn}/queues/resume", op(d, handleQueueAction(d, pages.VerbResume)))
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, TaskRun))) // form: id=a&id=b or all=1&state=, next=, from=task
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTaskAction(d, TaskArchive)))
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTaskAction(d, TaskCancel))) // ids only: no "all"
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, conn.TaskRun))) // form: id=a&id=b or all=1&state=, next=, from=task
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTaskAction(d, conn.TaskArchive)))
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTaskAction(d, conn.TaskCancel))) // ids only: no "all"
 
 	// admin
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleTaskAction(d, TaskDelete))) // + confirm=1
-	mux.Handle("POST /c/{conn}/queues/delete", admin(d, handleQueueAction(d, pages.VerbDelete)))        // + confirm=1
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleTaskAction(d, conn.TaskDelete))) // + confirm=1
+	mux.Handle("POST /c/{conn}/queues/delete", admin(d, handleQueueAction(d, pages.VerbDelete)))             // + confirm=1
 
 	// assets
 	mux.Handle("GET /static/", http.StripPrefix("/static", d.assets))

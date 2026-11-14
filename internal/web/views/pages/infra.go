@@ -8,8 +8,8 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
 
-// Live is the polling frame of the read-only connection pages: Servers,
-// Server detail, Schedulers, Scheduler entry and Redis info.
+// Live is the polling frame of the connection pages: Connection, Queue,
+// Task, Servers, Server detail, Schedulers, Scheduler entry and Redis info.
 //
 // Requests: the element with id PageID wraps the page and is the hx-sync
 // scope of every request it makes. The hidden poll element (PollID) polls
@@ -17,12 +17,13 @@ import (
 // flight and aborted by a user request (a sort or page link), whose answer
 // replaces the regions it changes and pushes the URL. Answers swap regions
 // out of band, by id: the poll element itself, the state banner
-// (LiveStateID), the page's data regions, the Updated time and the sidebar
-// list.
+// (BannerID, LiveStateID when empty), the page's data regions, the Updated
+// time and the sidebar list. An empty PollURL stops the polling.
 type Live struct {
-	PageID  string
-	PollID  string
-	PollURL string
+	PageID   string
+	PollID   string
+	BannerID string
+	PollURL  string
 	// State and Error say whether the page has its data.
 	State DataState
 	Error string
@@ -248,21 +249,25 @@ type SchedulerEntry struct {
 	Queue    string
 	QueueURL string
 	Options  []OptionToken
-	// Payload is the payload as shown: indented JSON, or the raw text
-	// (Raw, or not JSON). PayloadJSON offers the JSON/Raw toggle, whose
-	// links are JSONURL and RawURL.
-	Payload     string
-	NoPayload   bool
-	PayloadJSON bool
-	Raw         bool
-	JSONURL     string
-	RawURL      string
-	Next        time.Time
-	Prev        time.Time
+	Payload  Payload
+	Next     time.Time
+	Prev     time.Time
 	// Now is the time the relative run times are written against.
 	Now time.Time
 	// History is the enqueue history page.
 	History History
+}
+
+// Payload is the payload card of the Task and Scheduler entry pages: the
+// payload as shown (indented JSON, or the raw text: Raw, or not JSON;
+// empty for no payload) and, for valid JSON, the JSON/Raw toggle, whose
+// links (?payload=raw) are JSONURL and RawURL.
+type Payload struct {
+	Text    string
+	JSON    bool
+	Raw     bool
+	JSONURL string
+	RawURL  string
 }
 
 // History is one page of an entry's enqueue history, newest first.

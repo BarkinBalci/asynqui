@@ -27,7 +27,7 @@ func renderC(t *testing.T, c templ.Component) *goquery.Document {
 
 func queueModel() Queue {
 	m := Queue{Name: "emails", Tab: StateRetry, Total: 41, AllowAll: true, Next: "/c/main/queues/emails?state=retry",
-		PollURL: "/c/main/queues/emails?state=retry", FormURL: "/x", FindURL: "/f"}
+		Live: Live{PollURL: "/c/main/queues/emails?state=retry"}, FormURL: "/x", FindURL: "/f"}
 	for _, s := range TaskStates() {
 		m.Tabs = append(m.Tabs, Tab{State: s, Count: 1, URL: "/t", On: s == StateRetry})
 	}

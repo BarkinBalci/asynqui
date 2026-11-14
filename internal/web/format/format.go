@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/mod/module"
 )
 
 // Number formats n with a comma between each group of three digits:
@@ -222,6 +224,10 @@ func IsShortVersion(v string) bool {
 // buildCommit returns the short commit hash named by the prerelease part of
 // version s (without its "v"), or "" when it names none.
 func buildCommit(s string) string {
+	if v := "v" + s; module.IsPseudoVersion(v) {
+		rev, _ := module.PseudoVersionRev(v)
+		return rev[:min(len(rev), 7)]
+	}
 	s, _, _ = strings.Cut(s, "+") // build metadata, e.g. "+dirty"
 	_, pre, ok := strings.Cut(s, "-")
 	if !ok {
@@ -239,8 +245,6 @@ func buildCommit(s string) string {
 	switch {
 	case strings.HasPrefix(last, "g") && allHex(last[1:]) && len(last) > 4 && allDigits(prev):
 		sha = last[1:] // git describe: <tag>-<count>-g<hash>
-	case len(last) == 12 && allHex(last) && pseudoTime(prev):
-		sha = last // Go pseudo-version: <base>-<yyyymmddhhmmss>-<hash12>
 	case prev == "SNAPSHOT" && len(last) >= 7 && allHex(last):
 		sha = last // GoReleaser snapshot: <version>-SNAPSHOT-<hash>
 	default:
@@ -250,16 +254,6 @@ func buildCommit(s string) string {
 		sha = sha[:7]
 	}
 	return sha
-}
-
-// pseudoTime reports whether p ends in a pseudo-version timestamp: 14
-// digits, alone ("20261114015842") or after a dot ("0.20261114015842",
-// "rc.1.0.20261114015842").
-func pseudoTime(p string) bool {
-	if i := strings.LastIndexByte(p, '.'); i >= 0 {
-		p = p[i+1:]
-	}
-	return len(p) == 14 && allDigits(p)
 }
 
 func allHex(s string) bool {

@@ -225,10 +225,11 @@ func (p *problems) basic(b Basic) {
 		p.add("auth.basic.users", "at least one user is required")
 	}
 	first := map[string]int{}
+	cost, costAt := -1, 0
 	for i, u := range b.Users {
 		at := fmt.Sprintf("auth.basic.users[%d]", i)
 		if p.required(at+".username", u.Username) {
-			key := strings.ToLower(u.Username)
+			key := FoldUsername(u.Username)
 			if j, dup := first[key]; dup {
 				p.add(at+".username", fmt.Sprintf("duplicate (case-insensitive) of auth.basic.users[%d]", j))
 			} else {
@@ -237,9 +238,33 @@ func (p *problems) basic(b Basic) {
 		}
 		if h := u.PasswordHash.Reveal(); p.required(at+".password_hash", h) && !isBcryptHash(h) {
 			p.add(at+".password_hash", "must be a bcrypt hash such as htpasswd -nbBC 12 prints")
+		} else if c, err := bcrypt.Cost([]byte(h)); err == nil {
+			// One cost for everyone, so the timing of a failed login does
+			// not tell which user (or that no user) was tried.
+			if cost >= 0 && c != cost {
+				p.add(at+".password_hash", fmt.Sprintf("has bcrypt cost %d, auth.basic.users[%d] has %d; rehash all passwords at one cost", c, costAt, cost))
+			} else if cost < 0 {
+				cost, costAt = c, i
+			}
 		}
 		p.nonEmptyEntries(at+".groups", u.Groups)
 	}
+}
+
+// FoldUsername lowercases ASCII A–Z and leaves every other byte alone, so
+// usernames compare case-insensitively without Unicode folding: the
+// duplicate check here, authz's binding match and auth's per-user rate
+// limit all use it. Unicode folding would let look-alikes such as the
+// Kelvin sign (U+212A) or the Angstrom sign (U+212B) match "k" or "å", and
+// İ (U+0130) match "i"; invalid UTF-8 stays as it is.
+func FoldUsername(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
 // isBcryptHash reports whether h is a well-formed bcrypt hash: a known

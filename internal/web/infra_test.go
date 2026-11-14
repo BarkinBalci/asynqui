@@ -13,18 +13,18 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/BarkinBalci/asynqui/internal/config"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
 // fakeInfra holds the Servers, Schedulers and Info reads of fakeConns, by
 // connection name. errs fail every read of a connection; block makes them
 // wait until ctx ends.
 type fakeInfra struct {
-	servers   map[string][]Server
-	entries   map[string][]SchedulerEntry
-	events    map[string][]EnqueueEvent // by entry ID, newest first
+	servers   map[string][]conn.Server
+	entries   map[string][]conn.SchedulerEntry
+	events    map[string][]conn.EnqueueEvent // by entry ID, newest first
 	eventErr  error
-	info      map[string]Info
+	info      map[string]fakeInfo
 	errs      map[string]error
 	block     map[string]bool
 	eventsArg []string // "entry/queue/page/size" per SchedulerEnqueueEvents
@@ -41,7 +41,8 @@ func (f *fakeConns) infraRead(ctx context.Context, name string) error {
 	return err
 }
 
-func (f *fakeConns) Servers(ctx context.Context, name string) ([]Server, error) {
+func (c fakeConn) Servers(ctx context.Context) ([]conn.Server, error) {
+	f, name := c.f, c.name
 	if err := f.infraRead(ctx, name); err != nil {
 		return nil, err
 	}
@@ -50,7 +51,8 @@ func (f *fakeConns) Servers(ctx context.Context, name string) ([]Server, error) 
 	return f.infra.servers[name], nil
 }
 
-func (f *fakeConns) SchedulerEntries(ctx context.Context, name string) ([]SchedulerEntry, error) {
+func (c fakeConn) SchedulerEntries(ctx context.Context) ([]conn.SchedulerEntry, error) {
+	f, name := c.f, c.name
 	if err := f.infraRead(ctx, name); err != nil {
 		return nil, err
 	}
@@ -59,29 +61,50 @@ func (f *fakeConns) SchedulerEntries(ctx context.Context, name string) ([]Schedu
 	return f.infra.entries[name], nil
 }
 
-func (f *fakeConns) SchedulerEnqueueEvents(_ context.Context, _, entryID, queue string, page, size int) (EnqueuePage, error) {
+func (c fakeConn) SchedulerEnqueueEvents(_ context.Context, entryID, queue string, page, size int) (conn.EnqueuePage, error) {
+	f := c.f
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.infra.eventsArg = append(f.infra.eventsArg, fmt.Sprintf("%s/%s/%d/%d", entryID, queue, page, size))
 	if f.infra.eventErr != nil {
-		return EnqueuePage{}, f.infra.eventErr
+		return conn.EnqueuePage{}, f.infra.eventErr
 	}
 	evs := f.infra.events[entryID]
 	start := (page - 1) * size
 	if start >= len(evs) {
-		return EnqueuePage{}, nil
+		return conn.EnqueuePage{}, nil
 	}
 	end := min(start+size, len(evs))
-	return EnqueuePage{Events: evs[start:end], HasNext: end < len(evs)}, nil
+	return conn.EnqueuePage{Events: evs[start:end], HasNext: end < len(evs)}, nil
 }
 
-func (f *fakeConns) Info(ctx context.Context, name string) (Info, error) {
-	if err := f.infraRead(ctx, name); err != nil {
-		return Info{}, err
+// fakeInfo is a connection's INFO with its TLS setting and ACL user.
+type fakeInfo struct {
+	conn.Info
+	TLS      conn.TLSInfo
+	Username string
+}
+
+func (c fakeConn) Info(ctx context.Context) (*conn.Info, error) {
+	if err := c.f.infraRead(ctx, c.name); err != nil {
+		return nil, err
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.infra.info[name], nil
+	c.f.mu.Lock()
+	defer c.f.mu.Unlock()
+	i := c.f.infra.info[c.name].Info
+	return &i, nil
+}
+
+func (c fakeConn) TLS() conn.TLSInfo {
+	c.f.mu.Lock()
+	defer c.f.mu.Unlock()
+	return c.f.infra.info[c.name].TLS
+}
+
+func (c fakeConn) Username() string {
+	c.f.mu.Lock()
+	defer c.f.mu.Unlock()
+	return c.f.infra.info[c.name].Username
 }
 
 const (
@@ -100,36 +123,40 @@ func infraConns() *fakeConns {
 	c := defaultConns()
 	now := fixedNow()
 	c.infra = fakeInfra{
-		servers: map[string][]Server{"main": {
+		servers: map[string][]conn.Server{"main": {
 			{ID: srvA, Host: "server-7f9c", PID: 41, Concurrency: 20, Status: "active", Started: now.Add(-15 * time.Hour),
-				Queues: []QueueWeight{{"critical", 6}, {"default", 3}, {"emails", 2}},
-				Workers: []Worker{
+				Queues: []conn.QueueWeight{{Name: "critical", Weight: 6}, {Name: "default", Weight: 3}, {Name: "emails", Weight: 2}},
+				Workers: []conn.Worker{
 					{TaskID: taskOld, TaskType: "email:welcome", Queue: "emails", Started: now.Add(-14 * time.Minute), Deadline: now.Add(time.Minute)},
 					{TaskID: taskNew, TaskType: "user:sync", Queue: "default", Started: now.Add(-12 * time.Second)},
 				}},
 			{ID: srvB, Host: "server-2b1e", PID: 40213, Concurrency: 2, Status: "stopped", Started: now.Add(-time.Hour),
-				Queues: []QueueWeight{{"low", 1}}, Workers: []Worker{{TaskID: "w1", Queue: "low"}}},
+				Queues: []conn.QueueWeight{{Name: "low", Weight: 1}}, Workers: []conn.Worker{{TaskID: "w1", Queue: "low"}}},
 			{ID: srvC, Host: "server-c40a", PID: 38, Concurrency: 10, Status: "closed", Started: now.Add(-2 * time.Hour)},
 		}},
-		entries: map[string][]SchedulerEntry{"main": {
+		entries: map[string][]conn.SchedulerEntry{"main": {
 			{ID: entryA, Spec: "0 6 * * *", TaskType: "report:daily", Payload: []byte(`{"tz":"Europe/Istanbul"}`),
-				Options: []EntryOption{{"queue", "reports"}, {"max_retry", "3"}}, Queue: "reports", Next: now.Add(6 * time.Hour), Prev: now.Add(-18 * time.Hour)},
+				Options: []conn.EntryOption{{Name: "queue", Value: "reports"}, {Name: "max_retry", Value: "3"}}, Queue: "reports", Next: now.Add(6 * time.Hour), Prev: now.Add(-18 * time.Hour)},
 			// No Queue option: the queue is unknown.
 			{ID: entryB, Spec: "*/5 * * * *", TaskType: "cache:warm", Payload: []byte("\xff raw <b>" + strings.Repeat("x", 100)),
-				Options: []EntryOption{{"timeout", "2m0s"}}, Next: now.Add(3 * time.Minute)},
+				Options: []conn.EntryOption{{Name: "timeout", Value: "2m0s"}}, Next: now.Add(3 * time.Minute)},
 		}},
-		events: map[string][]EnqueueEvent{
+		events: map[string][]conn.EnqueueEvent{
 			entryA: {
 				{TaskID: taskNew, EnqueuedAt: now.Add(-18 * time.Hour), TaskExists: true},
 				{TaskID: taskOld, EnqueuedAt: now.Add(-42 * time.Hour)},
 			},
 			entryB: {{TaskID: taskNew, EnqueuedAt: now.Add(-time.Minute)}},
 		},
-		info: map[string]Info{"main": {
-			Version: "7.2.4", RedisVersion: "7.2.4", Mode: "standalone", Uptime: 41*24*time.Hour + 3*time.Hour,
-			ConnectedClients: 184, UsedMemory: 1299202048, UsedMemoryPeak: 1761607680, MaxMemory: 4 << 30,
-			MaxMemoryPolicy: "noeviction", Keys: 48213, Expires: 3902, TLS: true, TLSVerified: true, TLSVersion: tls.VersionTLS13,
-			Username: "asynq-ui", Raw: "# Server\r\nredis_version:7.2.4\r\n",
+		info: map[string]fakeInfo{"main": {
+			Info: conn.Info{
+				Version: "7.2.4", RedisVersion: "7.2.4", Mode: "standalone", Uptime: 41*24*time.Hour + 3*time.Hour,
+				ConnectedClients: 184, UsedMemory: 1299202048, UsedMemoryPeak: 1761607680, MaxMemory: 4 << 30,
+				MaxMemoryPolicy: "noeviction", Keyspace: conn.Keyspace{Keys: 48213, Expires: 3902},
+				Raw: "# Server\r\nredis_version:7.2.4\r\n",
+			},
+			TLS:      conn.TLSInfo{Enabled: true, Verified: true, Version: tls.VersionTLS13},
+			Username: "asynq-ui",
 		}},
 	}
 	return c
@@ -561,9 +588,9 @@ func TestSchedulerEntryPage(t *testing.T) {
 
 	t.Run("pages", func(t *testing.T) {
 		c := infraConns()
-		var evs []EnqueueEvent
+		var evs []conn.EnqueueEvent
 		for i := range 45 {
-			evs = append(evs, EnqueueEvent{TaskID: fmt.Sprintf("t%02d", i), EnqueuedAt: fixedNow().Add(-time.Duration(i) * time.Minute)})
+			evs = append(evs, conn.EnqueueEvent{TaskID: fmt.Sprintf("t%02d", i), EnqueuedAt: fixedNow().Add(-time.Duration(i) * time.Minute)})
 		}
 		c.infra.events[entryA] = evs
 		h, _ := newTestServer(t, testOpts{conns: c})
@@ -610,9 +637,9 @@ func TestSchedulerEntryPage(t *testing.T) {
 
 	t.Run("page cap", func(t *testing.T) {
 		c := infraConns()
-		var evs []EnqueueEvent
+		var evs []conn.EnqueueEvent
 		for i := range 1100 { // the fake holds more than asynq keeps
-			evs = append(evs, EnqueueEvent{TaskID: fmt.Sprintf("t%04d", i)})
+			evs = append(evs, conn.EnqueueEvent{TaskID: fmt.Sprintf("t%04d", i)})
 		}
 		c.infra.events[entryA] = evs
 		h, _ := newTestServer(t, testOpts{conns: c})
@@ -772,7 +799,7 @@ func TestInfoPage(t *testing.T) {
 	t.Run("TLS without a handshake yet", func(t *testing.T) {
 		c := infraConns()
 		i := c.infra.info["main"]
-		i.TLSVersion, i.TLSVerified = 0, false
+		i.TLS.Version, i.TLS.Verified = 0, false
 		c.infra.info["main"] = i
 		h, _ := newTestServer(t, testOpts{conns: c})
 		if got := cards(parse(t, do(t, h, request{path: "/c/main/info"}))); !strings.Contains(strings.Join(got, "|"), "TLS On Server cert not verified") {
@@ -782,7 +809,7 @@ func TestInfoPage(t *testing.T) {
 	t.Run("valkey", func(t *testing.T) {
 		c := infraConns()
 		i := c.infra.info["main"]
-		i.Valkey, i.Version, i.MaxMemory, i.TLS, i.Username, i.Keys = true, "8.0.2", 0, false, "", 1
+		i.Backend, i.Version, i.MaxMemory, i.TLS.Enabled, i.Username, i.Keyspace.Keys = conn.BackendValkey, "8.0.2", 0, false, "", 1
 		c.infra.info["main"] = i
 		h, _ := newTestServer(t, testOpts{conns: c})
 		doc := parse(t, do(t, h, request{path: "/c/main/info"}))
@@ -819,14 +846,28 @@ func TestInfoPage(t *testing.T) {
 }
 
 // TestInfraUnavailable: a connection known down, a failing read and a slow
-// one, on every page.
+// one, on every connection page.
 func TestInfraUnavailable(t *testing.T) {
-	paths := []struct{ path, region string }{
-		{"/c/%s/servers", "#servers-table"},
-		{"/c/%s/servers/" + srvA, "#server-body"},
-		{"/c/%s/schedulers", "#schedulers-table"},
-		{"/c/%s/schedulers/" + entryA, "#entry-body"},
-		{"/c/%s/info", "#info-cards"},
+	infraFail := func(c *fakeConns, err error) { c.infra.errs = map[string]error{"main": err} }
+	infraSlow := func(c *fakeConns) { c.infra.block = map[string]bool{"main": true} }
+	tasksFail := func(c *fakeConns, err error) { c.tasks.readErr = err }
+	tasksSlow := func(c *fakeConns) { c.tasks.block = true }
+	paths := []struct {
+		path, region string
+		fail         func(*fakeConns, error)
+		slow         func(*fakeConns)
+		// headless pages show no heading without data.
+		headless bool
+	}{
+		{"/c/%s", "#queues-table", func(c *fakeConns, err error) { c.queueErrs = map[string]error{"main": err} },
+			func(c *fakeConns) { c.block = map[string]bool{"main": true} }, false},
+		{"/c/%s/queues/default", "#task-card", tasksFail, tasksSlow, false},
+		{"/c/%s/queues/default/tasks/" + uuidTask, "#task-main", tasksFail, tasksSlow, true},
+		{"/c/%s/servers", "#servers-table", infraFail, infraSlow, false},
+		{"/c/%s/servers/" + srvA, "#server-body", infraFail, infraSlow, false},
+		{"/c/%s/schedulers", "#schedulers-table", infraFail, infraSlow, false},
+		{"/c/%s/schedulers/" + entryA, "#entry-body", infraFail, infraSlow, false},
+		{"/c/%s/info", "#info-cards", infraFail, infraSlow, false},
 	}
 	for _, p := range paths {
 		t.Run(p.path, func(t *testing.T) {
@@ -836,7 +877,7 @@ func TestInfraUnavailable(t *testing.T) {
 			if rec.Code != http.StatusOK || text(doc.Find(p.region+" .conn-error-text")) != "dial tcp 10.0.4.12:6380: i/o timeout" {
 				t.Errorf("down: %d %q", rec.Code, text(doc.Find(p.region)))
 			}
-			if doc.Find("main h1").Length() != 1 {
+			if doc.Find("main h1").Length() != 1 && !p.headless {
 				t.Error("no heading")
 			}
 			if got, _ := doc.Find("[data-poll]").Attr("hx-get"); !strings.Contains(got, "poll=init") {
@@ -849,7 +890,7 @@ func TestInfraUnavailable(t *testing.T) {
 
 			// A network error or timeout: down here and in the sidebar.
 			c := infraConns()
-			c.infra.errs = map[string]error{"main": fmt.Errorf("%w: dial tcp: connection refused", ErrUnreachable)}
+			p.fail(c, unreachable("connection refused"))
 			h, _ = newTestServer(t, testOpts{conns: c})
 			doc = parse(t, do(t, h, request{path: fmt.Sprintf(p.path, "main")}))
 			if got := text(doc.Find(p.region + " .conn-error-title")); got != "Connection failed" {
@@ -861,7 +902,7 @@ func TestInfraUnavailable(t *testing.T) {
 
 			// An error reply: the server is up, the read failed.
 			c = infraConns()
-			c.infra.errs = map[string]error{"main": errors.New("NOPERM User asynq-ui has no permissions to run the 'info' command")}
+			p.fail(c, errors.New("NOPERM User asynq-ui has no permissions to run the 'info' command"))
 			h, _ = newTestServer(t, testOpts{conns: c})
 			doc = parse(t, do(t, h, request{path: fmt.Sprintf(p.path, "main")}))
 			if got := text(doc.Find(p.region + " .conn-error-text")); !strings.HasPrefix(got, "NOPERM") {
@@ -875,7 +916,7 @@ func TestInfraUnavailable(t *testing.T) {
 			}
 
 			c = infraConns()
-			c.infra.block = map[string]bool{"main": true}
+			p.slow(c)
 			d, h, _ := newTestDeps(t, testOpts{conns: c})
 			d.pageBudget = 20 * time.Millisecond
 			doc = parse(t, do(t, h, request{path: fmt.Sprintf(p.path, "main")}))
@@ -949,107 +990,5 @@ func TestInfraPollAnswers(t *testing.T) {
 	}
 	if got, _ := doc.Find("#schedulers-poll").Attr("hx-get"); got != "/c/main/schedulers?dir=asc&sort=type" {
 		t.Errorf("poll URL = %q", got)
-	}
-}
-
-// TestInfraSync: one hx-sync scope per page; the poll aborts on user
-// requests, and every other request queues.
-func TestInfraSync(t *testing.T) {
-	h, _ := newTestServer(t, testOpts{conns: infraConns()})
-	for _, p := range []struct{ path, page, poll string }{
-		{"/c/main/servers", "servers-page", "servers-poll"},
-		{"/c/main/servers/" + srvA, "server-page", "server-poll"},
-		{"/c/main/schedulers", "schedulers-page", "schedulers-poll"},
-		{"/c/main/schedulers/" + entryA + "?page=1", "entry-page", "entry-poll"},
-		{"/c/main/info", "info-page", "info-poll"},
-	} {
-		doc := parse(t, do(t, h, request{path: p.path}))
-		page := doc.Find("main #" + p.page)
-		if v, _ := page.Attr("hx-sync"); v != "this:queue last" {
-			t.Errorf("%s: page hx-sync = %q", p.path, v)
-		}
-		if v, _ := page.Find("#" + p.poll).Attr("hx-sync"); v != "#"+p.page+":abort" {
-			t.Errorf("%s: poll hx-sync = %q", p.path, v)
-		}
-		if n := doc.Find("[hx-post]").Length(); n != 0 {
-			t.Errorf("%s: %d posting elements on a read-only page", p.path, n)
-		}
-		doc.Find("[hx-get]").Each(func(_ int, s *goquery.Selection) {
-			if s.Closest("#"+p.page).Length() == 0 {
-				t.Errorf("%s: #%s outside the page scope", p.path, s.AttrOr("id", ""))
-			}
-			if s.Is("a") && s.AttrOr("hx-swap", "") != "none" {
-				t.Errorf("%s: #%s swaps in place", p.path, s.AttrOr("id", ""))
-			}
-		})
-	}
-}
-
-// TestInfraFocusablesHaveIDs: htmx refocuses swapped elements by id.
-func TestInfraFocusablesHaveIDs(t *testing.T) {
-	c := infraConns()
-	var evs []EnqueueEvent
-	for i := range 30 {
-		evs = append(evs, EnqueueEvent{TaskID: fmt.Sprintf("t%02d", i), TaskExists: i%2 == 0})
-	}
-	c.infra.events[entryA] = evs
-	h, _ := newTestServer(t, testOpts{conns: c})
-	for _, p := range []string{"/c/main/servers", "/c/main/servers/" + srvA, "/c/main/schedulers", "/c/main/schedulers/" + entryA, "/c/main/info"} {
-		doc := parse(t, do(t, h, request{path: p}))
-		seen := map[string]bool{}
-		doc.Find("[id]").Each(func(_ int, s *goquery.Selection) {
-			id, _ := s.Attr("id")
-			if seen[id] {
-				t.Errorf("%s: duplicate id %q", p, id)
-			}
-			seen[id] = true
-		})
-		n := 0
-		poll := parse(t, do(t, h, request{path: p, htmx: true}))
-		poll.Find("[hx-swap-oob]").Each(func(_ int, region *goquery.Selection) {
-			id, _ := region.Attr("id")
-			doc.Find(`[id="` + id + `"]`).Find("a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]").Each(func(_ int, s *goquery.Selection) {
-				n++
-				if v, ok := s.Attr("id"); !ok || v == "" {
-					h, _ := goquery.OuterHtml(s)
-					t.Errorf("%s: focusable in #%s without id: %s", p, id, h)
-				}
-			})
-		})
-		if n < 3 {
-			t.Errorf("%s: only %d focusables found", p, n)
-		}
-	}
-}
-
-// TestInfraAccess: viewer is enough; hidden and unknown connections are
-// 404; the pages are GET only, and a cross-origin post is refused.
-func TestInfraAccess(t *testing.T) {
-	authz := config.Authz{
-		Default:  config.RoleNone,
-		Bindings: []config.Binding{{Users: []string{"bob"}, Role: config.RoleViewer, Connections: []string{"main"}}},
-	}
-	h, _ := newTestServer(t, testOpts{provider: config.ProviderProxy, authz: authz, conns: infraConns()})
-	for _, p := range []string{"/c/%s/servers", "/c/%s/servers/" + srvA, "/c/%s/schedulers", "/c/%s/schedulers/" + entryA, "/c/%s/info"} {
-		if rec := do(t, h, request{path: fmt.Sprintf(p, "main"), user: "bob"}); rec.Code != http.StatusOK {
-			t.Errorf("viewer %s = %d", p, rec.Code)
-		}
-		for _, name := range []string{"local", "nope"} {
-			rec := do(t, h, request{path: fmt.Sprintf(p, name), user: "bob"})
-			if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "server-7f9c") {
-				t.Errorf("%s on %s = %d", p, name, rec.Code)
-			}
-		}
-		if rec := do(t, h, request{path: fmt.Sprintf(p, "main")}); rec.Code != http.StatusUnauthorized {
-			t.Errorf("no identity %s = %d", p, rec.Code)
-		}
-		rec := do(t, h, request{method: http.MethodPost, path: fmt.Sprintf(p, "main"), user: "bob", header: map[string]string{"Sec-Fetch-Site": "cross-site"}})
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("cross-origin POST %s = %d", p, rec.Code)
-		}
-		rec = do(t, h, request{method: http.MethodPost, path: fmt.Sprintf(p, "main"), user: "bob"})
-		if rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
-			t.Errorf("POST %s = %d", p, rec.Code)
-		}
 	}
 }

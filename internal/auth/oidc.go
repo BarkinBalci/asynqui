@@ -8,43 +8,20 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"slices"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 const (
-	defaultUsernameClaim = "email"
-	defaultGroupsClaim   = "groups"
-	oidcHTTPTimeout      = 10 * time.Second
+	oidcHTTPTimeout = 10 * time.Second
 	// maxIssuedAtSkew tolerates IdP clocks running ahead of ours.
 	maxIssuedAtSkew = 5 * time.Minute
 )
-
-// OIDCOptions configures the OpenID Connect provider.
-type OIDCOptions struct {
-	Issuer       string
-	ClientID     string
-	ClientSecret string // optional for public clients; PKCE is always used
-	// RedirectURL is the absolute URL of GET <base>/auth/callback. Required.
-	RedirectURL string
-	// Scopes requested. "openid" is always included. Empty means
-	// openid, profile, email.
-	Scopes []string
-	// UsernameClaim names the claim used as Identity.Name. Empty means
-	// "email", in which case email_verified must be true (the boolean, or
-	// the string "true" as Amazon Cognito sends it).
-	UsernameClaim string
-	// GroupsClaim names the claim holding the user's groups, a string array
-	// or a single string. It is read from the ID token, falling back to the
-	// userinfo endpoint. Empty means "groups".
-	GroupsClaim string
-	// HTTPClient talks to the IdP. Nil means a client with a 10s timeout.
-	HTTPClient *http.Client
-}
 
 type oidcProvider struct {
 	provider      *oidc.Provider
@@ -58,21 +35,15 @@ type oidcProvider struct {
 }
 
 // newOIDC runs discovery against the issuer, so it fails at startup when the
-// IdP is unreachable or misconfigured.
-func newOIDC(ctx context.Context, o OIDCOptions, logger *slog.Logger, now func() time.Time) (*oidcProvider, error) {
-	switch {
-	case o.Issuer == "":
-		return nil, errors.New("oidc: issuer is required")
-	case o.ClientID == "":
-		return nil, errors.New("oidc: client id is required")
-	case o.RedirectURL == "":
-		return nil, errors.New("oidc: redirect url is required")
-	}
-	if u, err := url.Parse(o.RedirectURL); err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("oidc: redirect url %q must be absolute", o.RedirectURL)
-	}
-	client := o.HTTPClient
-	if client == nil {
+// IdP is unreachable or misconfigured. The scopes always include openid.
+// The username claim is Identity.Name; for "email", email_verified must be
+// true (the boolean, or the string "true" as Amazon Cognito sends it). The
+// groups claim, a string array or a single string, is read from the ID
+// token, falling back to the userinfo endpoint. An *http.Client in ctx
+// talks to the IdP (see New).
+func newOIDC(ctx context.Context, o config.OIDC, logger *slog.Logger, now func() time.Time) (*oidcProvider, error) {
+	client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client)
+	if !ok {
 		client = &http.Client{Timeout: oidcHTTPTimeout}
 	}
 	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, client), o.Issuer)
@@ -80,9 +51,6 @@ func newOIDC(ctx context.Context, o OIDCOptions, logger *slog.Logger, now func()
 		return nil, fmt.Errorf("oidc: discovery for %s: %w", o.Issuer, err)
 	}
 	scopes := slices.Clone(o.Scopes)
-	if len(scopes) == 0 {
-		scopes = []string{oidc.ScopeOpenID, "profile", "email"}
-	}
 	if !slices.Contains(scopes, oidc.ScopeOpenID) {
 		scopes = append([]string{oidc.ScopeOpenID}, scopes...)
 	}
@@ -90,7 +58,7 @@ func newOIDC(ctx context.Context, o OIDCOptions, logger *slog.Logger, now func()
 		provider: provider,
 		oauth: oauth2.Config{
 			ClientID:     o.ClientID,
-			ClientSecret: o.ClientSecret,
+			ClientSecret: o.ClientSecret.Reveal(),
 			Endpoint:     provider.Endpoint(),
 			RedirectURL:  o.RedirectURL,
 			Scopes:       scopes,
@@ -101,12 +69,6 @@ func newOIDC(ctx context.Context, o OIDCOptions, logger *slog.Logger, now func()
 		groupsClaim:   o.GroupsClaim,
 		logger:        logger,
 		now:           now,
-	}
-	if p.usernameClaim == "" {
-		p.usernameClaim = defaultUsernameClaim
-	}
-	if p.groupsClaim == "" {
-		p.groupsClaim = defaultGroupsClaim
 	}
 	return p, nil
 }

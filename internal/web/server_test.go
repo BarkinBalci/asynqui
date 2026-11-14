@@ -3,7 +3,9 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,7 +26,7 @@ func TestAccess(t *testing.T) {
 	}
 	conns := func() *fakeConns {
 		c := defaultConns()
-		c.conns = append(c.conns, Connection{Name: "hidden", Addr: "h:6379/0"})
+		c.conns = append(c.conns, connInfo{Name: "hidden", Addr: "h:6379/0"})
 		return c
 	}
 	tests := []struct {
@@ -164,7 +166,7 @@ func TestSecurityHeadersEverywhere(t *testing.T) {
 func TestStaticAssets(t *testing.T) {
 	h, _ := newTestServer(t, testOpts{})
 	doc := parse(t, do(t, h, request{path: "/"}))
-	hashed := regexp.MustCompile(`^/static/[a-z0-9/_.-]+\.[0-9a-f]{12}\.[a-z0-9]+$`)
+	hashed := regexp.MustCompile(`^/static/[0-9a-f]{12}/[a-z0-9/_.-]+\.[a-z0-9]+$`)
 
 	var urls []string
 	doc.Find("link[href], script[src]").Each(func(_ int, s *goquery.Selection) {
@@ -203,13 +205,15 @@ func TestStaticAssets(t *testing.T) {
 		}
 	}
 
-	// Fonts referenced by the stylesheet resolve to hashed, servable files.
+	// Fonts referenced by the stylesheet resolve, next to it, to servable
+	// files.
 	fonts := regexp.MustCompile(`url\(([^)]+)\)`).FindAllStringSubmatch(css, -1)
 	if len(fonts) != 6 {
 		t.Fatalf("stylesheet font urls = %d, want 6", len(fonts))
 	}
+	cssURL := urls[slices.IndexFunc(urls, func(u string) bool { return strings.HasSuffix(u, ".css") })]
 	for _, m := range fonts {
-		u := "/static/" + m[1]
+		u := path.Join(path.Dir(cssURL), m[1])
 		if !hashed.MatchString(u) {
 			t.Errorf("font %s not hashed", u)
 		}
@@ -219,9 +223,12 @@ func TestStaticAssets(t *testing.T) {
 		}
 	}
 
-	// Unhashed names are not served; conditional requests are.
-	if rec := do(t, h, request{path: "/static/app.css"}); rec.Code != http.StatusNotFound {
-		t.Errorf("unhashed app.css = %d", rec.Code)
+	// Unhashed names and directories are not served; conditional requests
+	// are.
+	for _, p := range []string{"/static/app.css", path.Dir(cssURL) + "/", path.Dir(cssURL) + "/fonts/"} {
+		if rec := do(t, h, request{path: p}); rec.Code != http.StatusNotFound {
+			t.Errorf("%s = %d, want 404", p, rec.Code)
+		}
 	}
 	etag := do(t, h, request{path: urls[1]}).Header().Get("ETag")
 	if rec := do(t, h, request{path: urls[1], header: map[string]string{"If-None-Match": etag}}); rec.Code != http.StatusNotModified {

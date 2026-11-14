@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 // Kind names an authentication provider.
@@ -44,29 +46,6 @@ const (
 	maxNextBytes = 1024
 )
 
-// Options configures New. Only the section matching Provider is used.
-type Options struct {
-	Provider Kind
-	// Session is required for basic and oidc. none and proxy keep no
-	// session: proxy re-reads the headers on every request.
-	Session SessionOptions
-	// SessionGroups are the groups worth keeping in an OIDC session: those
-	// referenced by some authz binding (authz.Policy.Groups). Other groups
-	// are dropped to keep the cookie small. Basic sessions store no groups;
-	// they come from config on every request.
-	SessionGroups []string
-	Basic         BasicOptions
-	Proxy         ProxyOptions
-	OIDC          OIDCOptions
-	// BasePath is the sub-path the app is served under ("" or "/asynq").
-	// Cookies are scoped to it and redirects stay inside it.
-	BasePath string
-	// Logger records sign-in failures. Nil discards.
-	Logger *slog.Logger
-	// Now is the clock. Nil means time.Now.
-	Now func() time.Time
-}
-
 // FailFunc renders a failed sign-in with the suggested HTTP status. Nil
 // means a bare status-text response.
 type FailFunc func(w http.ResponseWriter, r *http.Request, status int, reason Failure)
@@ -93,48 +72,55 @@ type Authenticator struct {
 	proxy    *proxyProvider
 }
 
-// New builds the Authenticator for o.Provider. For oidc it performs
-// discovery using ctx, so it fails at startup if the IdP is unreachable.
-func New(ctx context.Context, o Options) (*Authenticator, error) {
-	now := o.Now
-	if now == nil {
-		now = time.Now
-	}
-	logger := o.Logger
+// New builds the Authenticator for cfg's auth.provider, from config that
+// config.Load has validated. Cookies are scoped to server.base_path and
+// redirects stay inside it. sessionGroups are the groups worth keeping in
+// an OIDC session: those some authz binding references
+// (authz.Policy.Groups); basic sessions store no groups, which come from
+// config on every request. logger records sign-in failures; nil discards.
+//
+// For oidc it performs discovery using ctx, so it fails at startup if the
+// IdP is unreachable. An *http.Client in ctx (oidc.ClientContext) talks
+// to the IdP instead of the default one with a 10s timeout.
+func New(ctx context.Context, cfg *config.Config, sessionGroups []string, logger *slog.Logger) (*Authenticator, error) {
+	return newAuth(ctx, cfg, sessionGroups, logger, time.Now)
+}
+
+// newAuth is New with a clock.
+func newAuth(ctx context.Context, cfg *config.Config, sessionGroups []string, logger *slog.Logger, now func() time.Time) (*Authenticator, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	base := strings.TrimRight(o.BasePath, "/")
-	if base != "" && !strings.HasPrefix(base, "/") {
-		return nil, fmt.Errorf("auth: base path %q must start with /", o.BasePath)
-	}
-	a := &Authenticator{kind: o.Provider, basePath: base, logger: logger}
+	c := cfg.Auth
+	kind := Kind(c.Provider)
+	base := cfg.Server.BasePath
+	a := &Authenticator{kind: kind, basePath: base, logger: logger}
 
 	var err error
-	switch o.Provider {
+	switch kind {
 	case KindNone:
 		a.ident = anonymous{}
 		return a, nil
 	case KindProxy:
-		if a.proxy, err = newProxy(ctx, o.Proxy, logger, now); err != nil {
+		if a.proxy, err = newProxy(ctx, c.Proxy, logger, now); err != nil {
 			return nil, fmt.Errorf("auth: %w", err)
 		}
 		a.ident = a.proxy
 		return a, nil
 	case KindBasic, KindOIDC:
 	default:
-		return nil, fmt.Errorf("auth: unknown provider %q (want none, basic, proxy or oidc)", o.Provider)
+		return nil, fmt.Errorf("auth: unknown provider %q", kind)
 	}
 
-	if a.jar, err = newCookieJar(o.Provider, o.Session, base, o.SessionGroups, now); err != nil {
+	if a.jar, err = newCookieJar(kind, c.Session, base, sessionGroups, now); err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
 	}
-	if o.Provider == KindBasic {
-		a.basic, err = newBasic(o.Basic)
-		a.ipLimit = newLimiter(loginAttempts, loginWindow, limiterCap, now)
-		a.usrLimit = newLimiter(loginAttempts, loginWindow, limiterCap, now)
+	if kind == KindBasic {
+		a.basic, err = newBasic(c.Basic)
+		a.ipLimit = newLimiter(limiterCap, now)
+		a.usrLimit = newLimiter(limiterCap, now)
 	} else {
-		a.oidc, err = newOIDC(ctx, o.OIDC, logger, now)
+		a.oidc, err = newOIDC(ctx, c.OIDC, logger, now)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
@@ -252,8 +238,8 @@ func (a *Authenticator) Challenge(w http.ResponseWriter, r *http.Request) {
 }
 
 // LoginHandler serves POST /login, the basic login form: it checks the
-// "username" and "password" form fields (at most 5 attempts per minute
-// per client IP and per username), sets the session and redirects to
+// "username" and "password" form fields (per client IP and per username,
+// a burst of 5 attempts, then 1 every 12s), sets the session and redirects to
 // "next". Every other provider gets 404, oidc included: its flow starts
 // only at SSOHandler (GET /login/sso). fail may be nil, which writes a
 // plain-text error.
@@ -285,7 +271,7 @@ func (a *Authenticator) basicLogin(w http.ResponseWriter, r *http.Request, next 
 	ok, retry := a.ipLimit.allow(clientKey(r.RemoteAddr))
 	if ok {
 		var r2 time.Duration
-		ok, r2 = a.usrLimit.allow(foldUsername(username))
+		ok, r2 = a.usrLimit.allow(config.FoldUsername(username))
 		retry = max(retry, r2)
 	}
 	if !ok {

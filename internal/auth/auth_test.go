@@ -9,40 +9,19 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
-func TestNewErrors(t *testing.T) {
-	user := []BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
-	tests := []struct {
-		name    string
-		o       Options
-		wantErr string
-	}{
-		{"unknown provider", Options{Provider: "ldap"}, `unknown provider "ldap"`},
-		{"empty provider", Options{}, `unknown provider ""`},
-		{"relative base path", Options{Provider: KindNone, BasePath: "asynq"}, "must start with /"},
-		{"basic without keys", Options{Provider: KindBasic, Basic: BasicOptions{Users: user}}, "hash key must be 32 or 64 bytes"},
-		{"basic without users", Options{Provider: KindBasic, Session: testSession()}, "no users configured"},
-		{"oidc without keys", Options{Provider: KindOIDC}, "hash key"},
-		{"oidc without issuer", Options{Provider: KindOIDC, Session: testSession()}, "issuer is required"},
-		{"oidc without client", Options{Provider: KindOIDC, Session: testSession(), OIDC: OIDCOptions{Issuer: "https://x"}}, "client id is required"},
-		{"oidc without redirect", Options{Provider: KindOIDC, Session: testSession(), OIDC: OIDCOptions{Issuer: "https://x", ClientID: "c"}}, "redirect url is required"},
-		{"proxy without trusted proxies", Options{Provider: KindProxy}, "trusted_proxies is required"},
-		{"oidc relative redirect", Options{Provider: KindOIDC, Session: testSession(), OIDC: OIDCOptions{Issuer: "https://x", ClientID: "c", RedirectURL: "/auth/callback"}}, "must be absolute"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := New(context.Background(), tt.o)
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
-			}
-		})
+func TestNewUnknownProvider(t *testing.T) {
+	if _, err := newTest(context.Background(), testOpts{Provider: "ldap"}); err == nil || !strings.Contains(err.Error(), `unknown provider "ldap"`) {
+		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestNoneAndProxyNeedNoKeys(t *testing.T) {
 	for _, k := range []Kind{KindNone, KindProxy} {
-		a := mustNew(t, Options{Provider: k, Proxy: ProxyOptions{TrustedProxies: []string{"10.0.0.1"}}})
+		a := mustNew(t, testOpts{Provider: config.Provider(k), Proxy: config.Proxy{TrustedProxies: []string{"10.0.0.1"}}})
 		if a.Kind() != k || a.SignOutVisible() {
 			t.Errorf("%s: Kind=%s SignOutVisible=%v", k, a.Kind(), a.SignOutVisible())
 		}
@@ -50,7 +29,7 @@ func TestNoneAndProxyNeedNoKeys(t *testing.T) {
 }
 
 func TestNoneProvider(t *testing.T) {
-	a := mustNew(t, Options{Provider: KindNone})
+	a := mustNew(t, testOpts{Provider: config.ProviderNone})
 	h := app(a)
 	id, ok := whoami(t, h)
 	if !ok || !cmp.Equal(id, Identity{}) {
@@ -158,7 +137,7 @@ func TestSafeNext(t *testing.T) {
 }
 
 func TestChallenge(t *testing.T) {
-	user := []BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
+	user := []config.BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
 	tests := []struct {
 		name         string
 		a            *Authenticator
@@ -173,8 +152,8 @@ func TestChallenge(t *testing.T) {
 		{"post loses next", basicAuth(t, user, nil, ""), req{method: http.MethodPost, target: "/c/main/queues/pause"}, 303, "/login", ""},
 		{"htmx fragment uses current page", basicAuth(t, user, nil, ""), req{target: "/c/main?fragment=1", header: http.Header{
 			"Hx-Request": {"true"}, "Hx-Current-Url": {"http://example.com/c/main/servers"}}}, 401, "", "/login?next=%2Fc%2Fmain%2Fservers"},
-		{"proxy", proxyAuth(t, ProxyOptions{TrustedProxies: []string{"10.0.0.1"}}), req{target: "/c/main"}, 401, "", ""},
-		{"none", mustNew(t, Options{Provider: KindNone}), req{target: "/c/main"}, 401, "", ""},
+		{"proxy", proxyAuth(t, config.Proxy{TrustedProxies: []string{"10.0.0.1"}}), req{target: "/c/main"}, 401, "", ""},
+		{"none", mustNew(t, testOpts{Provider: config.ProviderNone}), req{target: "/c/main"}, 401, "", ""},
 		{"absolute-form request target", basicAuth(t, user, nil, "/asynq"), req{target: "http://evil.example/asynq/c/main"}, 303, "/asynq/login", ""},
 		{"htmx without current url goes to root", basicAuth(t, user, nil, "/asynq"), req{target: "/asynq/c/main", header: http.Header{"Hx-Request": {"true"}}}, 401, "", "/asynq/login"},
 		{"htmx current url with ..", basicAuth(t, user, nil, "/asynq"), req{target: "/asynq/c/main", header: http.Header{
@@ -204,7 +183,7 @@ func TestChallenge(t *testing.T) {
 }
 
 func TestMiddlewareClearsBadCookie(t *testing.T) {
-	user := []BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
+	user := []config.BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
 	h := app(basicAuth(t, user, nil, ""))
 	res := do(t, h, req{target: "/whoami", cookies: []*http.Cookie{{Name: sessionCookie, Value: "forged"}}})
 	if res.status != http.StatusSeeOther {

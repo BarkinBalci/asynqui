@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/BarkinBalci/asynqui/internal/config"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
 func adminOpts() testOpts { return testOpts{authz: config.Authz{Default: config.RoleAdmin}} }
@@ -223,7 +224,7 @@ func TestQueueSort(t *testing.T) {
 	// size picker keep it, and flipping the order goes back to page 1.
 	conns := defaultConns()
 	for i := range 30 {
-		conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: fmt.Sprintf("s%02d", i+2), Queue: "default", Type: "t", State: TaskScheduled})
+		conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: fmt.Sprintf("s%02d", i+2), Queue: "default", Type: "t", State: conn.TaskScheduled})
 	}
 	h, _ = newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
 	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=scheduled&dir=desc&page=2"}))
@@ -242,7 +243,7 @@ func TestQueueSort(t *testing.T) {
 
 	// The archived column is the archive time, not the last failure.
 	conns = defaultConns()
-	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "x9", Queue: "default", Type: "t", State: TaskArchived,
+	conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: "x9", Queue: "default", Type: "t", State: conn.TaskArchived,
 		ArchivedAt: fixedNow().Add(-2 * time.Hour)})
 	h, _ = newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
 	doc = parse(t, do(t, h, request{path: "/c/main/queues/default?state=archived&dir=asc"}))
@@ -396,6 +397,8 @@ func TestQueueFragments(t *testing.T) {
 	}
 }
 
+// TestQueueUnavailable has the Queue page's own cases; see
+// TestInfraUnavailable for the ones every connection page shares.
 func TestQueueUnavailable(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		h, _ := newTestServer(t, adminOpts())
@@ -419,18 +422,6 @@ func TestQueueUnavailable(t *testing.T) {
 			t.Errorf("action = %q", rec.Body)
 		}
 	})
-	t.Run("connection down", func(t *testing.T) {
-		conns := defaultConns()
-		conns.queues["analytics"] = defaultQueues()
-		h, _ := newTestServer(t, testOpts{conns: conns})
-		doc := parse(t, do(t, h, request{path: "/c/analytics/queues/default"}))
-		if got := text(doc.Find("#task-card .conn-error")); !strings.Contains(got, "Connection failed") || !strings.Contains(got, "dial tcp") {
-			t.Errorf("down = %q", got)
-		}
-		if !strings.Contains(doc.Find("#queue-poll").AttrOr("hx-get", ""), "poll=init") {
-			t.Error("a page without data must poll with poll=init")
-		}
-	})
 	t.Run("poll keeps the table", func(t *testing.T) {
 		conns := defaultConns()
 		conns.tasks.readErr = errors.New("READONLY")
@@ -443,23 +434,6 @@ func TestQueueUnavailable(t *testing.T) {
 			t.Errorf("banner = %q", got)
 		}
 	})
-	t.Run("checking", func(t *testing.T) {
-		conns := defaultConns()
-		conns.tasks.block = true
-		_, h, _ := newTestDepsBudget(t, testOpts{conns: conns})
-		doc := parse(t, do(t, h, request{path: "/c/main/queues/default"}))
-		if got := text(doc.Find("#task-card")); got != "Checking" {
-			t.Errorf("checking = %q", got)
-		}
-	})
-}
-
-// newTestDepsBudget is newTestDeps with a short page budget.
-func newTestDepsBudget(t *testing.T, o testOpts) (*deps, http.Handler, *fakeConns) {
-	t.Helper()
-	d, h, c := newTestDeps(t, o)
-	d.pageBudget = 50e6 // 50ms
-	return d, h, c
 }
 
 func TestQueueRoles(t *testing.T) {
@@ -488,32 +462,26 @@ func TestQueueRoles(t *testing.T) {
 			check("#act-archive", tt.archive)
 			check("#act-delete", tt.del)
 			check("#queue-toggle-btn", tt.toggle)
+			// The aggregation groups' "all" buttons.
+			doc = parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating"}))
+			check("#act-all-archive", tt.archive)
+			check("#act-all-delete", tt.del)
 		})
 	}
 }
 
+// TestQueuePathEscaping: the Queue and Task pages and the lookup work with
+// escaped segments; TestRoutesPathEscaping checks the links.
 func TestQueuePathEscaping(t *testing.T) {
 	conns := defaultConns()
-	conns.queues["main"] = append(conns.queues["main"], Queue{Name: "a/b c"})
-	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "x/y?z", Queue: "a/b c", Type: "t", State: TaskPending})
+	conns.queues["main"] = append(conns.queues["main"], conn.Queue{Name: "a/b c"})
+	conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: "x/y?z", Queue: "a/b c", Type: "t", State: conn.TaskPending})
 	h, _ := newTestServer(t, testOpts{conns: conns, basePath: "/asynq", authz: config.Authz{Default: config.RoleAdmin}})
 	rec := do(t, h, request{path: "/asynq/c/main/queues/a%2Fb%20c"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	doc := parse(t, rec)
-	if got := doc.Find("#tasks-rows a.row-link").AttrOr("href", ""); got != "/asynq/c/main/queues/a%2Fb%20c/tasks/x%2Fy%3Fz" {
-		t.Errorf("task link = %q", got)
-	}
-	if got := doc.Find("#find-open").AttrOr("href", ""); got != "/asynq/c/main/queues/a%2Fb%20c/find" {
-		t.Errorf("find = %q", got)
-	}
-	if got := doc.Find("#act-archive").AttrOr("formaction", ""); got != "/asynq/c/main/queues/a%2Fb%20c/tasks/archive" {
-		t.Errorf("action = %q", got)
-	}
-	if got := doc.Find("#tab-retry").AttrOr("href", ""); got != "/asynq/c/main/queues/a%2Fb%20c?state=retry" {
-		t.Errorf("tab = %q", got)
-	}
 	if got := text(doc.Find(".crumbs [aria-current]")); got != "a/b c" {
 		t.Errorf("crumb = %q", got)
 	}
@@ -524,35 +492,6 @@ func TestQueuePathEscaping(t *testing.T) {
 	rec = do(t, h, request{path: "/asynq/c/main/queues/a%2Fb%20c/find?id=" + url.QueryEscape("x/y?z")})
 	if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || loc != "/asynq/c/main/queues/a%2Fb%20c/tasks/x%2Fy%3Fz" {
 		t.Errorf("find = %d %q", rec.Code, loc)
-	}
-}
-
-func TestQueueFocusablesHaveIDs(t *testing.T) {
-	h, _ := newTestServer(t, adminOpts())
-	for _, path := range []string{"/c/main/queues/default", "/c/main/queues/default?state=retry"} {
-		doc := parse(t, do(t, h, request{path: path}))
-		seen := map[string]bool{}
-		doc.Find("[id]").Each(func(_ int, s *goquery.Selection) {
-			id := s.AttrOr("id", "")
-			if seen[id] {
-				t.Errorf("%s: duplicate id %q", path, id)
-			}
-			seen[id] = true
-		})
-		for _, rq := range []request{
-			{path: path, htmx: true, header: map[string]string{"HX-Trigger": "queue-poll"}},
-			{path: path, htmx: true},
-		} {
-			poll := parse(t, do(t, h, rq))
-			poll.Find("[hx-swap-oob]").Each(func(_ int, region *goquery.Selection) {
-				region.Find("a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]").Each(func(_ int, s *goquery.Selection) {
-					if s.AttrOr("id", "") == "" {
-						h, _ := goquery.OuterHtml(s)
-						t.Errorf("%s: focusable in #%s without id: %s", path, region.AttrOr("id", ""), h)
-					}
-				})
-			})
-		}
 	}
 }
 
@@ -580,8 +519,8 @@ func TestQueuePauseFromQueuePage(t *testing.T) {
 func TestQueueGroupNames(t *testing.T) {
 	const name = "a&b #c%/d"
 	conns := defaultConns()
-	conns.tasks.groups["default"] = []Group{{Name: name, Size: 1}}
-	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "odd-0", Queue: "default", Type: "batch", State: TaskAggregating, Group: name})
+	conns.tasks.groups["default"] = []conn.Group{{Name: name, Size: 1}}
+	conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: "odd-0", Queue: "default", Type: "batch", State: conn.TaskAggregating, Group: name})
 	h, _ := newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
 
 	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating"}))
@@ -611,24 +550,5 @@ func TestQueueGroupNames(t *testing.T) {
 	}
 	if got := conns.taskActions(); len(got) != 1 || got[0] != "run-all default/group:"+name {
 		t.Errorf("acted = %q", got)
-	}
-}
-
-// An operator may run and archive a group's tasks but not delete them.
-func TestQueueGroupRoles(t *testing.T) {
-	h, conns := newTestServer(t, testOpts{authz: config.Authz{Default: config.RoleOperator}})
-	form := "all=1&state=aggregating&group=g1&confirm=1"
-	if rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete", form: form, htmx: true}); rec.Code != http.StatusForbidden {
-		t.Errorf("operator delete all = %d, want 403", rec.Code)
-	}
-	if rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/archive", form: form, htmx: true}); rec.Code != http.StatusOK {
-		t.Errorf("operator archive all = %d, want 200", rec.Code)
-	}
-	if got := conns.taskActions(); len(got) != 1 || got[0] != "archive-all default/group:g1" {
-		t.Errorf("acted = %q", got)
-	}
-	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating"}))
-	if del := doc.Find("#act-all-delete"); del.AttrOr("title", "") != "Requires admin" || del.AttrOr("disabled", "x") != "" {
-		t.Error("operator's Delete all must be disabled")
 	}
 }

@@ -164,7 +164,7 @@ Requests from an untrusted address that carry identity headers get 401, as do tr
 
 ### `auth.provider: basic`
 
-The login rate limit (5 attempts per minute) is keyed by `r.RemoteAddr`. Behind a proxy every user shares the proxy's address, so one user's failed attempts can lock out others for up to a minute.
+The login rate limit (a burst of 5 attempts, then 1 every 12s) is keyed by `r.RemoteAddr`. Behind a proxy every user shares the proxy's address, so one user's failed attempts can lock out others until it refills.
 
 ## Cookies and TLS
 

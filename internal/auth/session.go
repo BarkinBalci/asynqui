@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/gorilla/securecookie"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 const (
 	sessionCookie = "asynqui_session"
 	flowCookie    = "asynqui_oidc"
-	defaultTTL    = 12 * time.Hour
 	flowTTL       = 10 * time.Minute
 	// maxCookieBytes bounds the whole Set-Cookie value, leaving headroom
 	// under the 4096-byte browser limit.
@@ -24,37 +25,6 @@ const (
 // errSessionTooLarge means the identity does not fit in the session cookie,
 // usually because of too many groups.
 var errSessionTooLarge = errors.New("session cookie too large")
-
-// KeyPair is one hash/block key pair, already hex-decoded.
-type KeyPair struct {
-	// HashKey signs the cookie (HMAC-SHA256): 32 or 64 bytes.
-	HashKey []byte
-	// BlockKey encrypts the cookie (AES-256): 32 bytes.
-	BlockKey []byte
-}
-
-// SessionOptions configures the session cookie.
-type SessionOptions struct {
-	KeyPair
-	// PreviousKeys still decode existing cookies during key rotation; new
-	// cookies always use the current pair.
-	PreviousKeys []KeyPair
-	// TTL is the absolute session lifetime from sign-in. Zero means 12h.
-	TTL time.Duration
-	// Insecure drops the Secure cookie attribute so sessions work over plain
-	// HTTP (config cookie_secure: false). Leave false behind HTTPS.
-	Insecure bool
-}
-
-func (k KeyPair) validate() error {
-	if n := len(k.HashKey); n != 32 && n != 64 {
-		return fmt.Errorf("hash key must be 32 or 64 bytes, got %d", n)
-	}
-	if n := len(k.BlockKey); n != 32 {
-		return fmt.Errorf("block key must be 32 bytes, got %d", n)
-	}
-	return nil
-}
 
 // cookieJar encodes signed, encrypted, expiring cookies. securecookie binds
 // the cookie name into the MAC, so a flow cookie cannot be replayed as a
@@ -75,25 +45,15 @@ type cookieJar struct {
 	now        func() time.Time
 }
 
-func newCookieJar(kind Kind, o SessionOptions, basePath string, keepGroups []string, now func() time.Time) (*cookieJar, error) {
-	pairs := append([]KeyPair{o.KeyPair}, o.PreviousKeys...)
-	raw := make([][]byte, 0, 2*len(pairs))
-	for i, p := range pairs {
-		if err := p.validate(); err != nil {
-			if i == 0 {
-				return nil, fmt.Errorf("session: %w", err)
-			}
-			return nil, fmt.Errorf("session: previous key %d: %w", i-1, err)
-		}
-		raw = append(raw, p.HashKey, p.BlockKey)
+// newCookieJar builds the jar from the session config: the current key
+// pair signs and encrypts (new cookies), previous ones still decode
+// during key rotation; the session lasts s.TTL from sign-in.
+func newCookieJar(kind Kind, s config.Session, basePath string, keepGroups []string, now func() time.Time) (*cookieJar, error) {
+	raw, err := s.KeyPairs()
+	if err != nil {
+		return nil, fmt.Errorf("session: %w", err)
 	}
-	if o.TTL < 0 {
-		return nil, errors.New("session: ttl must not be negative")
-	}
-	ttl := o.TTL
-	if ttl == 0 {
-		ttl = defaultTTL
-	}
+	ttl := s.TTL
 	codecs := func(maxAge time.Duration, maxLen int) ([]securecookie.Codec, error) {
 		cs := securecookie.CodecsFromPairs(raw...)
 		for _, c := range cs {
@@ -108,7 +68,7 @@ func newCookieJar(kind Kind, o SessionOptions, basePath string, keepGroups []str
 	j := &cookieJar{
 		kind:       kind,
 		ttl:        ttl,
-		secure:     !o.Insecure,
+		secure:     s.CookieSecure,
 		path:       basePath,
 		flowPath:   basePath + "/auth/callback",
 		keepGroups: make(map[string]struct{}, len(keepGroups)),
@@ -117,7 +77,6 @@ func newCookieJar(kind Kind, o SessionOptions, basePath string, keepGroups []str
 	if j.path == "" {
 		j.path = "/"
 	}
-	var err error
 	if j.sessionEnc, err = codecs(ttl, 0); err != nil {
 		return nil, err
 	}

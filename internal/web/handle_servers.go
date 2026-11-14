@@ -9,49 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/format"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// ServerSource is what the Servers pages need from the connection
-// registry.
+// ServerSource is what the Servers pages need from a connection.
 type ServerSource interface {
 	// Servers lists the connection's asynq servers. It may be served from
 	// a short-lived cache.
-	Servers(ctx context.Context, name string) ([]Server, error)
-}
-
-// Server is one asynq server (a worker process) of a connection.
-type Server struct {
-	ID          string
-	Host        string
-	PID         int
-	Concurrency int
-	// Queues are by weight, highest first.
-	Queues         []QueueWeight
-	StrictPriority bool
-	Started        time.Time
-	// Status is asynq's: "active", or "stopped" once the server stopped
-	// taking new tasks.
-	Status string
-	// Workers are the tasks in progress.
-	Workers []Worker
-}
-
-// QueueWeight is a queue a server takes tasks from, with its priority.
-type QueueWeight struct {
-	Name   string
-	Weight int
-}
-
-// Worker is a task a server is processing.
-type Worker struct {
-	TaskID   string
-	TaskType string
-	Queue    string
-	Started  time.Time
-	Deadline time.Time
+	Servers(ctx context.Context) ([]conn.Server, error)
 }
 
 // longRunning is the running time the workers table highlights.
@@ -98,19 +66,19 @@ func handleServers(d *deps) http.Handler {
 }
 
 func (d *deps) serversModel(r *http.Request, a access, spec sortSpec, ans answer) pages.Servers {
-	name := a.conn.Name
+	name := a.conn.Name()
 	st := spec.parse(r.URL.Query())
 	q := url.Values{}
 	spec.set(q, st)
 	ctx, cancel := d.pageContext(r.Context())
 	defer cancel()
-	servers, rd := readLive(ctx, a, func(ctx context.Context) ([]Server, error) { return d.conns.Servers(ctx, name) })
+	servers, rd := readLive(ctx, a, a.conn.Servers)
 	m := pages.Servers{
 		Layout: d.liveLayout(r, a, components.SectionServers, rd, sectionCrumb(d, components.SectionServers, "c", name, "servers")),
 		Live:   d.live(ans, pages.ServersPageID, pages.ServersPollID, rd, rd.state == pages.DataReady, q, "c", name, "servers"),
 	}
 	sorted := slices.Clone(servers)
-	slices.SortStableFunc(sorted, func(x, y Server) int { return compareServers(x, y, pages.ServerColumn(st.col), st.desc) })
+	slices.SortStableFunc(sorted, func(x, y conn.Server) int { return compareServers(x, y, pages.ServerColumn(st.col), st.desc) })
 	for _, s := range sorted {
 		m.Rows = append(m.Rows, d.serverRow(name, s))
 	}
@@ -120,11 +88,11 @@ func (d *deps) serversModel(r *http.Request, a access, spec sortSpec, ans answer
 	return m
 }
 
-func (d *deps) serverRow(conn string, s Server) pages.ServerRow {
+func (d *deps) serverRow(name string, s conn.Server) pages.ServerRow {
 	r := pages.ServerRow{
 		ID:          s.ID,
 		Host:        s.Host,
-		URL:         d.url("c", conn, "servers", s.ID),
+		URL:         d.url("c", name, "servers", s.ID),
 		LinkID:      components.HexID("slink-", s.ID),
 		PID:         int64(s.PID),
 		Busy:        int64(len(s.Workers)),
@@ -147,7 +115,7 @@ func (d *deps) serverRow(conn string, s Server) pages.ServerRow {
 
 // compareServers orders two servers by column c, ties by host, then ID.
 // Busy compares the share of busy workers, then their count.
-func compareServers(x, y Server, c pages.ServerColumn, desc bool) int {
+func compareServers(x, y conn.Server, c pages.ServerColumn, desc bool) int {
 	var r int
 	switch c {
 	case pages.SrvColHost:
@@ -167,7 +135,7 @@ func compareServers(x, y Server, c pages.ServerColumn, desc bool) int {
 	return cmp.Or(r, strings.Compare(x.Host, y.Host), strings.Compare(x.ID, y.ID))
 }
 
-func busyShare(s Server) float64 {
+func busyShare(s conn.Server) float64 {
 	if s.Concurrency <= 0 {
 		return 0
 	}
@@ -195,14 +163,14 @@ func handleServer(d *deps) http.Handler {
 }
 
 func (d *deps) serverModel(r *http.Request, a access, spec sortSpec, ans answer) pages.Server {
-	name, id := a.conn.Name, r.PathValue("id")
+	name, id := a.conn.Name(), r.PathValue("id")
 	st := spec.parse(r.URL.Query())
 	q := url.Values{}
 	spec.set(q, st)
 	ctx, cancel := d.pageContext(r.Context())
 	defer cancel()
-	servers, rd := readLive(ctx, a, func(ctx context.Context) ([]Server, error) { return d.conns.Servers(ctx, name) })
-	i := slices.IndexFunc(servers, func(s Server) bool { return s.ID == id })
+	servers, rd := readLive(ctx, a, a.conn.Servers)
+	i := slices.IndexFunc(servers, func(s conn.Server) bool { return s.ID == id })
 
 	crumb := components.Crumb{Text: format.ShortID(id), Mono: true, Title: id}
 	if i >= 0 && servers[i].Host != "" {
@@ -226,7 +194,7 @@ func (d *deps) serverModel(r *http.Request, a access, spec sortSpec, ans answer)
 	m.Row, m.Strict = d.serverRow(name, s), s.StrictPriority
 	now := d.now()
 	workers := slices.Clone(s.Workers)
-	slices.SortStableFunc(workers, func(x, y Worker) int {
+	slices.SortStableFunc(workers, func(x, y conn.Worker) int {
 		// Running for is the reverse of Started.
 		r := x.Started.Compare(y.Started)
 		if pages.WorkerColumn(st.col) == pages.WrkColRunning {

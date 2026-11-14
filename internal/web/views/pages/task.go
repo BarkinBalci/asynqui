@@ -28,13 +28,10 @@ const (
 // Task is the Task page.
 type Task struct {
 	Layout views.Layout
-	// State is whether the task was read; NotFound marks a task (or
-	// queue) that does not exist.
-	State    DataState
-	Error    string
+	// Live is the polling frame; NotFound marks a task (or queue) that
+	// does not exist, which stops it.
+	Live     Live
 	NotFound bool
-	// Down marks a failure to reach the server; see Queue.Down.
-	Down bool
 
 	Queue    string
 	QueueURL string
@@ -44,14 +41,8 @@ type Task struct {
 	Type   string
 	Status TaskState
 
-	// Payload is the shown payload text: indented JSON, or the raw text.
-	// PayloadJSON offers the JSON / Raw toggle (valid JSON only); Raw is
-	// the raw view.
-	Payload     string
-	PayloadJSON bool
-	Raw         bool
-	JSONURL     string
-	RawURL      string
+	// Payload is the payload card; a poll answer has none.
+	Payload Payload
 	// Result is the written result (indented when JSON), if HasResult.
 	Result    string
 	HasResult bool
@@ -76,16 +67,10 @@ type Task struct {
 	DeleteDialog  components.Dialog
 	ArchiveDialog components.Dialog
 	// Hidden are the action form's fields.
-	Hidden  []Param
-	PollURL string
+	Hidden []Param
 
-	// Poll marks the answer to a poll; Init a poll from a page without
-	// data; KeepPage a poll that found no data while the page shows the
-	// task. Changed makes a poll replace the badge and the cards (the task
+	// Changed makes a poll replace the badge and the cards (the task
 	// differs from what the page shows), StateChanged the actions too.
-	Poll         bool
-	Init         bool
-	KeepPage     bool
 	Changed      bool
 	StateChanged bool
 }

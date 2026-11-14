@@ -1,120 +1,36 @@
 package web
 
 import (
-	"errors"
-	"time"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
-// ConnectionSource is what the web layer needs from the connection
-// registry (package conn), so tests can pass a fake. Each area declares
-// its part next to its handlers: ConnectionLister (the shell and access
-// checks), OverviewSource (the Overview), QueueSource (the Connection
-// page), TaskSource (the Queue and Task pages), ServerSource,
-// SchedulerSource and InfoSource (the Servers, Schedulers and Redis info
-// pages).
+// ConnectionSource lists the configured connections in config order:
+// conn's Registry, or a fake in tests.
 type ConnectionSource interface {
-	ConnectionLister
+	Connections() []Conn
+}
+
+// Conn is one connection as the web layer uses it: a *conn.Conn, or a fake
+// in tests. Each area declares its reads and actions next to its handlers.
+type Conn interface {
+	Name() string
+	// Addr is the display address, "host:port/db".
+	Addr() string
+	// Health is the cached result of the last health check; no I/O.
+	Health() conn.Health
+	// Backend is the server software detected so far: the info page is
+	// titled "Valkey info" for Valkey.
+	Backend() (conn.Backend, bool)
 	OverviewSource
 	QueueSource
+	TaskSource
 	ServerSource
 	SchedulerSource
 	InfoSource
-	TaskSource
 }
 
-// ConnectionLister lists the configured connections.
-type ConnectionLister interface {
-	// Connections lists every configured connection in config order, each
-	// with its cached health. It does no Redis I/O.
-	Connections() []Connection
-}
-
-// Errors a ConnectionSource wraps so handlers can tell causes apart; the
-// templates map them to copy.
-var (
-	ErrQueueNotFound = errors.New("web: queue not found")
-	ErrQueueNotEmpty = errors.New("web: queue not empty")
-	// ErrUnreachable marks a read that failed because the server could
-	// not be reached or timed out, as opposed to an error reply (NOPERM,
-	// LOADING): only it shows the connection down on the read-only pages.
-	ErrUnreachable = errors.New("web: connection unreachable")
-)
-
-// Queue is one queue of a connection.
-type Queue struct {
-	Name   string
-	Paused bool
-	// Size is asynq's QueueInfo.Size: every stored task, completed and
-	// aggregating ones included (asynq v0.26.0).
-	Size           int
-	Pending        int
-	Active         int
-	Scheduled      int
-	Retry          int
-	Archived       int
-	ProcessedToday int
-	FailedToday    int
-	Latency        time.Duration
-	// MemoryUsage is asynq's sampled estimate, in bytes.
-	MemoryUsage int64
-}
-
-// DailyStat is one UTC day of counters.
-type DailyStat struct {
-	Date      time.Time
-	Processed int
-	Failed    int
-}
-
-// Connection is one configured connection.
-type Connection struct {
-	Name string
-	// Addr is the display address, "host:port/db".
-	Addr   string
-	Health Health
-	// Valkey is set once the backend was detected as Valkey: the info
-	// page is titled "Valkey info".
-	Valkey bool
-}
-
-// HealthState is the result of the last health check.
-type HealthState int
-
-// Health states. HealthUnknown means the first check has not finished.
-const (
-	HealthUnknown HealthState = iota
-	HealthUp
-	HealthDown
-)
-
-// Health is a connection's cached health.
-type Health struct {
-	State HealthState
-	// Err is why the last check failed (HealthDown only). Its text is shown
-	// on the Overview card.
-	Err error
-	// CheckedAt is when the last check finished; zero while unknown.
-	CheckedAt time.Time
-}
-
-// Summary holds the Overview numbers of one connection.
-type Summary struct {
-	Queues         int
-	Pending        int
-	Active         int
-	Retry          int
-	ProcessedToday int
-	FailedToday    int
-	// OldestPending is the maximum QueueInfo.Latency across queues.
-	OldestPending time.Duration
-}
-
-// lookup finds a connection by name.
-func lookup(src ConnectionLister, name string) (Connection, bool) {
-	for _, c := range src.Connections() {
-		if c.Name == name {
-			return c, true
-		}
-	}
-	return Connection{}, false
+// isValkey reports whether c's backend was detected as Valkey.
+func isValkey(c Conn) bool {
+	b, _ := c.Backend()
+	return b == conn.BackendValkey
 }

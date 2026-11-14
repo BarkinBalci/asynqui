@@ -13,27 +13,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/a-h/templ"
+
 	"github.com/BarkinBalci/asynqui/internal/authz"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// QueueSource is what the Connection page needs from the connection
-// registry.
+// QueueSource is what the Connection page needs from a connection.
 type QueueSource interface {
-	// Queues lists the connection's queues, sorted by name. It may be
-	// served from a short-lived cache shared with Summary.
-	Queues(ctx context.Context, name string) ([]Queue, error)
+	// Queues lists the queues, sorted by name. It may be served from a
+	// short-lived cache shared with Summary.
+	Queues(ctx context.Context) ([]conn.Queue, error)
 	// History returns the daily counters of the last days days, oldest
 	// first, for one queue or, with queue empty, summed over all of them.
-	// An unknown queue is ErrQueueNotFound.
-	History(ctx context.Context, name, queue string, days int) ([]DailyStat, error)
-	// PauseQueue, ResumeQueue and DeleteQueue (empty queues only) act on
-	// one queue. They return errors wrapping ErrQueueNotFound or
-	// ErrQueueNotEmpty where those apply.
-	PauseQueue(ctx context.Context, name, queue string) error
-	ResumeQueue(ctx context.Context, name, queue string) error
-	DeleteQueue(ctx context.Context, name, queue string) error
+	// An unknown queue is conn.ErrQueueNotFound.
+	History(ctx context.Context, queue string, days int) ([]conn.DailyStat, error)
+	// PauseQueue, UnpauseQueue and DeleteQueue (empty queues only) act on
+	// one queue. They return errors wrapping conn.ErrQueueNotFound or
+	// conn.ErrQueueNotEmpty where those apply.
+	PauseQueue(ctx context.Context, queue string) error
+	UnpauseQueue(ctx context.Context, queue string) error
+	DeleteQueue(ctx context.Context, queue string) error
 }
 
 // latencyWarn is the queue latency the table highlights.
@@ -50,50 +52,22 @@ const maxActionForm = 64 << 10
 // defaultRange is the chart's default range in days.
 const defaultRange = 14
 
-// pollInit is the poll URL's ?poll= value for a page without data
-// regions: the answer then renders every region.
-const pollInit = "init"
-
 // rangeChoices are the chart's ranges in days, in control order.
 func rangeChoices() []int { return []int{7, 14, 30, 90} }
 
-// sortParam is a column's ?sort= value.
-func sortParam(c pages.QueueColumn) string {
-	switch c {
-	case pages.ColName:
-		return "name"
-	case pages.ColState:
-		return "state"
-	case pages.ColPending:
-		return "pending"
-	case pages.ColActive:
-		return "active"
-	case pages.ColScheduled:
-		return "scheduled"
-	case pages.ColRetry:
-		return "retry"
-	case pages.ColArchived:
-		return "archived"
-	case pages.ColLatency:
-		return "latency"
-	case pages.ColMemory:
-		return "memory"
-	case pages.ColProcessed:
-		return "processed"
-	case pages.ColFailed:
-		return "failed"
+// queuesSort is the queues table's sort: every column, by Size
+// descending by default; names and states sort ascending first, numbers
+// descending.
+func queuesSort() sortSpec {
+	return sortSpec{
+		cols: []string{"name", "state", "size", "pending", "active", "scheduled", "retry", "archived",
+			"latency", "memory", "processed", "failed"},
+		def:     int(pages.ColSize),
+		defDesc: true,
+		firstDesc: func(c int) bool {
+			return c != int(pages.ColName) && c != int(pages.ColState)
+		},
 	}
-	return "size"
-}
-
-// parseSort is the column whose ?sort= value is s.
-func parseSort(s string) (pages.QueueColumn, bool) {
-	for c := range pages.NumQueueColumns {
-		if sortParam(c) == s {
-			return c, true
-		}
-	}
-	return 0, false
 }
 
 func dirParam(desc bool) string {
@@ -114,35 +88,15 @@ func sortDir(desc bool) components.SortDir {
 // ?sort=&dir= for the table, ?range=&queue= for the chart. Defaults are
 // left out of generated URLs.
 type queuesView struct {
-	sort  pages.QueueColumn
-	desc  bool
+	sort  sortState
 	days  int
 	queue string // chart queue; empty is all queues
-}
-
-func defaultQueuesView() queuesView {
-	return queuesView{sort: pages.ColSize, desc: true, days: defaultRange}
-}
-
-// defaultDesc is the direction a column sorts in when first picked:
-// ascending for names and states, descending for numbers.
-func defaultDesc(c pages.QueueColumn) bool {
-	return c != pages.ColName && c != pages.ColState
 }
 
 // parseQueuesView reads the state from a query; unknown values fall back
 // to the defaults.
 func parseQueuesView(q url.Values) queuesView {
-	v := defaultQueuesView()
-	if c, ok := parseSort(q.Get("sort")); ok {
-		v.sort, v.desc = c, defaultDesc(c)
-	}
-	switch q.Get("dir") {
-	case "asc":
-		v.desc = false
-	case "desc":
-		v.desc = true
-	}
+	v := queuesView{sort: queuesSort().parse(q), days: defaultRange}
 	if n, ok := strings.CutSuffix(q.Get("range"), "d"); ok {
 		if days, err := strconv.Atoi(n); err == nil && slices.Contains(rangeChoices(), days) {
 			v.days = days
@@ -155,10 +109,7 @@ func parseQueuesView(q url.Values) queuesView {
 // values is the query of v, without defaults.
 func (v queuesView) values() url.Values {
 	q := url.Values{}
-	if v.sort != pages.ColSize || !v.desc {
-		q.Set("sort", sortParam(v.sort))
-		q.Set("dir", dirParam(v.desc))
-	}
+	queuesSort().set(q, v.sort)
 	if v.days != defaultRange {
 		q.Set("range", rangeParam(v.days))
 	}
@@ -175,35 +126,18 @@ func (d *deps) queuesURL(conn string, v queuesView) string {
 	return d.urlQuery(v.values(), "c", conn)
 }
 
-// answer is what a Connection page request is answered with.
-type answer struct {
-	// poll is a poll: the chart's controls are left alone.
-	poll bool
-	// init is a poll from a page without data regions.
-	init bool
-}
-
-// answerFor tells a poll (htmx names the triggering element in
-// HX-Trigger) from a user request.
-func answerFor(r *http.Request) answer {
-	if !isFragment(r) || r.Header.Get("HX-Trigger") != pages.QueuesPollID {
-		return answer{}
-	}
-	return answer{poll: true, init: r.URL.Query().Get("poll") == pollInit}
-}
-
 // handleQueues serves GET /c/{conn}, the Connection page. With HX-Request
 // (a poll, a sort or a chart change) it answers with out-of-band swaps
 // instead (pages.QueuesPoll).
 func handleQueues(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
-		m := d.queuesModel(r, a, parseQueuesView(r.URL.Query()), answerFor(r))
+		m := d.queuesModel(r, a, parseQueuesView(r.URL.Query()), liveAnswer(r, pages.QueuesPollID))
 		if isFragment(r) {
 			d.render(w, r, http.StatusOK, pages.QueuesPoll(m))
 			return
 		}
-		if f, ok := d.takeFlash(w, r, a.conn.Name); ok {
+		if f, ok := d.takeFlash(w, r, a.conn.Name()); ok {
 			m.Layout.Toasts = pages.FlashToasts(f)
 		}
 		d.render(w, r, http.StatusOK, pages.QueuesPage(m))
@@ -213,63 +147,40 @@ func handleQueues(d *deps) http.Handler {
 // queuesModel reads the connection's queues and history, in parallel and
 // within the page budget, and builds the page model for state v.
 func (d *deps) queuesModel(r *http.Request, a access, v queuesView, ans answer) pages.Queues {
-	name := a.conn.Name
-	m := pages.Queues{
-		Addr:    a.conn.Addr,
-		Health:  healthView(a.conn.Health.State),
-		FormURL: d.url("c", name, "queues", "pause"),
-		Poll:    ans.poll,
-		Init:    ans.init,
-	}
-
-	var rows []Queue
-	switch a.conn.Health.State {
-	case HealthDown:
-		m.State, m.Error = pages.DataFailed, errText(a.conn.Health.Err)
-	default:
-		ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
-		defer cancel()
-		var (
-			hist    []DailyStat
-			histErr error
-			wg      sync.WaitGroup
-		)
-		wg.Go(func() { hist, histErr = d.conns.History(ctx, name, v.queue, v.days) })
-		qs, err := d.conns.Queues(ctx, name)
+	name := a.conn.Name()
+	ctx, cancel := d.pageContext(r.Context())
+	defer cancel()
+	var (
+		hist    []conn.DailyStat
+		histErr error
+	)
+	rows, rd := readLive(ctx, a, func(ctx context.Context) ([]conn.Queue, error) {
+		var wg sync.WaitGroup
+		wg.Go(func() { hist, histErr = a.conn.History(ctx, v.queue, v.days) })
+		qs, err := a.conn.Queues(ctx)
 		wg.Wait()
-		switch {
-		case err != nil && ctx.Err() != nil:
-			m.State = pages.DataChecking
-		case err != nil:
-			// Reachable at the last PING but failing now: shown failed
-			// here, in the badge and in the sidebar, as on the Overview.
-			m.State, m.Error, m.Health = pages.DataFailed, errText(err), components.HealthDown
-		default:
-			rows = qs
-			if v.queue != "" && (errors.Is(histErr, ErrQueueNotFound) || !slices.ContainsFunc(rows, func(q Queue) bool { return q.Name == v.queue })) {
-				// Deleted, or never there: all queues.
-				v.queue = ""
-				hist, histErr = d.conns.History(ctx, name, "", v.days)
-			}
-			m.Throughput = d.throughput(ctx, name, v, rows, hist, histErr)
+		return qs, err
+	})
+	m := pages.Queues{
+		Layout:  d.liveLayout(r, a, components.SectionQueues, rd),
+		Addr:    a.conn.Addr(),
+		Health:  healthView(a.health.State),
+		FormURL: d.url("c", name, "queues", "pause"),
+	}
+	if rd.down {
+		m.Health = components.HealthDown
+	}
+	if rd.state == pages.DataReady {
+		if v.queue != "" && (errors.Is(histErr, conn.ErrQueueNotFound) || !slices.ContainsFunc(rows, func(q conn.Queue) bool { return q.Name == v.queue })) {
+			// Deleted, or never there: all queues.
+			v.queue = ""
+			hist, histErr = a.conn.History(ctx, "", v.days)
 		}
+		m.Throughput = d.throughput(ctx, name, v, rows, hist, histErr)
 	}
-	// A poll that finds no data keeps the table the page already shows.
-	m.KeepTable = ans.poll && !ans.init && m.State != pages.DataReady
-
-	var health map[string]components.Health
-	if m.Health == components.HealthDown {
-		health = map[string]components.Health{name: components.HealthDown}
-	}
-	crumbs := []components.Crumb{{Text: name, URL: d.url("c", name)}}
-	m.Layout = d.layoutWith(r, a, components.SectionQueues, crumbs, d.visible(a.id), health)
-
+	m.Live = d.live(ans, pages.QueuesPageID, pages.QueuesPollID, rd, rd.state == pages.DataReady, v.values(), "c", name)
+	m.Live.BannerID = pages.ConnStateID
 	m.Next = d.queuesURL(name, v)
-	pq := v.values()
-	if m.State != pages.DataReady && !m.KeepTable {
-		pq.Set("poll", pollInit) // the page will have no data regions
-	}
-	m.PollURL = d.urlQuery(pq, "c", name)
 	d.queueRows(&m, name, v, rows)
 	d.queueActions(&m, a)
 	return m
@@ -277,13 +188,13 @@ func (d *deps) queuesModel(r *http.Request, a access, v queuesView, ans answer) 
 
 // queueRows fills the table: sorted rows, the Total row and the sort
 // headers.
-func (d *deps) queueRows(m *pages.Queues, conn string, v queuesView, rows []Queue) {
+func (d *deps) queueRows(m *pages.Queues, name string, v queuesView, rows []conn.Queue) {
 	sorted := slices.Clone(rows)
-	slices.SortStableFunc(sorted, func(x, y Queue) int { return compareQueues(x, y, v.sort, v.desc) })
+	slices.SortStableFunc(sorted, func(x, y conn.Queue) int { return compareQueues(x, y, pages.QueueColumn(v.sort.col), v.sort.desc) })
 	for _, q := range sorted {
 		row := pages.QueueRow{
 			Name:   q.Name,
-			URL:    d.url("c", conn, "queues", q.Name),
+			URL:    d.url("c", name, "queues", q.Name),
 			LinkID: components.HexID("qlink-", q.Name),
 			Select: components.RowSelect{
 				ID: components.HexID("qsel-", q.Name), Form: pages.QueuesFormID, Name: "queue", Value: q.Name,
@@ -313,23 +224,17 @@ func (d *deps) queueRows(m *pages.Queues, conn string, v queuesView, rows []Queu
 		t.Failed += row.Failed
 		t.Memory += row.Memory
 	}
-	for c := range pages.NumQueueColumns {
-		next := v
-		h := components.SortHead{ID: "sort-" + sortParam(c), Num: c >= pages.ColSize}
-		if c == v.sort {
-			h.Dir = sortDir(v.desc)
-			next.desc = !v.desc
-		} else {
-			next.sort, next.desc = c, defaultDesc(c)
-		}
-		h.URL = d.queuesURL(conn, next)
-		m.Heads[c] = h
-	}
+	// Every sort link keeps the chart's state.
+	chart := v
+	chart.sort = queuesSort().parse(nil)
+	heads := queuesSort().heads(v.sort, chart.values(), func(c int) bool { return c >= int(pages.ColSize) },
+		func(q url.Values) string { return d.urlQuery(q, "c", name) })
+	copy(m.Heads[:], heads)
 }
 
 // compareQueues orders two queues by column c, ties by name. A paused
 // queue's latency is shown as "—" and sorts last either way.
-func compareQueues(x, y Queue, c pages.QueueColumn, desc bool) int {
+func compareQueues(x, y conn.Queue, c pages.QueueColumn, desc bool) int {
 	byName := strings.Compare(x.Name, y.Name)
 	if c == pages.ColLatency && x.Paused != y.Paused {
 		if x.Paused {
@@ -384,7 +289,7 @@ func stateKey(paused bool) int {
 // queueActions fills the toolbar buttons and the delete dialog for the
 // viewer's role.
 func (d *deps) queueActions(m *pages.Queues, a access) {
-	name := a.conn.Name
+	name := a.conn.Name()
 	pause, resume, del := d.url("c", name, "queues", "pause"), d.url("c", name, "queues", "resume"), d.url("c", name, "queues", "delete")
 	op, admin := a.role >= authz.RoleOperator, a.role >= authz.RoleAdmin
 	m.Pause = components.Action{ID: "act-pause", URL: pause, Form: pages.QueuesFormID, Allowed: op, Need: components.RoleOperator,
@@ -408,20 +313,19 @@ func (d *deps) queueActions(m *pages.Queues, a access) {
 func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
-		r.Body = http.MaxBytesReader(w, r.Body, maxActionForm)
-		if err := r.ParseForm(); err != nil {
-			plainError(w, http.StatusBadRequest)
+		if !parseActionForm(w, r) {
 			return
 		}
 		names := uniqueValues(r.PostForm["queue"])
 		// Only the state of next is used; the path is always this
 		// connection's page, so it cannot redirect elsewhere.
-		v := defaultQueuesView()
+		v := parseQueuesView(nil)
 		next, nextErr := url.Parse(r.PostForm.Get("next"))
 		if nextErr == nil {
 			v = parseQueuesView(next.Query())
 		}
-		back := d.queuesURL(a.conn.Name, v)
+		name := a.conn.Name()
+		back := d.queuesURL(name, v)
 		// The Queue page's Pause/Resume button posts one queue with
 		// from=queue: the answer is that page's.
 		if from := r.PostForm.Get("from"); from == "queue" && len(names) == 1 && verb != pages.VerbDelete {
@@ -438,25 +342,23 @@ func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 			case isFragment(r):
 				plainError(w, http.StatusBadRequest)
 			case len(names) == 0:
-				http.Redirect(w, r, back, http.StatusSeeOther) //nolint:gosec // G710: back is built by d.url for this connection.
+				navigate(w, r, back)
 			default:
-				crumbs := []components.Crumb{{Text: a.conn.Name, URL: back}, {Label: pages.DeleteQueuesCrumb()}}
-				l := d.layout(r, a, components.SectionQueues, crumbs)
-				l.TopBar.Next = back
-				d.render(w, r, http.StatusOK, pages.DeleteQueuesPage(pages.DeleteQueues{
-					Layout: l, Names: names, Action: d.url("c", a.conn.Name, "queues", "delete"), Next: back, CancelURL: back,
-				}))
+				m := pages.Confirm{Title: pages.DeleteQueuesTitle(), Names: names, Verb: pages.TaskDelete,
+					Action: d.url("c", name, "queues", "delete"), CancelURL: back}
+				for _, n := range names {
+					m.Hidden = append(m.Hidden, pages.Param{Name: "queue", Value: n})
+				}
+				m.Hidden = append(m.Hidden, pages.Param{Name: "next", Value: back})
+				d.confirm(w, r, a, m, components.Crumb{Text: name, URL: back})
 			}
 			return
 		}
 
-		failures := d.runQueueAction(r.Context(), a.conn.Name, verb, names)
-		if isFragment(r) {
-			d.render(w, r, http.StatusOK, pages.QueuesActionResult(d.queuesModel(r, a, v, answer{}), failures))
-			return
-		}
-		d.setFlash(w, a.conn.Name, failures)
-		http.Redirect(w, r, back, http.StatusSeeOther) //nolint:gosec // G710: back is built by d.url for this connection.
+		failures := d.runQueueAction(r.Context(), a.conn, verb, names)
+		d.answerAction(w, r, name, func() templ.Component {
+			return pages.QueuesActionResult(d.queuesModel(r, a, v, answer{}), failures)
+		}, pages.Flash{Failures: failures}, back)
 	})
 }
 
@@ -483,10 +385,10 @@ func uniqueValues(in []string) []string {
 // second old, a queue paused meanwhile by someone else reaches asynq,
 // which refuses it; that shows as a "Could not pause" toast with asynq's
 // error text.
-func (d *deps) runQueueAction(ctx context.Context, conn string, verb pages.QueueVerb, names []string) []pages.ActionFailure {
+func (d *deps) runQueueAction(ctx context.Context, c Conn, verb pages.QueueVerb, names []string) []pages.ActionFailure {
 	state := map[string]bool{} // paused, by name
 	if verb != pages.VerbDelete {
-		if qs, err := d.conns.Queues(ctx, conn); err == nil {
+		if qs, err := c.Queues(ctx); err == nil {
 			for _, q := range qs {
 				state[q.Name] = q.Paused
 			}
@@ -500,27 +402,27 @@ func (d *deps) runQueueAction(ctx context.Context, conn string, verb pages.Queue
 			if paused, ok := state[q]; ok && paused {
 				continue
 			}
-			err = d.conns.PauseQueue(ctx, conn, q)
+			err = c.PauseQueue(ctx, q)
 		case pages.VerbResume:
 			if paused, ok := state[q]; ok && !paused {
 				continue
 			}
-			err = d.conns.ResumeQueue(ctx, conn, q)
+			err = c.UnpauseQueue(ctx, q)
 		default:
-			err = d.conns.DeleteQueue(ctx, conn, q)
+			err = c.DeleteQueue(ctx, q)
 		}
 		if err == nil {
 			continue
 		}
 		f := pages.ActionFailure{Verb: verb, Queue: q}
 		switch {
-		case errors.Is(err, ErrQueueNotFound):
+		case errors.Is(err, conn.ErrQueueNotFound):
 			f.Kind = pages.FailureNotFound
-		case errors.Is(err, ErrQueueNotEmpty):
+		case errors.Is(err, conn.ErrQueueNotEmpty):
 			f.Kind = pages.FailureNotEmpty
 		default:
 			f.Detail = errText(err)
-			d.logger.WarnContext(ctx, "queue action failed", slog.String("conn", conn), slog.String("queue", q),
+			d.logger.WarnContext(ctx, "queue action failed", slog.String("conn", c.Name()), slog.String("queue", q),
 				slog.String("verb", verbName(verb)), slog.Any("error", err))
 		}
 		failures = append(failures, f)

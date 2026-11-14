@@ -12,6 +12,31 @@ import (
 	"time"
 )
 
+// A caller that missed the cache just before another flight stored the
+// value joins a new flight, which serves that value instead of fetching
+// again.
+func TestFillServesAFreshStore(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCache()
+		const key cacheKey[int] = "k"
+		if v, err := cached(t.Context(), c, key, time.Second, func(context.Context) (int, error) { return 1, nil }); err != nil || v != 1 {
+			t.Fatalf("first = %v, %v", v, err)
+		}
+		v, err := fill(c, key, time.Second, func() (int, error) {
+			t.Error("fetched again")
+			return 2, nil
+		})
+		if err != nil || v != 1 {
+			t.Errorf("fill = %v, %v; want the stored 1", v, err)
+		}
+		// Expired, or reset: it fetches.
+		c.reset()
+		if v, _ := fill(c, key, time.Second, func() (int, error) { return 3, nil }); v != 3 {
+			t.Errorf("after a reset fill = %v, want a fetch", v)
+		}
+	})
+}
+
 func TestCachedTTL(t *testing.T) {
 	steps := []struct {
 		after       time.Duration // since the previous step
@@ -197,10 +222,10 @@ func TestCacheSweepsExpiredEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 		c.mu.Lock()
-		n, flights := len(c.entries), len(c.flights)
+		n := len(c.entries)
 		c.mu.Unlock()
-		if n != 1 || flights != 0 {
-			t.Errorf("%d entries and %d flights after the others expired, want 1 and 0", n, flights)
+		if n != 1 {
+			t.Errorf("%d entries after the others expired, want 1", n)
 		}
 	})
 }

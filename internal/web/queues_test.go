@@ -10,12 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/BarkinBalci/asynqui/internal/config"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
 // rowNames lists the queue names of the table, in order.
@@ -223,49 +223,15 @@ func TestQueuesFragment(t *testing.T) {
 	}
 }
 
-func TestQueuesFocusablesHaveIDs(t *testing.T) {
-	conns := defaultConns()
-	conns.queues["main"] = append(conns.queues["main"], Queue{Name: "a/b c"})
-	h, _ := newTestServer(t, testOpts{conns: conns, authz: config.Authz{Default: config.RoleAdmin}})
-	doc := parse(t, do(t, h, request{path: "/c/main"}))
-	seen := map[string]bool{}
-	doc.Find("[id]").Each(func(_ int, s *goquery.Selection) {
-		id, _ := s.Attr("id")
-		if seen[id] {
-			t.Errorf("duplicate id %q", id)
-		}
-		seen[id] = true
-	})
-	poll := parse(t, do(t, h, request{path: "/c/main", htmx: true}))
-	n := 0
-	poll.Find("[hx-swap-oob]").Each(func(_ int, region *goquery.Selection) {
-		id, _ := region.Attr("id")
-		doc.Find(`[id="` + id + `"]`).Find("a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]").Each(func(_ int, s *goquery.Selection) {
-			n++
-			if v, ok := s.Attr("id"); !ok || v == "" {
-				h, _ := goquery.OuterHtml(s)
-				t.Errorf("focusable in #%s without id: %s", id, h)
-			}
-		})
-	})
-	if n < 30 {
-		t.Errorf("only %d focusables found", n)
-	}
-}
-
+// TestQueuesPathEscaping: odd queue names make ids, form values and the
+// chart's picker round-trip; TestRoutesPathEscaping checks the links.
 func TestQueuesPathEscaping(t *testing.T) {
 	conns := defaultConns()
-	conns.queues["main"] = []Queue{{Name: "a/b c"}, {Name: "x?y#z"}}
+	conns.queues["main"] = []conn.Queue{{Name: "a/b c"}, {Name: "x?y#z"}}
 	h, _ := newTestServer(t, testOpts{conns: conns, basePath: "/asynq"})
 	doc := parse(t, do(t, h, request{path: "/asynq/c/main?sort=name"}))
-	var hrefs, ids []string
-	doc.Find("#queues-rows a.row-link").Each(func(_ int, s *goquery.Selection) {
-		hrefs = append(hrefs, s.AttrOr("href", ""))
-		ids = append(ids, s.AttrOr("id", ""))
-	})
-	if diff := cmp.Diff([]string{"/asynq/c/main/queues/a%2Fb%20c", "/asynq/c/main/queues/x%3Fy%23z"}, hrefs); diff != "" {
-		t.Errorf("hrefs (-want +got):\n%s", diff)
-	}
+	var ids []string
+	doc.Find("#queues-rows a.row-link").Each(func(_ int, s *goquery.Selection) { ids = append(ids, s.AttrOr("id", "")) })
 	if diff := cmp.Diff([]string{"qlink-612f622063", "qlink-783f79237a"}, ids); diff != "" {
 		t.Errorf("ids (-want +got):\n%s", diff)
 	}
@@ -355,39 +321,6 @@ func TestQueuesToolbarRoles(t *testing.T) {
 	}
 }
 
-func TestQueueActionsRoles(t *testing.T) {
-	az := config.Authz{Default: config.RoleNone, Bindings: []config.Binding{
-		{Users: []string{"vic"}, Role: config.RoleViewer, Connections: []string{"main"}},
-		{Users: []string{"olga"}, Role: config.RoleOperator, Connections: []string{"main"}},
-		{Users: []string{"ada"}, Role: config.RoleAdmin, Connections: []string{"main"}},
-	}}
-	tests := []struct {
-		user, path, form string
-		want             int
-		acted            []string
-	}{
-		{"vic", "/c/main/queues/pause", "queue=default", http.StatusForbidden, nil},
-		{"vic", "/c/main/queues/resume", "queue=image-resize", http.StatusForbidden, nil},
-		{"olga", "/c/main/queues/pause", "queue=default", http.StatusSeeOther, []string{"pause main/default"}},
-		{"olga", "/c/main/queues/resume", "queue=image-resize", http.StatusSeeOther, []string{"resume main/image-resize"}},
-		{"olga", "/c/main/queues/delete", "queue=image-resize&confirm=1", http.StatusForbidden, nil},
-		{"ada", "/c/main/queues/delete", "queue=image-resize&confirm=1", http.StatusSeeOther, []string{"delete main/image-resize"}},
-		{"ada", "/c/analytics/queues/pause", "queue=default", http.StatusNotFound, nil}, // hidden
-	}
-	for _, tt := range tests {
-		t.Run(tt.user+" "+tt.path, func(t *testing.T) {
-			h, conns := newTestServer(t, testOpts{provider: config.ProviderProxy, authz: az})
-			rec := do(t, h, request{method: http.MethodPost, path: tt.path, user: tt.user, form: tt.form})
-			if rec.Code != tt.want {
-				t.Fatalf("status %d, want %d", rec.Code, tt.want)
-			}
-			if diff := cmp.Diff(tt.acted, conns.actions()); diff != "" {
-				t.Errorf("acted (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
 func TestQueueActions(t *testing.T) {
 	admin := testOpts{authz: config.Authz{Default: config.RoleAdmin}}
 	t.Run("pause acts on the running ones and keeps the state", func(t *testing.T) {
@@ -426,7 +359,7 @@ func TestQueueActions(t *testing.T) {
 	})
 	t.Run("failures are toasts", func(t *testing.T) {
 		conns := defaultConns()
-		conns.actErrs["default"] = fmt.Errorf("%w: queue=%q", ErrQueueNotEmpty, "default")
+		conns.actErrs["default"] = fmt.Errorf("%w: queue=%q", conn.ErrQueueNotEmpty, "default")
 		conns.actErrs["low"] = errors.New("READONLY You can't write against a read only replica.") //nolint:revive // Redis's own text
 		h, _ := newTestServer(t, testOpts{conns: conns, authz: config.Authz{Default: config.RoleAdmin}})
 		form := "confirm=1&queue=default&queue=low&queue=gone&queue=critical"
@@ -555,33 +488,31 @@ func TestQueueActions(t *testing.T) {
 	})
 }
 
-func TestQueueActionsCSRF(t *testing.T) {
-	h, conns := newTestServer(t, testOpts{authz: config.Authz{Default: config.RoleAdmin}})
-	for _, path := range []string{"/c/main/queues/pause", "/c/main/queues/resume", "/c/main/queues/delete"} {
-		for _, hdr := range []map[string]string{{"Sec-Fetch-Site": "cross-site"}, {"Origin": "https://evil.example"}} {
-			rec := do(t, h, request{method: http.MethodPost, path: path, form: "queue=default&queue=image-resize&confirm=1", header: hdr})
-			if rec.Code != http.StatusForbidden {
-				t.Errorf("%s with %v = %d", path, hdr, rec.Code)
-			}
-		}
+// TestHealthReadOnce: a page reads each connection's health once, so a
+// check that lands while the page reads its data does not show the
+// connection down next to that data.
+func TestHealthReadOnce(t *testing.T) {
+	conns := defaultConns()
+	conns.onQueues = func() {
+		conns.mu.Lock()
+		defer conns.mu.Unlock()
+		conns.conns[0].Health = conn.Health{State: conn.StateDown, Err: errors.New("dial tcp: i/o timeout")}
 	}
-	if a := conns.actions(); len(a) != 0 {
-		t.Errorf("cross-origin posts acted: %q", a)
+	h, _ := newTestServer(t, testOpts{conns: conns})
+	doc := parse(t, do(t, h, request{path: "/c/main"}))
+	if text(doc.Find("#conn-health")) == "Unreachable" || doc.Find("#nav-main .dot-down").Length() != 0 || len(rowNames(doc)) != 4 {
+		t.Errorf("badge %q, sidebar down %d, rows %d", text(doc.Find("#conn-health")), doc.Find("#nav-main .dot-down").Length(), len(rowNames(doc)))
 	}
 }
 
+// TestQueuesUnavailable has the Connection page's own cases; see
+// TestInfraUnavailable for the ones every connection page shares.
 func TestQueuesUnavailable(t *testing.T) {
 	t.Run("connection down", func(t *testing.T) {
 		h, _ := newTestServer(t, testOpts{})
 		doc := parse(t, do(t, h, request{path: "/c/analytics"}))
 		if doc.Find("aside.side").Length() != 1 || text(doc.Find("main h1")) != "Queues" {
 			t.Fatal("not inside the layout")
-		}
-		if got := text(doc.Find("#queues-table .conn-error-title")); got != "Connection failed" {
-			t.Errorf("error title = %q", got)
-		}
-		if got := text(doc.Find("#queues-table .conn-error-text")); got != "dial tcp 10.0.4.12:6380: i/o timeout" {
-			t.Errorf("error = %q", got)
 		}
 		if text(doc.Find("#conn-health")) != "Unreachable" || doc.Find("#queues").Length() != 0 {
 			t.Error("badge or table wrong")
@@ -590,26 +521,25 @@ func TestQueuesUnavailable(t *testing.T) {
 			t.Error("chart shown without data")
 		}
 	})
-	t.Run("read fails: down here and in the sidebar", func(t *testing.T) {
+	t.Run("error reply: inline, the connection stays up", func(t *testing.T) {
 		conns := defaultConns()
 		conns.queueErrs = map[string]error{"main": errors.New("NOAUTH Authentication required.")} //nolint:revive // Redis's own text
 		h, _ := newTestServer(t, testOpts{conns: conns})
 		doc := parse(t, do(t, h, request{path: "/c/main"}))
-		if got := text(doc.Find("#queues-table .conn-error-text")); got != "NOAUTH Authentication required." {
-			t.Errorf("error = %q", got)
+		if title, msg := text(doc.Find("#queues-table .conn-error-title")), text(doc.Find("#queues-table .conn-error-text")); title != "Could not load queues" ||
+			msg != "NOAUTH Authentication required." {
+			t.Errorf("error = %q %q", title, msg)
 		}
-		if doc.Find("#nav-main .dot-down").Length() != 1 || text(doc.Find("#conn-health")) != "Unreachable" {
-			t.Error("sidebar or badge not down")
+		if doc.Find("#nav-main .dot-down").Length() != 0 || text(doc.Find("#conn-health")) == "Unreachable" {
+			t.Error("an error reply shows the connection down")
 		}
 	})
-	t.Run("slow read: checking", func(t *testing.T) {
+	t.Run("unreachable: the badge is down", func(t *testing.T) {
 		conns := defaultConns()
-		conns.block = map[string]bool{"main": true}
-		d, h, _ := newTestDeps(t, testOpts{conns: conns})
-		d.pageBudget = 20 * time.Millisecond
-		doc := parse(t, do(t, h, request{path: "/c/main"}))
-		if got := text(doc.Find("#queues-table .checking")); got != "Checking" {
-			t.Errorf("checking = %q", got)
+		conns.queueErrs = map[string]error{"main": unreachable("connection refused")}
+		h, _ := newTestServer(t, testOpts{conns: conns})
+		if got := text(parse(t, do(t, h, request{path: "/c/main"})).Find("#conn-health")); got != "Unreachable" {
+			t.Errorf("badge = %q", got)
 		}
 	})
 	t.Run("no queues", func(t *testing.T) {
@@ -736,7 +666,7 @@ func TestQueuesThroughput(t *testing.T) {
 // every selected row; Size counts completed and aggregating tasks too.
 func TestQueuesEmptyRows(t *testing.T) {
 	conns := defaultConns()
-	conns.queues["main"] = []Queue{{Name: "done", Size: 3}, {Name: "empty"}}
+	conns.queues["main"] = []conn.Queue{{Name: "done", Size: 3}, {Name: "empty"}}
 	h, _ := newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
 	doc := parse(t, do(t, h, request{path: "/c/main"}))
 	var empty []string

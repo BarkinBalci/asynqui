@@ -87,7 +87,8 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	ver := buildVersion(version, debug.ReadBuildInfo) // -ldflags, else the go command's module version, else "dev"
 	// --- fail fast: everything below can fail and runs before Listen ---
 	cfg, err := config.Load(opts.configPath, lookupEnv, overrides) // file > default; flags/env override
-	authn, err := auth.New(ctx, …)                               // OIDC discovery happens here
+	policy, err := authz.New(cfg.Authz)                           // both take the validated config types
+	authn, err := auth.New(ctx, cfg, policy.Groups(), logger)     // OIDC discovery happens here
 	reg, err := conn.NewRegistry(cfg.Connections, logger)          // no Redis I/O; fails only on unreadable TLS files
 	checker := newUpdateChecker(cfg.UpdateCheck, ver, logger)      // *update.Checker; nil when off or not a release
 	var updates web.UpdateSource                                  // stays a nil interface without a checker
@@ -152,12 +153,12 @@ func addRoutes(mux *http.ServeMux, d deps) {
 	mux.Handle("POST /c/{conn}/queues/pause", op(d, handleQueueAction(d, pages.VerbPause)))  // form: queue=a&queue=b&next=
 	mux.Handle("POST /c/{conn}/queues/resume", op(d, handleQueueAction(d, pages.VerbResume)))
 	mux.Handle("POST /c/{conn}/queues/pause", …)                                             // + from=queue: the Queue page's Pause/Resume
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, TaskRun)))  // id=a&id=b or all=1&state= (+ group=g&group=h for aggregating); next=, from=task
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTaskAction(d, TaskArchive))) // + confirm=1
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTaskAction(d, TaskCancel))) // ids only
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, conn.TaskRun)))  // id=a&id=b or all=1&state= (+ group=g&group=h for aggregating); next=, from=task
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTaskAction(d, conn.TaskArchive))) // + confirm=1
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTaskAction(d, conn.TaskCancel))) // ids only
 
 	// admin
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleTaskAction(d, TaskDelete))) // + confirm=1
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleTaskAction(d, conn.TaskDelete))) // + confirm=1
 	mux.Handle("POST /c/{conn}/queues/delete", admin(d, handleQueueAction(d, pages.VerbDelete))) // + confirm=1
 
 	// assets
@@ -196,10 +197,12 @@ func addRoutes(mux *http.ServeMux, d deps) {
 | Config | `go.yaml.in/yaml/v3`, the maintained successor to the archived `gopkg.in/yaml.v3` |
 | OIDC | `github.com/coreos/go-oidc/v3` + `golang.org/x/oauth2` |
 | Basic-auth hashes | `golang.org/x/crypto/bcrypt` |
+| Login rate limit | `golang.org/x/time/rate` token buckets |
+| Version strings (update check, footer) | `golang.org/x/mod`: `semver`, `module` |
 | Session cookie | `github.com/gorilla/securecookie` |
 | CSRF | stdlib `http.CrossOriginProtection` (Go 1.25+), based on `Sec-Fetch-Site`, so no tokens are needed |
 | Routing, logging, flags | stdlib `net/http`, `log/slog`, `flag` |
-| Coalescing | a small hand-rolled single-flight in `conn` (typed keys, panic recovery) |
+| Coalescing, bounded fan-out | `golang.org/x/sync`: `singleflight` in `conn`'s cache (typed keys, panic recovery inside the shared fetch), `errgroup` for the per-queue reads |
 
 **Frontend** (vendored and embedded; no npm and no build step)
 
@@ -240,7 +243,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **Connection page cost:** the same queue snapshot, plus `History` per queue for the chart (one snapshot per queue and range). The two are read in parallel and the page waits at most 5s for them; a miss renders "Checking" (in the chart body for the history). A successful pause, resume or delete drops the connection's cached snapshots, so the next read shows it.
 - **Servers, Schedulers and Info pages cost:** one snapshot each of `Inspector.Servers` (shared by the list and the detail page), `Inspector.SchedulerEntries` (shared likewise), and `INFO`. The Scheduler entry page adds one snapshot per entry and history page: `ListSchedulerEnqueueEvents` for the page, a one-event read past it to know whether an older page exists (asynq gives no count), and `GetTaskInfo` per event in the entry's queue (each result reused for 10s), so a task ID links only while the task exists; an entry without a `Queue` option has no known queue and costs no lookups. Each page waits at most 5s (both reads of the entry page share it); a miss renders "Checking". Only a network error or timeout (`conn.Unreachable`) marks the connection down; an error reply is shown inline.
 - **Backend label:** "Redis info" or "Valkey info" comes from a per-connection value that costs no INFO per page: the health loop reads `INFO server` each time a connection becomes reachable, while the backend is still unknown, and every 6th check (once a minute), and every `INFO` read for the Info page refreshes it. Before the first detection the label is "Redis info".
-- **Read-only page polling** (Servers, Server detail, Schedulers, Scheduler entry, Info) follows the Connection page: a `*-page` wrapper is the `hx-sync` scope, a hidden `*-poll` element polls with `hx-swap="none"`, and answers swap out of band the poll element, the `#live-state` banner, the data regions, the Updated time and the sidebar list. The regions are `#servers-table`, `#schedulers-table` and `#info-cards`; on the detail pages the heading, ID, Copy ID and payload are rendered once, and polls swap `#server-state`, `#server-workers`, `#server-details`, `#entry-history` and `#entry-details`, so nothing flickers. Filters stay outside the regions. A poll that finds no data keeps the regions and shows the banner; a page rendered without its regions (no data, or the item not found) polls with `?poll=init` and gets the whole body (`#server-body`, `#entry-body`), as does a poll that finds the item gone. The raw INFO block is sent only with the page (or an init poll), so polls never reset its scroll or selection.
+- **Read-only page polling** (Servers, Server detail, Schedulers, Scheduler entry, Info) follows the Connection page; all of these pages and the Connection, Queue and Task pages share one frame, `pages.Live`, and one read helper, `readLive`: a `*-page` wrapper is the `hx-sync` scope, a hidden `*-poll` element polls with `hx-swap="none"`, and answers swap out of band the poll element, the `#live-state` banner, the data regions, the Updated time and the sidebar list. The regions are `#servers-table`, `#schedulers-table` and `#info-cards`; on the detail pages the heading, ID, Copy ID and payload are rendered once, and polls swap `#server-state`, `#server-workers`, `#server-details`, `#entry-history` and `#entry-details`, so nothing flickers. Filters stay outside the regions. A poll that finds no data keeps the regions and shows the banner; a page rendered without its regions (no data, or the item not found) polls with `?poll=init` and gets the whole body (`#server-body`, `#entry-body`), as does a poll that finds the item gone. The raw INFO block is sent only with the page (or an init poll), so polls never reset its scroll or selection.
 
 ## Frontend conventions
 
@@ -260,7 +263,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **Actions:** toolbar buttons submit that form (`formaction`, plus `hx-post` with `hx-swap="none"`). The htmx answer is a user-request answer plus error toasts appended to `#toasts` out of band. Without JS it is always a redirect back (post, redirect, get); failures ride in the short-lived `asynqui_flash` cookie, which the page shows as toasts once and clears, so a reload never posts again. A delete opens a `<dialog>` whose confirm button posts `confirm=1`; without JS the first post answers with a confirmation page.
 - **No cross-origin forms:** the CSP `form-action 'self'` also applies to a form's redirects, so anything that leaves the origin (SSO, proxy sign out) is a link.
 - **Time:** the `time` component renders `<time datetime="RFC3339 UTC">` with the absolute UTC text from `format`. `app.js` rewrites it to local relative text with the absolute local time in `title`, and re-renders relative text on each tick.
-- **Assets:** served with content-hashed filenames and `Cache-Control: immutable`. `//go:embed files` (without `all:`), so dotfiles are never embedded.
+- **Assets:** served by `http.FileServerFS` under `/static/<hash>/…`, the hash covering every embedded file, with `Cache-Control: immutable`; any change moves every URL, and the stylesheet's relative font URLs resolve as written. Another hash, a directory or a missing file is 404 (no listings). `//go:embed files` (without `all:`), so dotfiles are never embedded.
 
 ## Testing
 
@@ -271,6 +274,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
    - role enforcement (403/404)
    - actions mutating Redis
    - "not found" and "Connection failed" states
+   - the checks every page shares (access by role, CSRF, ids of focusables in polled regions, the answers' shape, `hx-sync` scopes, path escaping) run once over a route table (`internal/web/routes_test.go`)
 4. **Browser smoke tests** (`e2e/`, build tag `e2e`, the CI `e2e` job; see [contributing](contributing.md#browser-tests)): playwright-go and headless Chromium against the built binary and a seeded Redis, for the behaviour that lives in `app.js` and htmx and that Go tests cannot run (selection across polls, focus, dialogs, `hx-sync`); handler and component tests only check the markup that drives it:
    - theme without a flash, System following `prefers-color-scheme`
    - polling: Off sends nothing, 2s polls, a hidden tab pauses

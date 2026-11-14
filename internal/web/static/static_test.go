@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"regexp"
 	"strings"
 	"testing"
@@ -28,9 +29,9 @@ func TestEmbedded(t *testing.T) {
 	}
 }
 
-func TestHashedNamesAndCSSRewrite(t *testing.T) {
+func TestTreeHash(t *testing.T) {
 	fsys := fstest.MapFS{
-		"app.css":         {Data: []byte(`@font-face{src:url(fonts/a.woff2) format("woff2")} .x{background:url('data:image/png;base64,AA')} .y{background:url("/abs.png")}`)},
+		"app.css":         {Data: []byte(`@font-face{src:url(fonts/a.woff2) format("woff2")}`)},
 		"fonts/a.woff2":   {Data: []byte("font-v1")},
 		"vendor/x.min.js": {Data: []byte("js")},
 	}
@@ -38,42 +39,34 @@ func TestHashedNamesAndCSSRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`^fonts/a\.[0-9a-f]{12}\.woff2$`)
-	font := a.Path("fonts/a.woff2")
-	if !re.MatchString(font) {
-		t.Fatalf("font path %q", font)
+	css := a.Path("app.css")
+	if !regexp.MustCompile(`^[0-9a-f]{12}/app\.css$`).MatchString(css) {
+		t.Fatalf("css path %q", css)
 	}
-	if got := a.Path("vendor/x.min.js"); !regexp.MustCompile(`^vendor/x\.min\.[0-9a-f]{12}\.js$`).MatchString(got) {
-		t.Errorf("js path %q", got)
+	if font := a.Path("fonts/a.woff2"); path.Dir(path.Dir(font)) != path.Dir(css) {
+		t.Errorf("font %q is not under the hash of %q", font, css)
 	}
-	css := get(t, a, a.Path("app.css"))
-	if !strings.Contains(css, "url("+font+")") {
-		t.Errorf("css not rewritten: %s", css)
+	// The stylesheet's relative font URL resolves as written.
+	if got := get(t, a, a.Path("app.css")); !strings.Contains(got, "url(fonts/a.woff2)") {
+		t.Errorf("css rewritten: %s", got)
 	}
-	if !strings.Contains(css, `url('data:image/png;base64,AA')`) || !strings.Contains(css, `url("/abs.png")`) {
-		t.Errorf("absolute urls changed: %s", css)
+	if get(t, a, path.Dir(css)+"/fonts/a.woff2") != "font-v1" {
+		t.Error("font not served next to the stylesheet")
 	}
 
-	// A changed font changes the CSS name too.
+	// A changed font moves every path.
 	fsys["fonts/a.woff2"] = &fstest.MapFile{Data: []byte("font-v2")}
 	b, err := New(fsys)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.Path("app.css") == b.Path("app.css") {
-		t.Error("css hash did not change with the font")
-	}
-}
-
-func TestCSSMissingReference(t *testing.T) {
-	_, err := New(fstest.MapFS{"app.css": {Data: []byte(`.x{background:url(missing.png)}`)}})
-	if err == nil || !strings.Contains(err.Error(), "missing.png") {
-		t.Fatalf("err = %v", err)
+		t.Error("css path did not change with the font")
 	}
 }
 
 func TestServeHeaders(t *testing.T) {
-	a, err := New(fstest.MapFS{"x.js": {Data: []byte("1")}})
+	a, err := New(fstest.MapFS{"x.js": {Data: []byte("1")}, "d/y.txt": {Data: []byte("2")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,12 +76,50 @@ func TestServeHeaders(t *testing.T) {
 		rec.Header().Get("Content-Type") != "text/javascript; charset=utf-8" || rec.Header().Get("ETag") == "" {
 		t.Errorf("headers = %v", rec.Header())
 	}
-	for _, p := range []string{"/x.js", "/nope", "/"} {
+	hash := path.Dir(a.Path("x.js"))
+	for _, p := range []string{"/x.js", "/nope", "/", "/" + hash, "/" + hash + "/", "/" + hash + "/d", "/" + hash + "/d/",
+		"/" + hash + "/nope.js", "/000000000000/x.js", "/" + hash + "/../x.js"} {
 		rec := httptest.NewRecorder()
 		a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("%s = %d, want 404", p, rec.Code)
+		if rec.Code != http.StatusNotFound || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("%s = %d %q, want 404", p, rec.Code, rec.Header().Get("Cache-Control"))
 		}
+	}
+}
+
+// TestCSSReferences: every relative url() of the embedded stylesheets is
+// an embedded file, so it is served next to them.
+func TestCSSReferences(t *testing.T) {
+	sub, err := fs.Sub(FS, "files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	err = fs.WalkDir(sub, ".", func(name string, _ fs.DirEntry, err error) error {
+		if err != nil || path.Ext(name) != ".css" {
+			return err
+		}
+		b, err := fs.ReadFile(sub, name)
+		if err != nil {
+			return err
+		}
+		for _, m := range regexp.MustCompile(`url\(\s*['"]?([^'")\s]+)['"]?\s*\)`).FindAllStringSubmatch(string(b), -1) {
+			ref := m[1]
+			if strings.Contains(ref, ":") || strings.HasPrefix(ref, "/") || strings.HasPrefix(ref, "#") {
+				continue // absolute, data: or a fragment
+			}
+			n++
+			if st, err := fs.Stat(sub, path.Join(path.Dir(name), ref)); err != nil || st.IsDir() {
+				t.Errorf("%s: url(%s) is not an embedded file", name, ref)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Error("no url() found; pattern wrong?")
 	}
 }
 

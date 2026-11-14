@@ -231,6 +231,8 @@ func TestNewNotRelease(t *testing.T) {
 		// A prerelease part: release candidates, git describe, dirty and
 		// snapshot builds.
 		"0.2.0-rc.1", "v0.1.0-3-gabc1234", "v0.1.0-3-gabc1234-dirty", "v0.1.0-dirty", "0.0.0-SNAPSHOT-0cf57cb",
+		// A pseudo-version: a build in a checkout.
+		"v0.1.1-0.20261114015959-c1a81a5e0d4f+dirty",
 	} {
 		if c, err := New(Options{Version: v}); !errors.Is(err, ErrNotRelease) || c != nil {
 			t.Errorf("New(%q) = %v, %v; want ErrNotRelease", v, c, err)

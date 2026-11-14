@@ -30,7 +30,7 @@ templ FilterInput(id, target, label string) {
 // title, also folded into its accessible name ("Delete (requires admin)").
 templ ActionButton(a Action, icon templ.Component, label string) {
 	if !a.Allowed {
-		switch {
+		switch true {
 			case a.Need == RoleAdmin && a.Conn != "":
 				@lockedAction(a, icon, label, "Requires admin on "+a.Conn, label+" (requires admin on "+a.Conn+")")
 			case a.Need == RoleAdmin:

@@ -6,63 +6,47 @@ import (
 	"net/netip"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 const (
-	loginAttempts = 5
-	loginWindow   = time.Minute
+	// loginBurst attempts are allowed at once; then one more every
+	// loginRefill.
+	loginBurst  = 5
+	loginRefill = 12 * time.Second
 	// limiterCap bounds memory per limiter. When full, the least recently
 	// seen key is evicted.
 	limiterCap = 10000
 )
 
-// limiter allows max attempts per key per sliding window. Keys are client
-// IPs (IPv6 by /64) or folded usernames. Behind a reverse proxy every user
-// shares the proxy's IP, so one user's failures can lock out the others:
-// that is the documented trade-off of keying on RemoteAddr only.
+// limiter is a token bucket per key. Keys are client IPs (IPv6 by /64) or
+// folded usernames. Behind a reverse proxy every user shares the proxy's
+// IP, so one user's failures can lock out the others: that is the
+// documented trade-off of keying on RemoteAddr only.
 type limiter struct {
-	max       int
-	window    time.Duration
-	cap       int
-	now       func() time.Time
-	mu        sync.Mutex
-	entries   map[string]*list.Element // of *limitEntry
-	order     *list.List               // front = most recently seen
-	lastSweep time.Time
+	cap     int
+	now     func() time.Time
+	mu      sync.Mutex
+	entries map[string]*list.Element // of *limitEntry
+	order   *list.List               // front = most recently seen
 }
 
 type limitEntry struct {
-	key  string
-	hits []time.Time // ascending
+	key    string
+	bucket *rate.Limiter
 }
 
-func newLimiter(maxAttempts int, window time.Duration, capacity int, now func() time.Time) *limiter {
-	return &limiter{
-		max: maxAttempts, window: window, cap: capacity, now: now,
-		entries: map[string]*list.Element{}, order: list.New(),
-	}
+func newLimiter(capacity int, now func() time.Time) *limiter {
+	return &limiter{cap: capacity, now: now, entries: map[string]*list.Element{}, order: list.New()}
 }
 
-// allow records an attempt for key and reports whether it is within the
-// limit. If not, retry is how long until the next attempt would be allowed.
+// allow takes a token for key and reports whether there was one. If not,
+// retry is how long until the next one.
 func (l *limiter) allow(key string) (ok bool, retry time.Duration) {
 	now := l.now()
-	cutoff := now.Add(-l.window)
-
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if now.Sub(l.lastSweep) >= l.window {
-		l.lastSweep = now
-		for el := l.order.Back(); el != nil; {
-			prev := el.Prev()
-			if e := el.Value.(*limitEntry); !e.hits[len(e.hits)-1].After(cutoff) {
-				l.order.Remove(el)
-				delete(l.entries, e.key)
-			}
-			el = prev
-		}
-	}
-
 	el, found := l.entries[key]
 	if !found {
 		if l.order.Len() >= l.cap {
@@ -70,22 +54,16 @@ func (l *limiter) allow(key string) (ok bool, retry time.Duration) {
 			l.order.Remove(oldest)
 			delete(l.entries, oldest.Value.(*limitEntry).key)
 		}
-		el = l.order.PushFront(&limitEntry{key: key})
+		el = l.order.PushFront(&limitEntry{key: key, bucket: rate.NewLimiter(rate.Every(loginRefill), loginBurst)})
 		l.entries[key] = el
 	} else {
 		l.order.MoveToFront(el)
 	}
-	e := el.Value.(*limitEntry)
-	i := 0
-	for i < len(e.hits) && !e.hits[i].After(cutoff) {
-		i++
+	b := el.Value.(*limitEntry).bucket
+	if b.AllowN(now, 1) {
+		return true, 0
 	}
-	e.hits = e.hits[i:]
-	if len(e.hits) >= l.max {
-		return false, e.hits[0].Sub(cutoff)
-	}
-	e.hits = append(e.hits, now)
-	return true, 0
+	return false, time.Duration((1 - b.TokensAt(now)) * float64(loginRefill))
 }
 
 func (l *limiter) len() int {

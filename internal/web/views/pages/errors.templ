@@ -5,23 +5,7 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
 
-// NotImplemented is a placeholder for pages that later milestones build.
-// The heading and title are the last breadcrumb.
-type NotImplemented struct {
-	Layout views.Layout
-}
-
-templ NotImplementedPage(m NotImplemented) {
-	@views.Page(m.Layout, lastCrumb(m.Layout)) {
-		<div class="page-head">
-			<h1 class="h1">
-				@lastCrumb(m.Layout)
-			</h1>
-		</div>
-		<p class="lead">Not implemented yet.</p>
-	}
-}
-
+// lastCrumb is a page's last breadcrumb: its heading and title.
 templ lastCrumb(l views.Layout) {
 	if n := len(l.TopBar.Crumbs); n > 0 {
 		@components.CrumbLabel(l.TopBar.Crumbs[n-1])

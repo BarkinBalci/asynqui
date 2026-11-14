@@ -1,6 +1,10 @@
 package authz
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
+)
 
 // Role is a permission level on one connection. Roles are ordered, so a
 // higher Role includes every capability of the lower ones.
@@ -30,22 +34,19 @@ func (r Role) String() string {
 	return fmt.Sprintf("Role(%d)", int(r))
 }
 
-func (r Role) valid() bool { return r >= RoleNone && r <= RoleAdmin }
-
-// ParseRole parses the config spelling of a role. "none" is accepted and
-// yields RoleNone; callers decide where it is allowed.
-func ParseRole(s string) (Role, error) {
-	switch s {
-	case "none":
+// parseRole maps a config role onto Role.
+func parseRole(r config.Role) (Role, error) {
+	switch r {
+	case config.RoleNone:
 		return RoleNone, nil
-	case "viewer":
+	case config.RoleViewer:
 		return RoleViewer, nil
-	case "operator":
+	case config.RoleOperator:
 		return RoleOperator, nil
-	case "admin":
+	case config.RoleAdmin:
 		return RoleAdmin, nil
 	}
-	return RoleNone, fmt.Errorf("unknown role %q (want viewer, operator, admin or none)", s)
+	return RoleNone, fmt.Errorf("unknown role %q (want viewer, operator, admin or none)", r)
 }
 
 // Action is something a user can do on a connection.

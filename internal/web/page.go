@@ -11,6 +11,7 @@ import (
 
 	"github.com/BarkinBalci/asynqui/internal/auth"
 	"github.com/BarkinBalci/asynqui/internal/authz"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/format"
 	"github.com/BarkinBalci/asynqui/internal/web/views"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
@@ -97,6 +98,50 @@ func (d *deps) errorDocument(w http.ResponseWriter, r *http.Request, status int,
 	writeHTML(w, status, body)
 }
 
+// parseActionForm reads an action post's form, at most maxActionForm
+// bytes. On a bad one it answers 400 itself and returns false.
+func parseActionForm(w http.ResponseWriter, r *http.Request) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxActionForm)
+	if err := r.ParseForm(); err != nil {
+		plainError(w, http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// navigate sends the browser to target: an HX-Redirect for htmx, else a
+// 303 (post, redirect, get). Every target is built by d.url.
+func navigate(w http.ResponseWriter, r *http.Request, target string) {
+	if isFragment(r) {
+		w.Header().Set("HX-Redirect", target)
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther) //nolint:gosec // G710: target is built by d.url, inside this app.
+}
+
+// answerAction answers an action: with htmx the page's user-request
+// answer, result, which shows the failures as toasts; without JS a
+// redirect back, with f in the flash cookie for the page to show.
+func (d *deps) answerAction(w http.ResponseWriter, r *http.Request, conn string, result func() templ.Component, f pages.Flash, back string) {
+	if isFragment(r) {
+		d.render(w, r, http.StatusOK, result())
+		return
+	}
+	d.setFlash(w, conn, f)
+	navigate(w, r, back)
+}
+
+// confirm answers an action posted without JS with its confirmation
+// page, crumbs then its title in the breadcrumbs. Changing a preference
+// there goes back to the page the action came from.
+func (d *deps) confirm(w http.ResponseWriter, r *http.Request, a access, m pages.Confirm, crumbs ...components.Crumb) {
+	m.Layout = d.layout(r, a, components.SectionQueues, append(crumbs, components.Crumb{Label: m.Title}))
+	m.Layout.TopBar.Next = m.CancelURL
+	d.render(w, r, http.StatusOK, pages.ConfirmPage(m))
+}
+
 // handleNotFound is the catch-all route.
 func handleNotFound(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,14 +162,15 @@ func (d *deps) doc(r *http.Request) views.Doc {
 // layout builds the app shell for a page in section. crumbs after
 // "Overview" are passed in; the Overview crumb is always first.
 func (d *deps) layout(r *http.Request, a access, section components.Section, crumbs []components.Crumb) views.Layout {
-	return d.layoutWith(r, a, section, crumbs, d.visible(a.id), nil)
+	return d.layoutWith(r, a, section, crumbs, nil)
 }
 
-// layoutWith is layout with the visible connections given, and health
-// overrides for the sidebar (the Overview passes what its cards found, so
-// a connection whose Summary failed shows down in both places).
+// layoutWith is layout with health overrides for the sidebar (the Overview
+// passes what its cards found, so a connection whose Summary failed shows
+// down in both places).
 func (d *deps) layoutWith(r *http.Request, a access, section components.Section, crumbs []components.Crumb,
-	visible []visibleConn, health map[string]components.Health) views.Layout {
+	health map[string]components.Health) views.Layout {
+	visible := d.visibleOf(a)
 	side := components.Sidebar{
 		OverviewURL: d.url(),
 		Section:     section,
@@ -133,25 +179,26 @@ func (d *deps) layoutWith(r *http.Request, a access, section components.Section,
 	}
 	names := make([]string, 0, len(visible))
 	for _, c := range visible {
-		names = append(names, c.Name)
-		h, ok := health[c.Name]
+		name := c.Name()
+		names = append(names, name)
+		h, ok := health[name]
 		if !ok {
-			h = healthView(c.Health.State)
+			h = healthView(c.health.State)
 		}
 		sc := components.SidebarConn{
-			Name:   c.Name,
-			Addr:   c.Addr,
-			URL:    d.url("c", c.Name),
+			Name:   name,
+			Addr:   c.Addr(),
+			URL:    d.url("c", name),
 			Health: h,
 		}
-		if c.Name == a.conn.Name {
+		if a.conn != nil && name == a.conn.Name() {
 			sc.Current = true
 			sc.Sub = components.SubNav{
-				QueuesURL:     d.url("c", c.Name),
-				ServersURL:    d.url("c", c.Name, "servers"),
-				SchedulersURL: d.url("c", c.Name, "schedulers"),
-				InfoURL:       d.url("c", c.Name, "info"),
-				Valkey:        c.Valkey,
+				QueuesURL:     d.url("c", name),
+				ServersURL:    d.url("c", name, "servers"),
+				SchedulersURL: d.url("c", name, "schedulers"),
+				InfoURL:       d.url("c", name, "info"),
+				Valkey:        isValkey(c),
 			}
 		}
 		side.Conns = append(side.Conns, sc)
@@ -160,7 +207,7 @@ func (d *deps) layoutWith(r *http.Request, a access, section components.Section,
 	// The account menu shows the role on the current connection, or the
 	// highest role on the Overview and other pages without one.
 	role := a.role
-	if a.conn.Name == "" {
+	if a.conn == nil {
 		role = d.policy.MaxRole(subject(a.id), names)
 	}
 	all := append([]components.Crumb{{Section: components.SectionOverview, URL: d.url()}}, crumbs...)
@@ -210,11 +257,11 @@ func (d *deps) footer() components.Footer {
 	return f
 }
 
-func healthView(s HealthState) components.Health {
+func healthView(s conn.State) components.Health {
 	switch s {
-	case HealthUp:
+	case conn.StateUp:
 		return components.HealthUp
-	case HealthDown:
+	case conn.StateDown:
 		return components.HealthDown
 	}
 	return components.HealthUnknown

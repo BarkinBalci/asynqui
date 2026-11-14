@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 func TestParseRole(t *testing.T) {
@@ -23,9 +25,9 @@ func TestParseRole(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
-			got, err := ParseRole(tt.in)
+			got, err := parseRole(config.Role(tt.in))
 			if (err != nil) != tt.wantErr || got != tt.want {
-				t.Errorf("ParseRole(%q) = %v, %v; want %v, err=%v", tt.in, got, err, tt.want, tt.wantErr)
+				t.Errorf("parseRole(%q) = %v, %v; want %v, err=%v", tt.in, got, err, tt.want, tt.wantErr)
 			}
 			if err == nil && got.String() != tt.in {
 				t.Errorf("String() = %q, want %q", got.String(), tt.in)
@@ -96,63 +98,9 @@ func TestMinRole(t *testing.T) {
 	}
 }
 
-func TestNewValidation(t *testing.T) {
-	ok := Binding{Users: []string{"u"}, Role: RoleViewer, Connections: []string{"*"}}
-	tests := []struct {
-		name    string
-		def     Role
-		b       []Binding
-		wantErr string // substring; empty means success
-	}{
-		{"no bindings", RoleViewer, nil, ""},
-		{"default none", RoleNone, []Binding{ok}, ""},
-		{"groups only", RoleViewer, []Binding{{Groups: []string{"g"}, Role: RoleAdmin, Connections: []string{"a", "b*"}}}, ""},
-		{"invalid default", Role(9), nil, "invalid default role"},
-		{"negative default", Role(-1), nil, "invalid default role"},
-		{"role none", RoleViewer, []Binding{{Users: []string{"u"}, Role: RoleNone, Connections: []string{"*"}}}, "role must be"},
-		{"unknown role", RoleViewer, []Binding{{Users: []string{"u"}, Role: Role(7), Connections: []string{"*"}}}, "role must be"},
-		{"no subjects", RoleViewer, []Binding{{Role: RoleViewer, Connections: []string{"*"}}}, "needs users or groups"},
-		{"empty user", RoleViewer, []Binding{{Users: []string{""}, Role: RoleViewer, Connections: []string{"*"}}}, "empty user or group"},
-		{"empty group", RoleViewer, []Binding{{Groups: []string{""}, Role: RoleViewer, Connections: []string{"*"}}}, "empty user or group"},
-		{"no connections", RoleViewer, []Binding{{Users: []string{"u"}, Role: RoleViewer}}, "connections must not be empty"},
-		{"bad glob", RoleViewer, []Binding{{Users: []string{"u"}, Role: RoleViewer, Connections: []string{"main", "[a-"}}}, `invalid connection glob "[a-"`},
-		{"bad glob trailing escape", RoleViewer, []Binding{{Users: []string{"u"}, Role: RoleViewer, Connections: []string{`x\`}}}, "invalid connection glob"},
-		{"index in message", RoleViewer, []Binding{ok, {Users: []string{"u"}, Role: RoleViewer}}, "binding 1:"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p, err := New(tt.def, tt.b)
-			if tt.wantErr == "" {
-				if err != nil || p == nil {
-					t.Fatalf("New() = %v, %v; want policy", p, err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("New() error = %v, want containing %q", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestNewReportsEveryError(t *testing.T) {
-	_, err := New(RoleViewer, []Binding{
-		{Role: RoleNone},
-		{Users: []string{"u"}, Role: RoleViewer, Connections: []string{"["}},
-	})
-	if err == nil {
-		t.Fatal("want error")
-	}
-	for _, want := range []string{"binding 0: role must be", "needs users or groups", "connections must not be empty", "binding 1: invalid connection glob"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q missing %q", err, want)
-		}
-	}
-}
-
-func mustPolicy(t *testing.T, def Role, b ...Binding) *Policy {
+func mustPolicy(t *testing.T, def Role, b ...config.Binding) *Policy {
 	t.Helper()
-	p, err := New(def, b)
+	p, err := New(config.Authz{Default: config.Role(def.String()), Bindings: b})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,11 +109,11 @@ func mustPolicy(t *testing.T, def Role, b ...Binding) *Policy {
 
 func TestRoleFor(t *testing.T) {
 	// The bindings from requirements.md §4 plus a few edge cases.
-	bindings := []Binding{
-		{Groups: []string{"platform"}, Role: RoleAdmin, Connections: []string{"*"}},
-		{Users: []string{"jdoe@example.com"}, Role: RoleOperator, Connections: []string{"billing", "main*"}},
-		{Groups: []string{"payments"}, Role: RoleViewer, Connections: []string{"pay-?"}},
-		{Users: []string{"ops"}, Groups: []string{"oncall"}, Role: RoleOperator, Connections: []string{"prod-[a-c]"}},
+	bindings := []config.Binding{
+		{Groups: []string{"platform"}, Role: config.RoleAdmin, Connections: []string{"*"}},
+		{Users: []string{"jdoe@example.com"}, Role: config.RoleOperator, Connections: []string{"billing", "main*"}},
+		{Groups: []string{"payments"}, Role: config.RoleViewer, Connections: []string{"pay-?"}},
+		{Users: []string{"ops"}, Groups: []string{"oncall"}, Role: config.RoleOperator, Connections: []string{"prod-[a-c]"}},
 	}
 	viewerDefault := mustPolicy(t, RoleViewer, bindings...)
 	noneDefault := mustPolicy(t, RoleNone, bindings...)
@@ -211,7 +159,7 @@ func TestRoleFor(t *testing.T) {
 		{"none default glob does not span prefix", noneDefault, jdoe, "xmain", RoleNone, false},
 		{"none default user case-insensitive", noneDefault, Identity{Name: "JDoe@Example.COM"}, "billing", RoleOperator, true},
 		{"binding user case-insensitive", mustPolicy(t, RoleNone,
-			Binding{Users: []string{"Ops@Example.com"}, Role: RoleAdmin, Connections: []string{"x"}},
+			config.Binding{Users: []string{"Ops@Example.com"}, Role: config.RoleAdmin, Connections: []string{"x"}},
 		), Identity{Name: "ops@example.com"}, "x", RoleAdmin, true},
 		{"none default case sensitive group", noneDefault, Identity{Name: "x", Groups: []string{"Platform"}}, "main", RoleNone, false},
 		{"none default name is not a group", noneDefault, Identity{Name: "platform"}, "main", RoleNone, false},
@@ -220,8 +168,8 @@ func TestRoleFor(t *testing.T) {
 		// highest wins
 		{"highest wins across bindings", noneDefault, Identity{Name: "jdoe@example.com", Groups: []string{"platform"}}, "billing", RoleAdmin, true},
 		{"highest wins regardless of order", mustPolicy(t, RoleNone,
-			Binding{Groups: []string{"a"}, Role: RoleAdmin, Connections: []string{"x"}},
-			Binding{Groups: []string{"a"}, Role: RoleViewer, Connections: []string{"x"}},
+			config.Binding{Groups: []string{"a"}, Role: config.RoleAdmin, Connections: []string{"x"}},
+			config.Binding{Groups: []string{"a"}, Role: config.RoleViewer, Connections: []string{"x"}},
 		), Identity{Groups: []string{"a"}}, "x", RoleAdmin, true},
 		{"default admin beats bindings", adminDefault, payments, "pay-1", RoleAdmin, true},
 		{"default admin for anonymous", adminDefault, anon, "main", RoleAdmin, true},
@@ -238,9 +186,9 @@ func TestRoleFor(t *testing.T) {
 
 func TestCan(t *testing.T) {
 	p := mustPolicy(t, RoleNone,
-		Binding{Users: []string{"v"}, Role: RoleViewer, Connections: []string{"c"}},
-		Binding{Users: []string{"o"}, Role: RoleOperator, Connections: []string{"c"}},
-		Binding{Users: []string{"a"}, Role: RoleAdmin, Connections: []string{"c"}},
+		config.Binding{Users: []string{"v"}, Role: config.RoleViewer, Connections: []string{"c"}},
+		config.Binding{Users: []string{"o"}, Role: config.RoleOperator, Connections: []string{"c"}},
+		config.Binding{Users: []string{"a"}, Role: config.RoleAdmin, Connections: []string{"c"}},
 	)
 	actions := []Action{
 		ActionView, ActionPauseQueue, ActionResumeQueue, ActionRunTask, ActionArchiveTask,
@@ -276,9 +224,9 @@ func TestCan(t *testing.T) {
 func TestVisibleAndMaxRole(t *testing.T) {
 	conns := []string{"main", "main-jobs", "billing", "local", "pay-1"}
 	p := mustPolicy(t, RoleNone,
-		Binding{Users: []string{"jdoe"}, Role: RoleOperator, Connections: []string{"main*"}},
-		Binding{Users: []string{"jdoe"}, Role: RoleViewer, Connections: []string{"local"}},
-		Binding{Groups: []string{"platform"}, Role: RoleAdmin, Connections: []string{"*"}},
+		config.Binding{Users: []string{"jdoe"}, Role: config.RoleOperator, Connections: []string{"main*"}},
+		config.Binding{Users: []string{"jdoe"}, Role: config.RoleViewer, Connections: []string{"local"}},
+		config.Binding{Groups: []string{"platform"}, Role: config.RoleAdmin, Connections: []string{"*"}},
 	)
 	tests := []struct {
 		name        string
@@ -307,7 +255,7 @@ func TestVisibleAndMaxRole(t *testing.T) {
 }
 
 func TestNewCopiesInput(t *testing.T) {
-	b := []Binding{{Users: []string{"u"}, Role: RoleAdmin, Connections: []string{"a"}}}
+	b := []config.Binding{{Users: []string{"u"}, Role: config.RoleAdmin, Connections: []string{"a"}}}
 	p := mustPolicy(t, RoleNone, b...)
 	b[0].Users[0] = "mallory"
 	b[0].Connections[0] = "*"
@@ -319,30 +267,13 @@ func TestNewCopiesInput(t *testing.T) {
 	}
 }
 
-func TestFoldUsername(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"", ""},
-		{"jdoe", "jdoe"},
-		{"JDoe@Example.COM", "jdoe@example.com"},
-		{"\u212Aevin", "\u212Aevin"},       // Kelvin sign is not K
-		{"adm\u0130n", "adm\u0130n"},       // U+0130 is not I
-		{"\u212Bngström", "\u212Bngström"}, // Angstrom sign is not Å
-		{"ÄBC", "Äbc"},                     // only ASCII folds
-	}
-	for _, tt := range tests {
-		if got := FoldUsername(tt.in); got != tt.want {
-			t.Errorf("FoldUsername(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
 // TestLookalikeUsernames: Unicode case folding would map these onto the
 // bound ASCII names; ASCII-only folding must not.
 func TestLookalikeUsernames(t *testing.T) {
 	p := mustPolicy(t, RoleNone,
-		Binding{Users: []string{"kevin@example.com"}, Role: RoleAdmin, Connections: []string{"*"}},
-		Binding{Users: []string{"admin"}, Role: RoleAdmin, Connections: []string{"*"}},
-		Binding{Users: []string{"ångström"}, Role: RoleAdmin, Connections: []string{"*"}},
+		config.Binding{Users: []string{"kevin@example.com"}, Role: config.RoleAdmin, Connections: []string{"*"}},
+		config.Binding{Users: []string{"admin"}, Role: config.RoleAdmin, Connections: []string{"*"}},
+		config.Binding{Users: []string{"ångström"}, Role: config.RoleAdmin, Connections: []string{"*"}},
 	)
 	tests := []struct {
 		name string
@@ -367,7 +298,7 @@ func TestLookalikeUsernames(t *testing.T) {
 
 func TestEdgeIdentitiesAndConnections(t *testing.T) {
 	p := mustPolicy(t, RoleNone,
-		Binding{Users: []string{"x"}, Groups: []string{"g"}, Role: RoleAdmin, Connections: []string{"main*", "[ab]illing"}},
+		config.Binding{Users: []string{"x"}, Groups: []string{"g"}, Role: config.RoleAdmin, Connections: []string{"main*", "[ab]illing"}},
 	)
 	ids := []struct {
 		name string
@@ -404,40 +335,17 @@ func TestEdgeIdentitiesAndConnections(t *testing.T) {
 	}
 }
 
-func TestGlobValidation(t *testing.T) {
-	tests := []struct {
-		glob    string
-		wantErr bool
-	}{
-		{"*", false},
-		{"[^a]", false},
-		{`\*`, false},
-		{"[", true},
-		{"x[", true},
-		{"*[", true},
-		{`a\`, true},
-		{"[a-]", true},
-		{"[]a]", true},
-	}
-	for _, tt := range tests {
-		_, err := New(RoleNone, []Binding{{Users: []string{"x"}, Role: RoleAdmin, Connections: []string{tt.glob}}})
-		if (err != nil) != tt.wantErr {
-			t.Errorf("glob %q: err = %v, wantErr %v", tt.glob, err, tt.wantErr)
-		}
-	}
-}
-
 func TestGroups(t *testing.T) {
 	tests := []struct {
 		name string
-		b    []Binding
+		b    []config.Binding
 		want []string
 	}{
 		{"none", nil, nil},
-		{"users only", []Binding{{Users: []string{"u"}, Role: RoleViewer, Connections: []string{"*"}}}, nil},
-		{"sorted and deduplicated", []Binding{
-			{Groups: []string{"ops", "Platform"}, Role: RoleViewer, Connections: []string{"*"}},
-			{Users: []string{"u"}, Groups: []string{"ops", "dev"}, Role: RoleAdmin, Connections: []string{"a"}},
+		{"users only", []config.Binding{{Users: []string{"u"}, Role: config.RoleViewer, Connections: []string{"*"}}}, nil},
+		{"sorted and deduplicated", []config.Binding{
+			{Groups: []string{"ops", "Platform"}, Role: config.RoleViewer, Connections: []string{"*"}},
+			{Users: []string{"u"}, Groups: []string{"ops", "dev"}, Role: config.RoleAdmin, Connections: []string{"a"}},
 		}, []string{"Platform", "dev", "ops"}},
 	}
 	for _, tt := range tests {
@@ -446,5 +354,15 @@ func TestGroups(t *testing.T) {
 				t.Errorf("Groups (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestNewUnknownRole(t *testing.T) {
+	if _, err := New(config.Authz{Default: "owner"}); err == nil || !strings.Contains(err.Error(), "authz.default") {
+		t.Errorf("unknown default: %v", err)
+	}
+	b := []config.Binding{{Users: []string{"u"}, Role: "owner", Connections: []string{"*"}}}
+	if _, err := New(config.Authz{Default: config.RoleNone, Bindings: b}); err == nil || !strings.Contains(err.Error(), "authz.bindings[0].role") {
+		t.Errorf("unknown binding role: %v", err)
 	}
 }

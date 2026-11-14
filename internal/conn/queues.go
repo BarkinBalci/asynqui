@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hibiken/asynq"
+	"golang.org/x/sync/errgroup"
 )
 
 // queueConcurrency bounds the per-queue Inspector calls in flight per
@@ -105,27 +105,28 @@ func (c *Conn) fetchQueues(context.Context) ([]Queue, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Queue, 0, len(infos))
-	for _, qi := range infos {
-		if qi == nil {
-			continue
-		}
-		out = append(out, Queue{
-			Name:           qi.Queue,
-			Paused:         qi.Paused,
-			Size:           qi.Size,
-			Pending:        qi.Pending,
-			Active:         qi.Active,
-			Scheduled:      qi.Scheduled,
-			Retry:          qi.Retry,
-			Archived:       qi.Archived,
-			ProcessedToday: qi.Processed,
-			FailedToday:    qi.Failed,
-			Latency:        qi.Latency,
-			MemoryUsage:    qi.MemoryUsage,
-		})
+	out := make([]Queue, len(infos))
+	for i, qi := range infos {
+		out[i] = newQueue(qi)
 	}
 	return out, nil
+}
+
+func newQueue(qi *asynq.QueueInfo) Queue {
+	return Queue{
+		Name:           qi.Queue,
+		Paused:         qi.Paused,
+		Size:           qi.Size,
+		Pending:        qi.Pending,
+		Active:         qi.Active,
+		Scheduled:      qi.Scheduled,
+		Retry:          qi.Retry,
+		Archived:       qi.Archived,
+		ProcessedToday: qi.Processed,
+		FailedToday:    qi.Failed,
+		Latency:        qi.Latency,
+		MemoryUsage:    qi.MemoryUsage,
+	}
 }
 
 // eachQueue calls fn for each name, at most queueConcurrency at a time,
@@ -135,39 +136,26 @@ func (c *Conn) fetchQueues(context.Context) ([]Queue, error) {
 func eachQueue[T any](names []string, fn func(string) (T, error)) ([]T, error) {
 	out := make([]T, len(names))
 	var (
-		mu       sync.Mutex
-		firstErr error
+		g      errgroup.Group
+		failed atomic.Bool
 	)
-	failed := func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return firstErr != nil
-	}
-	sem := make(chan struct{}, queueConcurrency)
-	var wg sync.WaitGroup
+	g.SetLimit(queueConcurrency)
 	for i, q := range names {
-		sem <- struct{}{}
-		if failed() {
-			<-sem
-			break
-		}
-		wg.Go(func() {
-			defer func() { <-sem }()
+		g.Go(func() error {
+			if failed.Load() {
+				return nil // another queue failed: start no more calls
+			}
 			v, err := recovered(func() (T, error) { return fn(q) })
 			if err != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = fmt.Errorf("queue %s: %w", q, err)
-				}
-				mu.Unlock()
-				return
+				failed.Store(true)
+				return fmt.Errorf("queue %s: %w", q, err)
 			}
 			out[i] = v
+			return nil
 		})
 	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -233,9 +221,6 @@ func (c *Conn) fetchHistory(queue string, days int) ([]DailyStat, error) {
 	}
 	for _, stats := range per {
 		for _, s := range stats {
-			if s == nil {
-				continue
-			}
 			if i, ok := index[utcDay(s.Date)]; ok {
 				out[i].Processed += s.Processed
 				out[i].Failed += s.Failed
@@ -314,16 +299,9 @@ func (c *Conn) queueAction(ctx context.Context, queue string, act func(string) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(queue) == "" {
-		return fmt.Errorf("%w: %q", ErrQueueNotFound, queue)
-	}
 	_, err := recovered(func() (struct{}, error) {
-		names, err := c.queues.Queues()
-		if err != nil {
-			return struct{}{}, fmt.Errorf("list queues: %w", err)
-		}
-		if !slices.Contains(names, queue) {
-			return struct{}{}, fmt.Errorf("%w: %q", ErrQueueNotFound, queue)
+		if err := c.checkQueue(queue); err != nil {
+			return struct{}{}, err
 		}
 		return struct{}{}, act(queue)
 	})

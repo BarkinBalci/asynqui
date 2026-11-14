@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -59,11 +60,9 @@ type Info struct {
 	MaxMemoryPolicy string
 	// Keyspace is the Keyspace line of the connection's own DB.
 	Keyspace Keyspace
-	// Sections are in reply order, each with its fields in reply order.
-	Sections []InfoSection
 	// Raw is the reply as received, without the Keyspace and Keysizes
 	// lines of other DBs ("db3:…", "db3_distrib_…"): another connection
-	// may own them. Sections keeps every line.
+	// may own them.
 	Raw string
 }
 
@@ -73,39 +72,6 @@ type Keyspace struct {
 	DB      int
 	Keys    int64
 	Expires int64
-}
-
-// InfoSection is one "# Name" section of an INFO reply.
-type InfoSection struct {
-	Name   string
-	Fields []InfoField
-}
-
-// InfoField is one key:value line of an INFO reply.
-type InfoField struct {
-	Key   string
-	Value string
-}
-
-// Section returns the section with the given name, compared case-
-// insensitively.
-func (i *Info) Section(name string) (InfoSection, bool) {
-	for _, s := range i.Sections {
-		if strings.EqualFold(s.Name, name) {
-			return s, true
-		}
-	}
-	return InfoSection{}, false
-}
-
-// Get returns the value of key in the section.
-func (s InfoSection) Get(key string) (string, bool) {
-	for _, f := range s.Fields {
-		if f.Key == key {
-			return f.Value, true
-		}
-	}
-	return "", false
 }
 
 // infoReader sends INFO.
@@ -179,69 +145,59 @@ func (c *Conn) detectBackend(ctx context.Context) {
 }
 
 // parseInfo parses an INFO reply: "# Section" headers followed by key:value
-// lines, split on the first colon. Lines before the first header go in a
-// section named "". Blank and malformed lines are skipped. db is the
-// connection's DB, whose Keyspace line fills Keyspace. Numbers that do not
-// parse are left zero.
+// lines, split on the first colon; section names compare
+// case-insensitively, and the first of a repeated key counts. Blank and
+// malformed lines are skipped. db is the connection's DB, whose Keyspace
+// line fills Keyspace. Numbers that do not parse are left zero.
 func parseInfo(raw string, db int) *Info {
 	info := &Info{Raw: rawForDB(raw, db), Keyspace: Keyspace{DB: db}}
-	var cur *InfoSection
+	fields := map[string]string{} // by "section/key", the section lowercased
+	section := ""
 	for line := range strings.Lines(raw) {
 		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			continue
-		}
 		if name, ok := strings.CutPrefix(line, "#"); ok {
-			info.Sections = append(info.Sections, InfoSection{Name: strings.TrimSpace(name)})
-			cur = &info.Sections[len(info.Sections)-1]
+			section = strings.ToLower(strings.TrimSpace(name))
 			continue
 		}
 		k, v, ok := strings.Cut(line, ":")
-		if !ok || k == "" {
-			continue
+		if _, dup := fields[section+"/"+k]; ok && k != "" && !dup {
+			fields[section+"/"+k] = v
 		}
-		if cur == nil {
-			info.Sections = append(info.Sections, InfoSection{})
-			cur = &info.Sections[len(info.Sections)-1]
+	}
+	num := func(key string) int64 {
+		n, err := strconv.ParseInt(fields[key], 10, 64)
+		if err != nil {
+			return 0
 		}
-		cur.Fields = append(cur.Fields, InfoField{Key: k, Value: v})
+		return n
 	}
 
-	server, _ := info.Section("Server")
-	info.RedisVersion, _ = server.Get("redis_version")
+	info.RedisVersion = fields["server/redis_version"]
 	info.Version = info.RedisVersion
-	if name, _ := server.Get("server_name"); name == "valkey" {
+	if fields["server/server_name"] == "valkey" {
 		info.Backend = BackendValkey
-		if v, ok := server.Get("valkey_version"); ok {
+		if v, ok := fields["server/valkey_version"]; ok {
 			info.Version = v
 		}
 	}
-	info.Mode, _ = server.Get("redis_mode")
-	if info.Mode == "" {
-		info.Mode, _ = server.Get("server_mode")
-	}
-	info.Uptime = time.Duration(fieldInt(server, "uptime_in_seconds")) * time.Second
-	clients, _ := info.Section("Clients")
-	info.ConnectedClients = fieldInt(clients, "connected_clients")
-	mem, _ := info.Section("Memory")
-	info.UsedMemory = fieldInt(mem, "used_memory")
-	info.UsedMemoryPeak = fieldInt(mem, "used_memory_peak")
-	info.MaxMemory = fieldInt(mem, "maxmemory")
-	info.MaxMemoryPolicy, _ = mem.Get("maxmemory_policy")
-	ks, _ := info.Section("Keyspace")
-	if line, ok := ks.Get("db" + strconv.Itoa(db)); ok {
-		for kv := range strings.SplitSeq(line, ",") {
-			k, v, _ := strings.Cut(kv, "=")
-			n, err := strconv.ParseInt(v, 10, 64)
-			if err != nil {
-				continue
-			}
-			switch k {
-			case "keys":
-				info.Keyspace.Keys = n
-			case "expires":
-				info.Keyspace.Expires = n
-			}
+	info.Mode = cmp.Or(fields["server/redis_mode"], fields["server/server_mode"])
+	info.Uptime = time.Duration(num("server/uptime_in_seconds")) * time.Second
+	info.ConnectedClients = num("clients/connected_clients")
+	info.UsedMemory = num("memory/used_memory")
+	info.UsedMemoryPeak = num("memory/used_memory_peak")
+	info.MaxMemory = num("memory/maxmemory")
+	info.MaxMemoryPolicy = fields["memory/maxmemory_policy"]
+	for kv := range strings.SplitSeq(fields["keyspace/db"+strconv.Itoa(db)], ",") {
+		k, v, _ := strings.Cut(kv, "=")
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			continue
+		}
+		switch k {
+		case "keys":
+			info.Keyspace.Keys = n
+		case "expires":
+			info.Keyspace.Expires = n
 		}
 	}
 	return info
@@ -281,14 +237,4 @@ func otherDB(key, own string) bool {
 		return false
 	}
 	return "db"+rest[:n] != own
-}
-
-// fieldInt is the integer value of key in s, or 0.
-func fieldInt(s InfoSection, key string) int64 {
-	v, _ := s.Get(key)
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return n
 }

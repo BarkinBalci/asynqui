@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
 func (f *fakeIDP) signOrRaw(c map[string]any) string {
@@ -143,7 +145,7 @@ func TestOIDCNextCapped(t *testing.T) {
 // TestCrossProviderCookie: deployments sharing session keys must not
 // accept each other's sessions.
 func TestCrossProviderCookie(t *testing.T) {
-	users := []BasicUser{{Username: "jdoe@example.com", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
+	users := []config.BasicUser{{Username: "jdoe@example.com", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
 	hb := app(basicAuth(t, users, nil, ""))
 	basicCookie := do(t, hb, login(url.Values{"username": {"jdoe@example.com"}, "password": {"p"}})).cookies[sessionCookie]
 
@@ -162,7 +164,7 @@ func TestCrossProviderCookie(t *testing.T) {
 // TestNoServerSideRevocation documents the spec: logout clears the cookie
 // in that browser only; a copied cookie stays valid until it expires.
 func TestNoServerSideRevocation(t *testing.T) {
-	users := []BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
+	users := []config.BasicUser{{Username: "u", PasswordHash: mustHash(t, "p", bcrypt.MinCost)}}
 	h := app(basicAuth(t, users, nil, ""))
 	sc := do(t, h, login(url.Values{"username": {"u"}, "password": {"p"}})).cookies[sessionCookie]
 	out := do(t, h, req{method: http.MethodPost, target: "/logout", cookies: []*http.Cookie{sc}})

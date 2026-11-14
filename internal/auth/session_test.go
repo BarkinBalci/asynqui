@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,9 +9,11 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
-func mustJar(t *testing.T, o SessionOptions, base string, groups []string, now func() time.Time) *cookieJar {
+func mustJar(t *testing.T, o config.Session, base string, groups []string, now func() time.Time) *cookieJar {
 	t.Helper()
 	j, err := newCookieJar(KindOIDC, o, base, groups, now)
 	if err != nil {
@@ -77,14 +78,14 @@ func TestSessionCookieAttributes(t *testing.T) {
 		wantSecure bool
 		wantMaxAge int
 	}{
-		{"defaults", "", false, 0, "/", true, 12 * 3600},
+		{"defaults", "", false, 12 * time.Hour, "/", true, 12 * 3600},
 		{"base path", "/asynq", false, time.Hour, "/asynq", true, 3600},
-		{"insecure for local http", "", true, 0, "/", false, 12 * 3600},
+		{"insecure for local http", "", true, 12 * time.Hour, "/", false, 12 * 3600},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			o := testSession()
-			o.Insecure = tt.insecure
+			o.CookieSecure = !tt.insecure
 			o.TTL = tt.ttl
 			c := issue(t, mustJar(t, o, tt.base, nil, time.Now), Identity{Name: "u"}, "")
 			got := fmt.Sprintf("%s path=%s secure=%v httponly=%v samesite=%v maxage=%d",
@@ -129,7 +130,7 @@ func TestSessionRejects(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		keys        KeyPair
+		keys        config.KeyPair
 		cookie      *http.Cookie
 		advance     time.Duration // reader's clock relative to issue time
 		wantOK      bool
@@ -148,7 +149,7 @@ func TestSessionRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reader := mustJar(t, SessionOptions{KeyPair: tt.keys}, "", nil, at(tt.advance))
+			reader := mustJar(t, keySession(tt.keys), "", nil, at(tt.advance))
 			_, ok, present := read(reader, tt.cookie)
 			if ok != tt.wantOK || present != tt.wantPresent {
 				t.Errorf("readSession ok=%v present=%v; want %v, %v", ok, present, tt.wantOK, tt.wantPresent)
@@ -158,17 +159,17 @@ func TestSessionRejects(t *testing.T) {
 }
 
 func TestSessionKeyRotation(t *testing.T) {
-	oldJar := mustJar(t, SessionOptions{KeyPair: testKeys(1)}, "", nil, time.Now)
+	oldJar := mustJar(t, keySession(testKeys(1)), "", nil, time.Now)
 	c := issue(t, oldJar, Identity{Name: "u"}, "")
 
-	rotated := mustJar(t, SessionOptions{KeyPair: testKeys(5), PreviousKeys: []KeyPair{testKeys(1)}}, "", nil, time.Now)
+	rotated := mustJar(t, keySession(testKeys(5), testKeys(1)), "", nil, time.Now)
 	if _, ok, _ := read(rotated, c); !ok {
 		t.Error("previous key no longer decodes")
 	}
 	if _, ok, _ := read(oldJar, issue(t, rotated, Identity{Name: "u"}, "")); ok {
 		t.Error("new cookies are not encoded with the current key")
 	}
-	dropped := mustJar(t, SessionOptions{KeyPair: testKeys(5)}, "", nil, time.Now)
+	dropped := mustJar(t, keySession(testKeys(5)), "", nil, time.Now)
 	if _, ok, _ := read(dropped, c); ok {
 		t.Error("cookie decoded after its key was removed")
 	}
@@ -190,38 +191,6 @@ func TestSessionTooLarge(t *testing.T) {
 	}
 	// The same groups are fine when no binding references them.
 	issue(t, mustJar(t, testSession(), "", nil, time.Now), Identity{Name: "u", Groups: groups}, "")
-}
-
-func TestSessionKeyValidation(t *testing.T) {
-	k32, k64, k16 := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{1}, 64), bytes.Repeat([]byte{1}, 16)
-	tests := []struct {
-		name    string
-		o       SessionOptions
-		wantErr string
-	}{
-		{"32/32", SessionOptions{KeyPair: KeyPair{k32, k32}}, ""},
-		{"64/32", SessionOptions{KeyPair: KeyPair{k64, k32}}, ""},
-		{"missing", SessionOptions{}, "hash key must be 32 or 64 bytes, got 0"},
-		{"short hash", SessionOptions{KeyPair: KeyPair{k16, k32}}, "hash key must be 32 or 64 bytes"},
-		{"16-byte block", SessionOptions{KeyPair: KeyPair{k32, k16}}, "block key must be 32 bytes, got 16"},
-		{"64-byte block", SessionOptions{KeyPair: KeyPair{k32, k64}}, "block key must be 32 bytes"},
-		{"bad previous", SessionOptions{KeyPair: KeyPair{k32, k32}, PreviousKeys: []KeyPair{{k32, k16}}}, "previous key 0: block key"},
-		{"negative ttl", SessionOptions{KeyPair: KeyPair{k32, k32}, TTL: -time.Second}, "ttl must not be negative"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := newCookieJar(KindOIDC, tt.o, "", nil, time.Now)
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
-			}
-		})
-	}
 }
 
 func TestFlowCookie(t *testing.T) {

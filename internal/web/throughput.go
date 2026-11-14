@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/chart"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
@@ -22,8 +23,8 @@ const (
 // queue picker and the chart from stats, the history read in parallel
 // with the queues. A history that missed the page budget shows
 // "Checking"; another failure shows its error.
-func (d *deps) throughput(ctx context.Context, conn string, v queuesView, rows []Queue, stats []DailyStat, err error) pages.Throughput {
-	t := pages.Throughput{Show: true, Queue: v.queue, FormURL: d.url("c", conn)}
+func (d *deps) throughput(ctx context.Context, name string, v queuesView, rows []conn.Queue, stats []conn.DailyStat, err error) pages.Throughput {
+	t := pages.Throughput{Show: true, Queue: v.queue, FormURL: d.url("c", name)}
 	for _, q := range rows {
 		t.Queues = append(t.Queues, q.Name)
 	}
@@ -63,7 +64,7 @@ func params(q url.Values, skip string) []pages.Param {
 }
 
 // buildChart lays out the daily counters, oldest first and ending today.
-func buildChart(id string, stats []DailyStat) components.Chart {
+func buildChart(id string, stats []conn.DailyStat) components.Chart {
 	n := len(stats)
 	plot := chart.Plot{Width: chartW, Height: chartH, N: n}
 	processed, failed := make([]int64, n), make([]int64, n)
