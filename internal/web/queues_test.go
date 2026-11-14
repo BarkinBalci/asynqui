@@ -223,49 +223,15 @@ func TestQueuesFragment(t *testing.T) {
 	}
 }
 
-func TestQueuesFocusablesHaveIDs(t *testing.T) {
-	conns := defaultConns()
-	conns.queues["main"] = append(conns.queues["main"], conn.Queue{Name: "a/b c"})
-	h, _ := newTestServer(t, testOpts{conns: conns, authz: config.Authz{Default: config.RoleAdmin}})
-	doc := parse(t, do(t, h, request{path: "/c/main"}))
-	seen := map[string]bool{}
-	doc.Find("[id]").Each(func(_ int, s *goquery.Selection) {
-		id, _ := s.Attr("id")
-		if seen[id] {
-			t.Errorf("duplicate id %q", id)
-		}
-		seen[id] = true
-	})
-	poll := parse(t, do(t, h, request{path: "/c/main", htmx: true}))
-	n := 0
-	poll.Find("[hx-swap-oob]").Each(func(_ int, region *goquery.Selection) {
-		id, _ := region.Attr("id")
-		doc.Find(`[id="` + id + `"]`).Find("a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]").Each(func(_ int, s *goquery.Selection) {
-			n++
-			if v, ok := s.Attr("id"); !ok || v == "" {
-				h, _ := goquery.OuterHtml(s)
-				t.Errorf("focusable in #%s without id: %s", id, h)
-			}
-		})
-	})
-	if n < 30 {
-		t.Errorf("only %d focusables found", n)
-	}
-}
-
+// TestQueuesPathEscaping: odd queue names make ids, form values and the
+// chart's picker round-trip; TestRoutesPathEscaping checks the links.
 func TestQueuesPathEscaping(t *testing.T) {
 	conns := defaultConns()
 	conns.queues["main"] = []conn.Queue{{Name: "a/b c"}, {Name: "x?y#z"}}
 	h, _ := newTestServer(t, testOpts{conns: conns, basePath: "/asynq"})
 	doc := parse(t, do(t, h, request{path: "/asynq/c/main?sort=name"}))
-	var hrefs, ids []string
-	doc.Find("#queues-rows a.row-link").Each(func(_ int, s *goquery.Selection) {
-		hrefs = append(hrefs, s.AttrOr("href", ""))
-		ids = append(ids, s.AttrOr("id", ""))
-	})
-	if diff := cmp.Diff([]string{"/asynq/c/main/queues/a%2Fb%20c", "/asynq/c/main/queues/x%3Fy%23z"}, hrefs); diff != "" {
-		t.Errorf("hrefs (-want +got):\n%s", diff)
-	}
+	var ids []string
+	doc.Find("#queues-rows a.row-link").Each(func(_ int, s *goquery.Selection) { ids = append(ids, s.AttrOr("id", "")) })
 	if diff := cmp.Diff([]string{"qlink-612f622063", "qlink-783f79237a"}, ids); diff != "" {
 		t.Errorf("ids (-want +got):\n%s", diff)
 	}
@@ -350,39 +316,6 @@ func TestQueuesToolbarRoles(t *testing.T) {
 				if s, _ := doc.Find("#act-resume").Attr("data-state"); s != "paused" {
 					t.Errorf("resume data-state = %q", s)
 				}
-			}
-		})
-	}
-}
-
-func TestQueueActionsRoles(t *testing.T) {
-	az := config.Authz{Default: config.RoleNone, Bindings: []config.Binding{
-		{Users: []string{"vic"}, Role: config.RoleViewer, Connections: []string{"main"}},
-		{Users: []string{"olga"}, Role: config.RoleOperator, Connections: []string{"main"}},
-		{Users: []string{"ada"}, Role: config.RoleAdmin, Connections: []string{"main"}},
-	}}
-	tests := []struct {
-		user, path, form string
-		want             int
-		acted            []string
-	}{
-		{"vic", "/c/main/queues/pause", "queue=default", http.StatusForbidden, nil},
-		{"vic", "/c/main/queues/resume", "queue=image-resize", http.StatusForbidden, nil},
-		{"olga", "/c/main/queues/pause", "queue=default", http.StatusSeeOther, []string{"pause main/default"}},
-		{"olga", "/c/main/queues/resume", "queue=image-resize", http.StatusSeeOther, []string{"resume main/image-resize"}},
-		{"olga", "/c/main/queues/delete", "queue=image-resize&confirm=1", http.StatusForbidden, nil},
-		{"ada", "/c/main/queues/delete", "queue=image-resize&confirm=1", http.StatusSeeOther, []string{"delete main/image-resize"}},
-		{"ada", "/c/analytics/queues/pause", "queue=default", http.StatusNotFound, nil}, // hidden
-	}
-	for _, tt := range tests {
-		t.Run(tt.user+" "+tt.path, func(t *testing.T) {
-			h, conns := newTestServer(t, testOpts{provider: config.ProviderProxy, authz: az})
-			rec := do(t, h, request{method: http.MethodPost, path: tt.path, user: tt.user, form: tt.form})
-			if rec.Code != tt.want {
-				t.Fatalf("status %d, want %d", rec.Code, tt.want)
-			}
-			if diff := cmp.Diff(tt.acted, conns.actions()); diff != "" {
-				t.Errorf("acted (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -553,21 +486,6 @@ func TestQueueActions(t *testing.T) {
 			t.Errorf("= %d", rec.Code)
 		}
 	})
-}
-
-func TestQueueActionsCSRF(t *testing.T) {
-	h, conns := newTestServer(t, testOpts{authz: config.Authz{Default: config.RoleAdmin}})
-	for _, path := range []string{"/c/main/queues/pause", "/c/main/queues/resume", "/c/main/queues/delete"} {
-		for _, hdr := range []map[string]string{{"Sec-Fetch-Site": "cross-site"}, {"Origin": "https://evil.example"}} {
-			rec := do(t, h, request{method: http.MethodPost, path: path, form: "queue=default&queue=image-resize&confirm=1", header: hdr})
-			if rec.Code != http.StatusForbidden {
-				t.Errorf("%s with %v = %d", path, hdr, rec.Code)
-			}
-		}
-	}
-	if a := conns.actions(); len(a) != 0 {
-		t.Errorf("cross-origin posts acted: %q", a)
-	}
 }
 
 // TestQueuesUnavailable has the Connection page's own cases; see

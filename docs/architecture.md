@@ -274,6 +274,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
    - role enforcement (403/404)
    - actions mutating Redis
    - "not found" and "Connection failed" states
+   - the checks every page shares (access by role, CSRF, ids of focusables in polled regions, the answers' shape, `hx-sync` scopes, path escaping) run once over a route table (`internal/web/routes_test.go`)
 4. **Browser smoke tests** (`e2e/`, build tag `e2e`, the CI `e2e` job; see [contributing](contributing.md#browser-tests)): playwright-go and headless Chromium against the built binary and a seeded Redis, for the behaviour that lives in `app.js` and htmx and that Go tests cannot run (selection across polls, focus, dialogs, `hx-sync`); handler and component tests only check the markup that drives it:
    - theme without a flash, System following `prefers-color-scheme`
    - polling: Off sends nothing, 2s polls, a hidden tab pauses

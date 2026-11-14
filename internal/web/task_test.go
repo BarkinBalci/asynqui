@@ -254,35 +254,6 @@ func TestTaskPoll(t *testing.T) {
 	}
 }
 
-// Every focusable element in a region an answer swaps has an id, so htmx
-// can give focus back after the swap.
-func TestTaskFocusablesHaveIDs(t *testing.T) {
-	h, _ := newTestServer(t, adminOpts())
-	for _, id := range []string{uuidTask, "a0", "c0", "x0"} {
-		path := "/c/main/queues/default/tasks/" + id
-		doc := parse(t, do(t, h, request{path: path}))
-		seen := map[string]bool{}
-		doc.Find("[id]").Each(func(_ int, s *goquery.Selection) {
-			v := s.AttrOr("id", "")
-			if seen[v] {
-				t.Errorf("%s: duplicate id %q", id, v)
-			}
-			seen[v] = true
-		})
-		n := 0
-		doc.Find("#task-page").Find("a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]").Each(func(_ int, s *goquery.Selection) {
-			n++
-			if s.AttrOr("id", "") == "" {
-				h, _ := goquery.OuterHtml(s)
-				t.Errorf("%s: focusable without id: %s", id, h)
-			}
-		})
-		if n < 4 {
-			t.Errorf("%s: only %d focusables", id, n)
-		}
-	}
-}
-
 func TestAttempt(t *testing.T) {
 	tests := []struct {
 		state             conn.TaskState
@@ -612,41 +583,6 @@ func TestGroupActionFailure(t *testing.T) {
 	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating", cookies: rec.Result().Cookies()}))
 	if got := text(doc.Find("#toasts .toast-body")); got != "Could not archive all tasks in g1 boom" {
 		t.Errorf("flash toast = %q", got)
-	}
-}
-
-func TestTaskActionRoles(t *testing.T) {
-	tests := []struct {
-		role   config.Role
-		path   string
-		status int
-	}{
-		{config.RoleViewer, "run", http.StatusForbidden},
-		{config.RoleViewer, "archive", http.StatusForbidden},
-		{config.RoleViewer, "cancel", http.StatusForbidden},
-		{config.RoleOperator, "run", http.StatusSeeOther},
-		{config.RoleOperator, "cancel", http.StatusSeeOther},
-		{config.RoleOperator, "delete", http.StatusForbidden},
-		{config.RoleAdmin, "delete", http.StatusSeeOther},
-	}
-	for _, tt := range tests {
-		h, conns := newTestServer(t, testOpts{authz: config.Authz{Default: tt.role}})
-		rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/" + tt.path, form: "id=s0&confirm=1"})
-		if rec.Code != tt.status {
-			t.Errorf("%s %s = %d, want %d", tt.role, tt.path, rec.Code, tt.status)
-		}
-		if tt.status == http.StatusForbidden && len(conns.taskActions()) != 0 {
-			t.Errorf("%s %s acted", tt.role, tt.path)
-		}
-	}
-}
-
-func TestTaskActionsCSRF(t *testing.T) {
-	h, conns := newTestServer(t, adminOpts())
-	rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete", form: "id=p00&confirm=1",
-		header: map[string]string{"Sec-Fetch-Site": "cross-site"}})
-	if rec.Code != http.StatusForbidden || len(conns.taskActions()) != 0 {
-		t.Errorf("cross-site post = %d, acted %v", rec.Code, conns.taskActions())
 	}
 }
 

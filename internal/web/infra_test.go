@@ -13,7 +13,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/BarkinBalci/asynqui/internal/config"
 	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
@@ -991,107 +990,5 @@ func TestInfraPollAnswers(t *testing.T) {
 	}
 	if got, _ := doc.Find("#schedulers-poll").Attr("hx-get"); got != "/c/main/schedulers?dir=asc&sort=type" {
 		t.Errorf("poll URL = %q", got)
-	}
-}
-
-// TestInfraSync: one hx-sync scope per page; the poll aborts on user
-// requests, and every other request queues.
-func TestInfraSync(t *testing.T) {
-	h, _ := newTestServer(t, testOpts{conns: infraConns()})
-	for _, p := range []struct{ path, page, poll string }{
-		{"/c/main/servers", "servers-page", "servers-poll"},
-		{"/c/main/servers/" + srvA, "server-page", "server-poll"},
-		{"/c/main/schedulers", "schedulers-page", "schedulers-poll"},
-		{"/c/main/schedulers/" + entryA + "?page=1", "entry-page", "entry-poll"},
-		{"/c/main/info", "info-page", "info-poll"},
-	} {
-		doc := parse(t, do(t, h, request{path: p.path}))
-		page := doc.Find("main #" + p.page)
-		if v, _ := page.Attr("hx-sync"); v != "this:queue last" {
-			t.Errorf("%s: page hx-sync = %q", p.path, v)
-		}
-		if v, _ := page.Find("#" + p.poll).Attr("hx-sync"); v != "#"+p.page+":abort" {
-			t.Errorf("%s: poll hx-sync = %q", p.path, v)
-		}
-		if n := doc.Find("[hx-post]").Length(); n != 0 {
-			t.Errorf("%s: %d posting elements on a read-only page", p.path, n)
-		}
-		doc.Find("[hx-get]").Each(func(_ int, s *goquery.Selection) {
-			if s.Closest("#"+p.page).Length() == 0 {
-				t.Errorf("%s: #%s outside the page scope", p.path, s.AttrOr("id", ""))
-			}
-			if s.Is("a") && s.AttrOr("hx-swap", "") != "none" {
-				t.Errorf("%s: #%s swaps in place", p.path, s.AttrOr("id", ""))
-			}
-		})
-	}
-}
-
-// TestInfraFocusablesHaveIDs: htmx refocuses swapped elements by id.
-func TestInfraFocusablesHaveIDs(t *testing.T) {
-	c := infraConns()
-	var evs []conn.EnqueueEvent
-	for i := range 30 {
-		evs = append(evs, conn.EnqueueEvent{TaskID: fmt.Sprintf("t%02d", i), TaskExists: i%2 == 0})
-	}
-	c.infra.events[entryA] = evs
-	h, _ := newTestServer(t, testOpts{conns: c})
-	for _, p := range []string{"/c/main/servers", "/c/main/servers/" + srvA, "/c/main/schedulers", "/c/main/schedulers/" + entryA, "/c/main/info"} {
-		doc := parse(t, do(t, h, request{path: p}))
-		seen := map[string]bool{}
-		doc.Find("[id]").Each(func(_ int, s *goquery.Selection) {
-			id, _ := s.Attr("id")
-			if seen[id] {
-				t.Errorf("%s: duplicate id %q", p, id)
-			}
-			seen[id] = true
-		})
-		n := 0
-		poll := parse(t, do(t, h, request{path: p, htmx: true}))
-		poll.Find("[hx-swap-oob]").Each(func(_ int, region *goquery.Selection) {
-			id, _ := region.Attr("id")
-			doc.Find(`[id="` + id + `"]`).Find("a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]").Each(func(_ int, s *goquery.Selection) {
-				n++
-				if v, ok := s.Attr("id"); !ok || v == "" {
-					h, _ := goquery.OuterHtml(s)
-					t.Errorf("%s: focusable in #%s without id: %s", p, id, h)
-				}
-			})
-		})
-		if n < 3 {
-			t.Errorf("%s: only %d focusables found", p, n)
-		}
-	}
-}
-
-// TestInfraAccess: viewer is enough; hidden and unknown connections are
-// 404; the pages are GET only, and a cross-origin post is refused.
-func TestInfraAccess(t *testing.T) {
-	authz := config.Authz{
-		Default:  config.RoleNone,
-		Bindings: []config.Binding{{Users: []string{"bob"}, Role: config.RoleViewer, Connections: []string{"main"}}},
-	}
-	h, _ := newTestServer(t, testOpts{provider: config.ProviderProxy, authz: authz, conns: infraConns()})
-	for _, p := range []string{"/c/%s/servers", "/c/%s/servers/" + srvA, "/c/%s/schedulers", "/c/%s/schedulers/" + entryA, "/c/%s/info"} {
-		if rec := do(t, h, request{path: fmt.Sprintf(p, "main"), user: "bob"}); rec.Code != http.StatusOK {
-			t.Errorf("viewer %s = %d", p, rec.Code)
-		}
-		for _, name := range []string{"local", "nope"} {
-			rec := do(t, h, request{path: fmt.Sprintf(p, name), user: "bob"})
-			if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "server-7f9c") {
-				t.Errorf("%s on %s = %d", p, name, rec.Code)
-			}
-		}
-		if rec := do(t, h, request{path: fmt.Sprintf(p, "main")}); rec.Code != http.StatusUnauthorized {
-			t.Errorf("no identity %s = %d", p, rec.Code)
-		}
-		rec := do(t, h, request{method: http.MethodPost, path: fmt.Sprintf(p, "main"), user: "bob", header: map[string]string{"Sec-Fetch-Site": "cross-site"}})
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("cross-origin POST %s = %d", p, rec.Code)
-		}
-		rec = do(t, h, request{method: http.MethodPost, path: fmt.Sprintf(p, "main"), user: "bob"})
-		if rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
-			t.Errorf("POST %s = %d", p, rec.Code)
-		}
 	}
 }

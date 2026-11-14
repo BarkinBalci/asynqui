@@ -82,45 +82,6 @@ func TestOverviewPoll(t *testing.T) {
 	}
 }
 
-// TestPolledFocusablesHaveIDs: htmx refocuses by id after a swap, so every
-// focusable element inside a polled region, or replaced by a poll, needs a
-// stable, unique id.
-func TestPolledFocusablesHaveIDs(t *testing.T) {
-	conns := defaultConns()
-	conns.conns = append(conns.conns, connInfo{Name: "a.b", Addr: "x:1/0", Health: conn.Health{State: conn.StateDown, Err: errors.New("x")}})
-	h, _ := newTestServer(t, testOpts{conns: conns})
-	doc := parse(t, do(t, h, request{path: "/"}))
-	seen := map[string]bool{}
-	doc.Find("[id]").Each(func(_ int, s *goquery.Selection) {
-		id, _ := s.Attr("id")
-		if seen[id] {
-			t.Errorf("duplicate id %q", id)
-		}
-		seen[id] = true
-	})
-	poll := parse(t, do(t, h, request{path: "/", htmx: true}))
-	var regions []string
-	poll.Find("[hx-swap-oob]").Each(func(_ int, s *goquery.Selection) {
-		id, _ := s.Attr("id")
-		regions = append(regions, `[id="`+id+`"]`)
-	})
-	regions = append(regions, "[data-poll]")
-	focusable := "a[href], button, input, select, textarea, summary, [tabindex]"
-	n := 0
-	for _, sel := range regions {
-		doc.Find(sel).Find(focusable).Each(func(_ int, s *goquery.Selection) {
-			n++
-			if id, ok := s.Attr("id"); !ok || id == "" {
-				h, _ := goquery.OuterHtml(s)
-				t.Errorf("focusable in %s without id: %s", sel, h)
-			}
-		})
-	}
-	if n < 6 { // open, retry ×2, three sidebar links at least
-		t.Errorf("only %d focusables found; selectors wrong?", n)
-	}
-}
-
 func TestOverviewCards(t *testing.T) {
 	conns := defaultConns()
 	conns.conns = append(conns.conns, connInfo{Name: "flaky", Addr: "flaky:6379/2", Health: conn.Health{State: conn.StateUp}})

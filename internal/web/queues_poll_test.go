@@ -104,41 +104,6 @@ func TestQueuesPollAnswers(t *testing.T) {
 	}
 }
 
-// TestQueuesSync: one hx-sync scope for the page. Polls drop while
-// another request is in flight and are aborted by user requests; sorts
-// and chart changes queue (last wins); actions queue in order.
-func TestQueuesSync(t *testing.T) {
-	h, _ := newTestServer(t, testOpts{authz: config.Authz{Default: config.RoleAdmin}})
-	doc := parse(t, do(t, h, request{path: "/c/main"}))
-	page := doc.Find("main #queues-page")
-	if v, _ := page.Attr("hx-sync"); v != "this:queue last" {
-		t.Fatalf("page hx-sync = %q", v)
-	}
-	if v, _ := page.Find("#queues-poll").Attr("hx-sync"); v != "#queues-page:abort" {
-		t.Errorf("poll hx-sync = %q", v)
-	}
-	// Every htmx request of the page resolves to the page's scope.
-	page.Find("[hx-get], [hx-post]").Each(func(_ int, s *goquery.Selection) {
-		var sync string
-		for n := s; n.Length() > 0 && sync == ""; n = n.Parent() {
-			sync = n.AttrOr("hx-sync", "")
-		}
-		want := "this:queue last"
-		switch {
-		case s.Is("#queues-poll"):
-			want = "#queues-page:abort"
-		case s.Is("[hx-post]"):
-			want = "#queues-page:queue all"
-		}
-		if sync != want {
-			t.Errorf("%s#%s syncs %q, want %q", goquery.NodeName(s), s.AttrOr("id", ""), sync, want)
-		}
-	})
-	if n := page.Find("[hx-post]").Length(); n != 3 {
-		t.Errorf("%d posting elements, want pause, resume and the dialog's confirm", n)
-	}
-}
-
 func TestQueuesHistoryStates(t *testing.T) {
 	t.Run("budget miss: Checking in the chart body", func(t *testing.T) {
 		conns := defaultConns()
