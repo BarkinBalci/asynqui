@@ -1,5 +1,7 @@
 # Contributing
 
+Dev tasks live in `Taskfile.yml`. Install [Task](https://taskfile.dev/installation/) or run it as `go tool -modfile=tools/go.mod task`. Run `task check` before pushing; it runs the CI check job.
+
 ## Commit messages
 
 Start each commit subject with a [Conventional Commits](https://www.conventionalcommits.org/) prefix. GoReleaser groups the release changelog by it:
@@ -30,7 +32,7 @@ The harness flushes and seeds a Redis with asynq (a worker and a scheduler inclu
 2. Point the tests at a **throwaway** Redis, which they flush, or leave `ASYNQUI_E2E_REDIS` unset to start one with testcontainers (Docker):
 
    ```sh
-   ASYNQUI_E2E_REDIS=localhost:6379 make e2e
+   ASYNQUI_E2E_REDIS=localhost:6379 task e2e
    go test -tags e2e ./e2e -run 'TestBrowser/FindTask' -v   # one test
    ```
 

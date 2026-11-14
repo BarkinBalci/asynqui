@@ -1,4 +1,5 @@
 /bin/
+/asynqui
 /dist/
 *.test
 *.out
@@ -9,3 +10,4 @@ coverage.*
 .idea/
 .vscode/
 .claude/
+.task/

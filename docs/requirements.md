@@ -392,7 +392,7 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 ### Command line
 - A single static binary.
 - **Flags:** `-config`, `-addr`, `-log-level`, `-version`. `-h` prints usage to stderr and exits 0. `-version` prints `asynqui {version}` to stdout and exits 0 without reading the config.
-- **Version:** stamped at build time into `main.version` (`-ldflags "-X main.version=…"`): GoReleaser writes the tag without its `v` (`0.1.0`), `make build` writes `git describe` output. Without `-ldflags` the version is the main module version the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none (`go run`, `(devel)`).
+- **Version:** stamped at build time into `main.version` (`-ldflags "-X main.version=…"`): GoReleaser writes the tag without its `v` (`0.1.0`), `task build` writes `git describe` output. Without `-ldflags` the version is the main module version the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none (`go run`, `(devel)`).
 - **Exit codes:** 0 after a clean shutdown, `-h` or `-version`; 1 on a startup, serve or shutdown error (message on stderr); 2 on a usage error (unknown flag or positional argument).
 
 ### Precedence
@@ -457,7 +457,7 @@ Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control:
 - Polling "Off" sends no polling requests at all.
 
 ### Update check
-- With `update_check: true` and a release version, the server sends `GET https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h, until shutdown starts. A release version is a semantic version without a prerelease part: `dev`, release candidates (`0.2.0-rc.1`), `git describe` or dirty builds from `make build` (`v0.1.0-3-gabc1234-dirty`) and pseudo-versions never check.
+- With `update_check: true` and a release version, the server sends `GET https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h, until shutdown starts. A release version is a semantic version without a prerelease part: `dev`, release candidates (`0.2.0-rc.1`), `git describe` or dirty builds from `task build` (`v0.1.0-3-gabc1234-dirty`) and pseudo-versions never check.
 - The request sends no credentials, config or user data. GitHub sees the server's IP address (or its proxy's) and the asynqui version, from `User-Agent: asynqui/{version}`. It is server-side, so the CSP is unchanged.
 - It times out after 5s. A failure (network, non-200, malformed JSON) is logged at debug level and keeps the last result.
 - Drafts, prereleases and tags that are not a semantic version without a prerelease part are ignored. A release newer than the running version (by major, minor, patch) is remembered by its tag and logged once at info; an equal or older one clears it. The footer links to `https://github.com/BarkinBalci/asynqui/releases/tag/{tag}`, with the tag path-escaped.

@@ -31,14 +31,14 @@ asynqui/
 │       ├── chart/             # SVG chart geometry: nice axis scales, path data (no text)
 │       ├── views/             # .templ: layout.templ, components/, pages/ (+ generated *_templ.go, committed)
 │       └── static/            # files/: css, htmx, app.js, fonts, logo; //go:embed files
-├── tools/go.mod               # templ and golangci-lint, run with go tool -modfile=tools/go.mod
+├── tools/go.mod               # Task, templ and golangci-lint, run with go tool -modfile=tools/go.mod
 ├── docs/
 ├── config.example.yaml        # every key; loads without env vars
-├── config.dev.yaml            # make run: localhost:6379, auth none, admin
-├── Makefile
+├── config.dev.yaml            # task run: localhost:6379, auth none, admin
+├── Taskfile.yml
 ├── .goreleaser.yaml           # release builds, archives, checksums, changelog, images
 ├── Dockerfile                 # release image: GoReleaser's prebuilt binary on distroless
-├── Dockerfile.dev             # local image built from source (make docker)
+├── Dockerfile.dev             # local image built from source (task docker)
 └── .github/workflows/         # ci.yml; release.yml on vX.Y.Z* tags
 ```
 
@@ -284,14 +284,14 @@ Other conventions:
 - **Time:** inject `now func() time.Time` where output depends on the clock.
 - **Style:** tests are table-driven. Subtests never share mutable state: each builds its own fixtures, so any of them can run alone or in parallel.
 - **`run()`** has an end-to-end test on `127.0.0.1:0`: it reads the bound address from the "listening" log line, cancels the context and checks that readiness is 503 while the listener still serves during `shutdown_delay`, then that the listener closes and `run` returns nil.
-- **Race detector:** CI runs `go test -race`. It needs cgo and a C compiler, so locally it is `make test-race`; `make test` runs without it.
+- **Race detector:** CI runs `go test -race`. It needs cgo and a C compiler, so locally it is `task test-race`; `task test` and `task check` run without it.
 - **Out of scope for v1:** pixel-diff visual regression.
 
 ## Tooling and CI
 
-- **Tools module:** `tools/go.mod` pins templ and golangci-lint with `tool` directives. Run them as `go tool -modfile=tools/go.mod <tool>`; the main `go.mod` lists only runtime and test dependencies.
-- **Go version:** `go 1.26.0` with `toolchain go1.26.10` in both `go.mod` files. CI installs `1.26.x`.
-- **Makefile:** `make help` lists the targets (`generate`, `lint`, `test`, `test-race`, `e2e`, `run`, `build`, `docker`, `tidy`). `build` stamps `main.version` from `git describe`.
+- **Tools module:** `tools/go.mod` pins Task, templ and golangci-lint with `tool` directives. Run them as `go tool -modfile=tools/go.mod <tool>`; the main `go.mod` lists only runtime and test dependencies.
+- **Go version:** `go 1.26.0` in `go.mod` and `go 1.26.4` in `tools/go.mod` (Task needs it), both with `toolchain go1.26.10`. CI installs `1.26.x`.
+- **Taskfile:** `task` lists the tasks (`generate`, `lint`, `test`, `test-race`, `e2e`, `run`, `build`, `docker`, `tidy`, `check`). `generate` is skipped when no `.templ` file changed. `build` stamps `main.version` from `git describe`. `check` runs the CI check job without `-race`; keep it in sync with `ci.yml`.
 - **CI** (`.github/workflows/ci.yml`, actions pinned by commit SHA): `go mod tidy -diff` for both modules, templ generate + `git status --porcelain` must be empty, vet, golangci-lint, `go test -race` with `ASYNQUI_REQUIRE_DOCKER=1` (integration tests fail rather than skip without Docker), static build. A separate `e2e` job runs the browser tests with a Redis service container.
 - **Release** (`.github/workflows/release.yml`, on `v*` tags, actions pinned by SHA, only `contents: write` and `packages: write`): tests, then GoReleaser at a pinned version (keep it in sync with the header of `.goreleaser.yaml`). Check the config with `go run github.com/goreleaser/goreleaser/v2@<version> check`.
 

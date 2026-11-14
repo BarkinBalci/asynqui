@@ -224,7 +224,7 @@ func TestVersion(t *testing.T) {
 		{"v0.0.0-20261114015842-f9b5ecf3013c", "dev f9b5ecf", true},
 		{"v0.1.1-0.20261114015842-f9b5ecf3013c", "dev f9b5ecf", true},
 		{"v0.2.0-rc.1.0.20261114015842-f9b5ecf3013c", "dev f9b5ecf", true},
-		// git describe (make build).
+		// git describe (task build).
 		{"v1.2.3-4-gabcdef-dirty", "dev abcdef", true},
 		{"v0.1.0-3-gf9b5ecf3", "dev f9b5ecf", true},
 		{"0.1.0-12-gf9b5ecf", "dev f9b5ecf", true},

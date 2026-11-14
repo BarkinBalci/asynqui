@@ -1,0 +1,89 @@
+# asynqui developer tasks. Tools (task, templ, golangci-lint) are pinned in
+# tools/go.mod so the main go.mod stays lean.
+version: '3'
+
+vars:
+  TOOL: go tool -modfile=tools/go.mod
+  # Stamped into main.version; asynqui -version prints it. Releases get
+  # theirs from GoReleaser (.goreleaser.yaml). Override: task build VERSION=x
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+
+tasks:
+  default:
+    desc: List tasks
+    silent: true
+    cmd: '{{.TASK_EXE}} --list'
+
+  generate:
+    desc: Generate templ code
+    sources:
+      - internal/web/views/**/*.templ
+    generates:
+      - internal/web/views/**/*_templ.go
+    cmd: '{{.TOOL}} templ generate'
+
+  lint:
+    desc: Run go vet and golangci-lint
+    cmds:
+      - go vet ./...
+      - '{{.TOOL}} golangci-lint run'
+
+  test:
+    desc: Run all tests (Redis-backed tests need Docker)
+    cmd: go test ./...
+
+  test-race:
+    desc: Run all tests with the race detector (needs cgo and a C compiler)
+    env:
+      CGO_ENABLED: '1'
+    cmd: go test -race ./...
+
+  e2e:
+    desc: Run the browser tests (Chromium + a throwaway Redis; see docs/contributing.md)
+    cmd: go test -tags e2e -count=1 ./e2e/...
+
+  run:
+    desc: Run locally against localhost:6379 with config.dev.yaml
+    deps: [generate]
+    cmd: go run ./cmd/asynqui -config config.dev.yaml
+
+  build:
+    desc: Build the static binary into bin/
+    deps: [generate]
+    vars:
+      LDFLAGS: -s -w -X main.version={{.VERSION}}
+    env:
+      CGO_ENABLED: '0'
+    cmd: go build -trimpath -ldflags '{{.LDFLAGS}}' -o bin/asynqui ./cmd/asynqui
+
+  docker:
+    desc: Build the local image asynqui:dev from source (Dockerfile.dev)
+    cmd: docker build -f Dockerfile.dev --build-arg VERSION={{.VERSION}} -t asynqui:dev .
+
+  tidy:
+    desc: Tidy go.mod and tools/go.mod
+    cmds:
+      - go mod tidy
+      - task: tidy-tools
+
+  tidy-tools:
+    internal: true
+    dir: tools
+    cmd: go mod tidy {{.FLAGS}}
+
+  # Keep in sync with the check job in .github/workflows/ci.yml. No -race
+  # (needs cgo; see test-race), and integration tests skip without Docker.
+  check:
+    desc: Run the CI check job locally
+    cmds:
+      - go mod tidy -diff
+      - task: tidy-tools
+        vars: {FLAGS: -diff}
+      - '{{.TOOL}} templ generate'
+      - git status --porcelain
+      - test -z "$(git status --porcelain)"
+      - go vet ./...
+      - '{{.TOOL}} golangci-lint run'
+      - go test ./...
+      - CGO_ENABLED=0 go build -trimpath ./cmd/asynqui

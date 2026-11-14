@@ -80,15 +80,18 @@ listener closes, then in-flight requests get 10s to finish. Keep
 
 ## Development
 
-Needs Go 1.26+. Tools are pinned in `tools/go.mod`.
+Needs Go 1.26+. Tools are pinned in `tools/go.mod`. Tasks run with
+[Task](https://taskfile.dev/installation/), or without installing it as
+`go tool -modfile=tools/go.mod task`.
 
 ```sh
-make help       # list targets
-make run        # localhost:6379, no login, admin (config.dev.yaml)
-make build      # bin/asynqui, version from git describe
-make docker     # asynqui:dev image from source (Dockerfile.dev)
-make lint test
-make test-race  # needs cgo and a C compiler
+task            # list tasks
+task run        # localhost:6379, no login, admin (config.dev.yaml)
+task build      # bin/asynqui, version from git describe
+task docker     # asynqui:dev image from source (Dockerfile.dev)
+task lint test
+task test-race  # needs cgo and a C compiler
+task check      # the CI check job
 ```
 
 ## Documentation

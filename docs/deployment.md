@@ -183,6 +183,6 @@ With `update_check: true` (the default), a release build asks `https://api.githu
 - The request is made by the server, not the browser, so the CSP does not change. It needs egress to `api.github.com:443` and honours `HTTPS_PROXY`.
 - It sends no credentials, config, connection names or user data. GitHub sees the server's IP address (or its egress proxy's) and the asynqui version, from `User-Agent: asynqui/<version>`.
 - Failures (no egress, rate limits, the 5s timeout) are logged at debug level and change nothing. Drafts, prereleases and non-semver tags are ignored.
-- Builds without a release version never check: `dev` and pseudo-versions from `go run` or `go build`, release candidates, and `make build` output from an untagged or dirty tree.
+- Builds without a release version never check: `dev` and pseudo-versions from `go run` or `go build`, release candidates, and `task build` output from an untagged or dirty tree.
 
 Set `update_check: false` to disable it, e.g. in air-gapped clusters or where egress is restricted.

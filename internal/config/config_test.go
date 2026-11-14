@@ -86,7 +86,7 @@ func TestLoadExample(t *testing.T) {
 	}
 }
 
-// TestLoadDevConfig checks the config `make run` uses.
+// TestLoadDevConfig checks the config `task run` uses.
 func TestLoadDevConfig(t *testing.T) {
 	cfg, err := Load(filepath.Join("..", "..", "config.dev.yaml"), env(nil), Overrides{})
 	if err != nil {

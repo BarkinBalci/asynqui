@@ -1,6 +1,6 @@
 # Local image built from source:
 #   docker build -f Dockerfile.dev -t asynqui:dev .
-#   make docker
+#   task docker
 # Releases use Dockerfile, which copies GoReleaser's prebuilt binaries.
 
 # golang:1.26-trixie, multi-arch index.
