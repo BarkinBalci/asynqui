@@ -263,7 +263,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **Actions:** toolbar buttons submit that form (`formaction`, plus `hx-post` with `hx-swap="none"`). The htmx answer is a user-request answer plus error toasts appended to `#toasts` out of band. Without JS it is always a redirect back (post, redirect, get); failures ride in the short-lived `asynqui_flash` cookie, which the page shows as toasts once and clears, so a reload never posts again. A delete opens a `<dialog>` whose confirm button posts `confirm=1`; without JS the first post answers with a confirmation page.
 - **No cross-origin forms:** the CSP `form-action 'self'` also applies to a form's redirects, so anything that leaves the origin (SSO, proxy sign out) is a link.
 - **Time:** the `time` component renders `<time datetime="RFC3339 UTC">` with the absolute UTC text from `format`. `app.js` rewrites it to local relative text with the absolute local time in `title`, and re-renders relative text on each tick.
-- **Assets:** served with content-hashed filenames and `Cache-Control: immutable`. `//go:embed files` (without `all:`), so dotfiles are never embedded.
+- **Assets:** served by `http.FileServerFS` under `/static/<hash>/…`, the hash covering every embedded file, with `Cache-Control: immutable`; any change moves every URL, and the stylesheet's relative font URLs resolve as written. Another hash, a directory or a missing file is 404 (no listings). `//go:embed files` (without `all:`), so dotfiles are never embedded.
 
 ## Testing
 
