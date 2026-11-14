@@ -344,12 +344,13 @@ func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 			case len(names) == 0:
 				navigate(w, r, back)
 			default:
-				crumbs := []components.Crumb{{Text: name, URL: back}, {Label: pages.DeleteQueuesCrumb()}}
-				l := d.layout(r, a, components.SectionQueues, crumbs)
-				l.TopBar.Next = back
-				d.render(w, r, http.StatusOK, pages.DeleteQueuesPage(pages.DeleteQueues{
-					Layout: l, Names: names, Action: d.url("c", name, "queues", "delete"), Next: back, CancelURL: back,
-				}))
+				m := pages.Confirm{Title: pages.DeleteQueuesTitle(), Names: names, Verb: pages.TaskDelete,
+					Action: d.url("c", name, "queues", "delete"), CancelURL: back}
+				for _, n := range names {
+					m.Hidden = append(m.Hidden, pages.Param{Name: "queue", Value: n})
+				}
+				m.Hidden = append(m.Hidden, pages.Param{Name: "next", Value: back})
+				d.confirm(w, r, a, m, components.Crumb{Text: name, URL: back})
 			}
 			return
 		}

@@ -837,27 +837,20 @@ templ FindTaskPage(m FindPage) {
 	}
 }
 
-// ConfirmTasksPage confirms a delete or an "all" action posted without
-// JS (with JS, a dialog confirms).
-templ ConfirmTasksPage(m ConfirmTasks) {
-	@views.Page(m.Layout, confirmTitle(m)) {
+// ConfirmPage confirms an action posted without JS: a queue delete, or a
+// task action that needs it.
+templ ConfirmPage(m Confirm) {
+	@views.Page(m.Layout, m.Title) {
 		<div class="page-head">
 			<h1 class="h1">
-				@confirmTitle(m)
+				@m.Title
 			</h1>
 		</div>
 		<section class="card confirm-card">
-			if !m.All {
+			if len(m.Names) > 0 {
 				<ul class="dlg-list mono">
-					for _, id := range m.IDs {
-						<li><bdi>{ format.VisibleID(id) }</bdi></li>
-					}
-				</ul>
-			}
-			if len(m.Groups) > 0 {
-				<ul class="dlg-list mono">
-					for _, g := range m.Groups {
-						<li><bdi>{ format.VisibleID(g) }</bdi></li>
+					for _, n := range m.Names {
+						<li><bdi>{ format.VisibleID(n) }</bdi></li>
 					}
 				</ul>
 			}
@@ -871,31 +864,30 @@ templ ConfirmTasksPage(m ConfirmTasks) {
 				<input type="hidden" name="confirm" value="1"/>
 				<a class="btn" href={ templ.SafeURL(m.CancelURL) }>Cancel</a>
 				<button type="submit" class={ "btn", templ.KV("danger", dangerVerb(m.Verb)), templ.KV("primary", !dangerVerb(m.Verb)) }>
-					if m.All {
-						@verbLabel(m.Verb, true)
-					} else {
-						@verbLabel(m.Verb, false)
-					}
+					@verbIcon(m.Verb, "16")
+					@verbLabel(m.Verb, m.All)
 				</button>
 			</form>
 		</section>
 	}
 }
 
-// ConfirmTitle is the confirmation page's title and last breadcrumb.
-templ confirmTitle(m ConfirmTasks) {
+// TasksConfirmTitle is a task action confirmation's title: of the tasks
+// names, or with all of every task in state s (total of them), or of
+// every task of the aggregation groups names.
+templ TasksConfirmTitle(v TaskVerb, all bool, s TaskState, total int64, names []string) {
 	switch  {
-		case len(m.Groups) == 1:
-			{ verbText(m.Verb, true) + " " + scopeTasks(StateAggregating, m.Groups[0], 0) }
-		case len(m.Groups) > 1:
-			{ verbText(m.Verb, true) + " tasks in " + format.Number(int64(len(m.Groups))) + " groups" }
-		case m.All:
-			{ allTitleText(m.Verb, m.State, m.Total) }
-		case m.Verb == TaskArchive && len(m.IDs) == 1:
+		case all && s == StateAggregating && len(names) == 1:
+			{ verbText(v, true) + " " + scopeTasks(StateAggregating, names[0], 0) }
+		case all && s == StateAggregating:
+			{ verbText(v, true) + " tasks in " + format.Number(int64(len(names))) + " groups" }
+		case all:
+			{ allTitleText(v, s, total) }
+		case v == TaskArchive && len(names) == 1:
 			Archive task
-		case m.Verb == TaskArchive:
+		case v == TaskArchive:
 			@archiveTasksTitle()
-		case len(m.IDs) == 1:
+		case len(names) == 1:
 			Delete task
 		default:
 			@deleteTasksTitle()
@@ -905,6 +897,3 @@ templ confirmTitle(m ConfirmTasks) {
 // dangerVerb is a verb whose buttons are red: Delete, and Archive, since
 // asynq trims the archive.
 func dangerVerb(v TaskVerb) bool { return v == TaskDelete || v == TaskArchive }
-
-// ConfirmCrumb is confirmTitle for the breadcrumb.
-func ConfirmCrumb(m ConfirmTasks) templ.Component { return confirmTitle(m) }

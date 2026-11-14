@@ -133,6 +133,15 @@ func (d *deps) answerAction(w http.ResponseWriter, r *http.Request, conn string,
 	navigate(w, r, back)
 }
 
+// confirm answers an action posted without JS with its confirmation
+// page, crumbs then its title in the breadcrumbs. Changing a preference
+// there goes back to the page the action came from.
+func (d *deps) confirm(w http.ResponseWriter, r *http.Request, a access, m pages.Confirm, crumbs ...components.Crumb) {
+	m.Layout = d.layout(r, a, components.SectionQueues, append(crumbs, components.Crumb{Label: m.Title}))
+	m.Layout.TopBar.Next = m.CancelURL
+	d.render(w, r, http.StatusOK, pages.ConfirmPage(m))
+}
+
 // handleNotFound is the catch-all route.
 func handleNotFound(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

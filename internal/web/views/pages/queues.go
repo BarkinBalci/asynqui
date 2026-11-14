@@ -169,13 +169,3 @@ type ActionFailure struct {
 	// Detail is the error text for FailureOther.
 	Detail string
 }
-
-// DeleteQueues is the confirmation page of a queue delete posted without
-// JS (with JS, the dialog confirms).
-type DeleteQueues struct {
-	Layout    views.Layout
-	Names     []string
-	Action    string
-	Next      string
-	CancelURL string
-}

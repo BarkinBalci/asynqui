@@ -315,37 +315,7 @@ func on(b bool, current string) templ.Attributes {
 	return templ.Attributes{"class": "on", "aria-current": current}
 }
 
-// DeleteQueuesCrumb is the confirmation page's title and last breadcrumb.
-templ DeleteQueuesCrumb() {
+// DeleteQueuesTitle is the queue delete confirmation's title.
+templ DeleteQueuesTitle() {
 	Delete queues
-}
-
-// DeleteQueuesPage confirms a queue delete posted without JS.
-templ DeleteQueuesPage(m DeleteQueues) {
-	@views.Page(m.Layout, DeleteQueuesCrumb()) {
-		<div class="page-head">
-			<h1 class="h1">
-				@DeleteQueuesCrumb()
-			</h1>
-		</div>
-		<section class="card confirm-card">
-			<ul class="dlg-list">
-				for _, n := range m.Names {
-					<li>{ n }</li>
-				}
-			</ul>
-			<form class="dlgacts" method="post" action={ templ.SafeURL(m.Action) }>
-				for _, n := range m.Names {
-					<input type="hidden" name="queue" value={ n }/>
-				}
-				<input type="hidden" name="next" value={ m.Next }/>
-				<input type="hidden" name="confirm" value="1"/>
-				<a class="btn" href={ templ.SafeURL(m.CancelURL) }>Cancel</a>
-				<button type="submit" class="btn danger">
-					@components.IconDelete("16")
-					Delete
-				</button>
-			</form>
-		</section>
-	}
 }

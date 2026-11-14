@@ -349,45 +349,38 @@ func handleTaskAction(d *deps, verb conn.TaskVerb) http.Handler {
 // confirmTasks answers a delete or "all" action posted without JS with a
 // confirmation page that posts it again with confirm=1.
 func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, queue string, verb conn.TaskVerb, f taskForm, back string) {
-	name := a.conn.Name()
-	m := pages.ConfirmTasks{
-		Verb:      pages.TaskVerb(verb),
-		IDs:       f.ids,
+	name, pv, state := a.conn.Name(), pages.TaskVerb(verb), pages.TaskState(f.state)
+	m := pages.Confirm{
+		Names:     slices.Concat(f.ids, f.groups),
+		Verb:      pv,
 		All:       f.all,
-		State:     pages.TaskState(f.state),
-		Action:    d.url("c", name, "queues", queue, "tasks", pages.VerbParam(pages.TaskVerb(verb))),
+		Action:    d.url("c", name, "queues", queue, "tasks", pages.VerbParam(pv)),
 		CancelURL: back,
 	}
 	for _, id := range f.ids {
 		m.Hidden = append(m.Hidden, pages.Param{Name: "id", Value: id})
 	}
-	m.Groups = f.groups
 	for _, g := range f.groups {
 		m.Hidden = append(m.Hidden, pages.Param{Name: "group", Value: g})
 	}
+	var total int64
 	if f.all {
 		m.Hidden = append(m.Hidden, pages.Param{Name: "all", Value: "1"})
 		ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
 		if qi, err := a.conn.QueueInfo(ctx, queue); err == nil {
-			m.Total = int64(qi.Count(f.state))
+			total = int64(qi.Count(f.state))
 		}
 		cancel()
 	}
 	if f.stateOK {
-		m.Hidden = append(m.Hidden, pages.Param{Name: "state", Value: pages.StateParam(m.State)})
+		m.Hidden = append(m.Hidden, pages.Param{Name: "state", Value: pages.StateParam(state)})
 	}
 	if f.fromTask {
 		m.Hidden = append(m.Hidden, pages.Param{Name: "from", Value: "task"})
 	}
 	m.Hidden = append(m.Hidden, pages.Param{Name: "next", Value: back})
-	crumbs := []components.Crumb{
-		{Text: name, URL: d.url("c", name)},
-		{Text: queue, URL: d.url("c", name, "queues", queue)},
-		{Label: pages.ConfirmCrumb(m)},
-	}
-	m.Layout = d.layout(r, a, components.SectionQueues, crumbs)
-	m.Layout.TopBar.Next = back
-	d.render(w, r, http.StatusOK, pages.ConfirmTasksPage(m))
+	m.Title = pages.TasksConfirmTitle(pv, f.all, state, total, m.Names)
+	d.confirm(w, r, a, m, components.Crumb{Text: name, URL: d.url("c", name)}, components.Crumb{Text: queue, URL: d.url("c", name, "queues", queue)})
 }
 
 // runTaskAction applies verb to the selected tasks in turn, or to every

@@ -3,6 +3,8 @@ package pages
 import (
 	"time"
 
+	"github.com/a-h/templ"
+
 	"github.com/BarkinBalci/asynqui/internal/web/views"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
@@ -318,19 +320,20 @@ type Flash struct {
 	Notice       *TaskNotice
 }
 
-// ConfirmTasks is the confirmation page of a delete or "all" action
-// posted without JS.
-type ConfirmTasks struct {
+// Confirm is the confirmation page of an action posted without JS (with
+// JS, a dialog confirms): a queue delete, or a task action that needs
+// one.
+type Confirm struct {
 	Layout views.Layout
-	Verb   TaskVerb
-	// IDs are the selected tasks; empty with All. Groups are the
-	// selected aggregation groups of an "all" action on them.
-	IDs    []string
-	Groups []string
-	All    bool
-	State  TaskState
-	Total  int64
-	// Action, Next and Hidden are what the confirm button posts.
+	// Title is the heading, the title and the last breadcrumb.
+	Title templ.Component
+	// Names are the selected queues, tasks or aggregation groups.
+	Names []string
+	// Verb and All label the confirm button; a queue delete is Delete.
+	Verb TaskVerb
+	All  bool
+	// Action and Hidden are what the confirm button posts, with
+	// confirm=1.
 	Action    string
 	Hidden    []Param
 	CancelURL string
