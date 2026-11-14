@@ -26,10 +26,9 @@ const (
 )
 
 // ErrNotRelease is returned by New for a running version that is not a
-// release: not a semantic version (such as "dev"), one with a prerelease
-// part (git describe output such as "v0.1.0-3-gabc1234-dirty", and
-// pseudo-versions), or one with build metadata ("v0.1.0+dirty"). Such
-// builds are never checked.
+// release: not a semantic version (such as "dev"), or one with a prerelease
+// part, which also covers git describe output ("v0.1.0-3-gabc1234-dirty").
+// Such builds are never checked.
 var ErrNotRelease = errors.New("not a release version")
 
 // Options configure a Checker. Version is required.
