@@ -202,7 +202,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 | Session cookie | `github.com/gorilla/securecookie` |
 | CSRF | stdlib `http.CrossOriginProtection` (Go 1.25+), based on `Sec-Fetch-Site`, so no tokens are needed |
 | Routing, logging, flags | stdlib `net/http`, `log/slog`, `flag` |
-| Coalescing | `golang.org/x/sync/singleflight` in `conn`'s cache (typed keys, panic recovery inside the shared fetch) |
+| Coalescing, bounded fan-out | `golang.org/x/sync`: `singleflight` in `conn`'s cache (typed keys, panic recovery inside the shared fetch), `errgroup` for the per-queue reads |
 
 **Frontend** (vendored and embedded; no npm and no build step)
 

@@ -7,10 +7,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hibiken/asynq"
+	"golang.org/x/sync/errgroup"
 )
 
 // queueConcurrency bounds the per-queue Inspector calls in flight per
@@ -135,39 +136,26 @@ func (c *Conn) fetchQueues(context.Context) ([]Queue, error) {
 func eachQueue[T any](names []string, fn func(string) (T, error)) ([]T, error) {
 	out := make([]T, len(names))
 	var (
-		mu       sync.Mutex
-		firstErr error
+		g      errgroup.Group
+		failed atomic.Bool
 	)
-	failed := func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return firstErr != nil
-	}
-	sem := make(chan struct{}, queueConcurrency)
-	var wg sync.WaitGroup
+	g.SetLimit(queueConcurrency)
 	for i, q := range names {
-		sem <- struct{}{}
-		if failed() {
-			<-sem
-			break
-		}
-		wg.Go(func() {
-			defer func() { <-sem }()
+		g.Go(func() error {
+			if failed.Load() {
+				return nil // another queue failed: start no more calls
+			}
 			v, err := recovered(func() (T, error) { return fn(q) })
 			if err != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = fmt.Errorf("queue %s: %w", q, err)
-				}
-				mu.Unlock()
-				return
+				failed.Store(true)
+				return fmt.Errorf("queue %s: %w", q, err)
 			}
 			out[i] = v
+			return nil
 		})
 	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
