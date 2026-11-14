@@ -445,10 +445,10 @@ Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control:
 - Polling "Off" sends no polling requests at all.
 
 ### Update check
-- With `update_check: true` and a release version (a semantic version; `dev` and other builds never check), the server sends `GET https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h, until shutdown starts.
+- With `update_check: true` and a release version, the server sends `GET https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h, until shutdown starts. A release version is a semantic version without a prerelease part: `dev`, release candidates (`0.2.0-rc.1`) and `git describe` or dirty builds from `make build` (`v0.1.0-3-gabc1234-dirty`) never check.
 - The request carries `User-Agent: asynqui/{version}` and nothing identifying. It is server-side, so the CSP is unchanged.
 - It times out after 5s. A failure (network, non-200, malformed JSON) is logged at debug level and keeps the last result.
-- Drafts, prereleases and tags that are not a semantic version without a prerelease part are ignored. A release newer than the running version (semver precedence; a running prerelease is older than its release) is remembered with its notes URL, `https://github.com/BarkinBalci/asynqui/releases/tag/{tag}`, and logged once at info; an equal or older one clears it.
+- Drafts, prereleases and tags that are not a semantic version without a prerelease part are ignored. A release newer than the running version (by major, minor, patch) is remembered with its notes URL, `https://github.com/BarkinBalci/asynqui/releases/tag/{tag}`, and logged once at info; an equal or older one clears it.
 
 ### Releases
 - A `v*` tag runs `.github/workflows/release.yml` (permissions `contents: write` and `packages: write` only), which runs the tests and then GoReleaser (`.goreleaser.yaml`).

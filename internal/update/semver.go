@@ -78,8 +78,8 @@ func numeric(s string) bool {
 	return true
 }
 
-// olderThan reports whether v precedes r, a release (r.pre is empty). A
-// prerelease precedes the release with the same core version.
+// olderThan reports whether release v precedes release r. Both have no
+// prerelease part: New refuses one for v, and check ignores one for r.
 func (v semver) olderThan(r semver) bool {
 	if v.major != r.major {
 		return v.major < r.major
@@ -90,5 +90,5 @@ func (v semver) olderThan(r semver) bool {
 	if v.patch != r.patch {
 		return v.patch < r.patch
 	}
-	return v.pre != "" && r.pre == ""
+	return false
 }

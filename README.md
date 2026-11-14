@@ -96,6 +96,7 @@ make test-race  # needs cgo and a C compiler
 - [Requirements](docs/requirements.md)
 - [Architecture](docs/architecture.md)
 - [Deployment](docs/deployment.md)
+- [Contributing](docs/contributing.md)
 
 ## License
 

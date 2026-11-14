@@ -292,7 +292,7 @@ Other conventions:
 
 - **README.md:** what asynqui is, a screenshot, and the quickstart.
 - **`config.example.yaml`:** every option with comments. CI checks that it parses and validates.
-- **`docs/`:** requirements (behaviour, config reference), architecture (this file) and [deployment](deployment.md) now; authentication, authorization and contributing guides later.
+- **`docs/`:** requirements (behaviour, config reference), architecture (this file), [deployment](deployment.md) and [contributing](contributing.md) now; authentication and authorization guides later.
 - **Changelog:** GoReleaser writes it into each GitHub release from the commit messages; there is no `CHANGELOG.md`.
 - **pkg.go.dev:** shows only the `cmd/asynqui` package comment, which points to the README.
 - **A docs site:** Hugo on GitHub Pages, added only once `docs/` outgrows plain Markdown.

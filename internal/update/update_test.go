@@ -40,7 +40,6 @@ func TestCheck(t *testing.T) {
 	}{
 		{"newer", "0.1.0", 200, `{"tag_name":"v0.2.0","html_url":"x"}`, "v0.2.0"},
 		{"newer patch, v-prefixed running version", "v0.1.0", 200, `{"tag_name":"v0.1.1"}`, "v0.1.1"},
-		{"newer than a running prerelease", "0.2.0-rc.1", 200, `{"tag_name":"v0.2.0"}`, "v0.2.0"},
 		{"newer than a build with metadata", "1.0.0+abc", 200, `{"tag_name":"v1.10.0"}`, "v1.10.0"},
 		{"same", "0.2.0", 200, `{"tag_name":"v0.2.0"}`, ""},
 		{"older", "0.3.0", 200, `{"tag_name":"v0.2.9"}`, ""},
@@ -161,7 +160,12 @@ func TestDefaults(t *testing.T) {
 }
 
 func TestNewNotRelease(t *testing.T) {
-	for _, v := range []string{"dev", "", "v1.2", "1.2.3.4", "abc1234", "v01.2.3"} {
+	for _, v := range []string{
+		"dev", "", "v1.2", "1.2.3.4", "abc1234", "v01.2.3",
+		// A prerelease part: release candidates, git describe, dirty and
+		// snapshot builds.
+		"0.2.0-rc.1", "v0.1.0-3-gabc1234", "v0.1.0-3-gabc1234-dirty", "v0.1.0-dirty", "0.0.0-SNAPSHOT-0cf57cb",
+	} {
 		if c, err := New(Options{Version: v}); !errors.Is(err, ErrNotRelease) || c != nil {
 			t.Errorf("New(%q) = %v, %v; want ErrNotRelease", v, c, err)
 		}

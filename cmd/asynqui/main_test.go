@@ -145,6 +145,9 @@ func TestNewUpdateChecker(t *testing.T) {
 	if c := newUpdateChecker(true, "dev", logger); c != nil {
 		t.Error("checker for a dev build")
 	}
+	if c := newUpdateChecker(true, "v0.1.0-3-gabc1234-dirty", logger); c != nil {
+		t.Error("checker for a git describe build")
+	}
 	if c := newUpdateChecker(true, "0.1.0", logger); c == nil {
 		t.Error("no checker for a release build")
 	}
