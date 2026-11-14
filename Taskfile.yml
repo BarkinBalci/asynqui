@@ -43,6 +43,10 @@ tasks:
     desc: Run the browser tests (Chromium + a throwaway Redis; see docs/contributing.md)
     cmd: go test -tags e2e -count=1 ./e2e/...
 
+  screenshots:
+    desc: Regenerate the README screenshots and GIF in docs/images (Chromium + a throwaway Redis; see docs/contributing.md)
+    cmd: go test -tags screenshots -count=1 -timeout 10m -run TestScreenshots ./e2e/
+
   run:
     desc: Run locally against localhost:6379 with config.dev.yaml
     deps: [generate]
