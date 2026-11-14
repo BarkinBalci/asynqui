@@ -294,7 +294,7 @@ Other conventions:
 ## Tooling and CI
 
 - **Tools module:** `tools/go.mod` pins Task, templ and golangci-lint with `tool` directives. Run them as `go tool -modfile=tools/go.mod <tool>`; the main `go.mod` lists only runtime and test dependencies.
-- **Go version:** `go 1.26.0` in `go.mod` and `go 1.26.4` in `tools/go.mod` (Task needs it), both with `toolchain go1.26.10`. CI installs `1.26.x`.
+- **Go version:** `go 1.27.0` in `go.mod` and `tools/go.mod`, both with `toolchain go1.27.3`. CI installs `1.27.x`.
 - **Taskfile:** `task` lists the tasks (`generate`, `lint`, `test`, `test-race`, `e2e`, `run`, `build`, `docker`, `tidy`, `check`). `generate` is skipped when no `.templ` file changed. `build` stamps `main.version` from `git describe`. `check` runs the CI check job without `-race`; keep it in sync with `ci.yml`.
 - **CI** (`.github/workflows/ci.yml`, actions pinned by commit SHA): `go mod tidy -diff` for both modules, templ generate + `git status --porcelain` must be empty, vet, golangci-lint, `go test -race` with `ASYNQUI_REQUIRE_DOCKER=1` (integration tests fail rather than skip without Docker), static build. A separate `e2e` job runs the browser tests with a Redis service container.
 - **Release** (`.github/workflows/release.yml`, on `v*` tags, actions pinned by SHA, only `contents: write` and `packages: write`): tests, then GoReleaser at a pinned version (keep it in sync with the header of `.goreleaser.yaml`). Check the config with `go run github.com/goreleaser/goreleaser/v2@<version> check`.

@@ -80,7 +80,7 @@ listener closes, then in-flight requests get 10s to finish. Keep
 
 ## Development
 
-Needs Go 1.26+. Tools are pinned in `tools/go.mod`. Tasks run with
+Needs Go 1.27+. Tools are pinned in `tools/go.mod`. Tasks run with
 [Task](https://taskfile.dev/installation/), or without installing it as
 `go tool -modfile=tools/go.mod task`.
 
