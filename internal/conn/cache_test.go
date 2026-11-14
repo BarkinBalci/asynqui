@@ -197,10 +197,10 @@ func TestCacheSweepsExpiredEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 		c.mu.Lock()
-		n, flights := len(c.entries), len(c.flights)
+		n := len(c.entries)
 		c.mu.Unlock()
-		if n != 1 || flights != 0 {
-			t.Errorf("%d entries and %d flights after the others expired, want 1 and 0", n, flights)
+		if n != 1 {
+			t.Errorf("%d entries after the others expired, want 1", n)
 		}
 	})
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // cacheTTL is how long a fetched snapshot is served to every viewer.
@@ -34,7 +36,9 @@ const (
 type cache struct {
 	mu      sync.Mutex
 	entries map[any]cacheEntry // by cacheKey[T]
-	flights map[any]*flight    // fetches in progress, by cacheKey[T]
+	// flight shares the fetches in progress. reset replaces it, which
+	// detaches them.
+	flight *singleflight.Group
 	// nextSweep is when expired entries are next removed.
 	nextSweep time.Time
 	// gen counts resets. A fetch stores its result only if no reset
@@ -48,17 +52,8 @@ type cacheEntry struct {
 	expires time.Time
 }
 
-// flight is one fetch shared by every caller that asked for its key while
-// it ran. val and err are written before done is closed.
-type flight struct {
-	done chan struct{}
-	gen  uint64 // cache.gen when the fetch started
-	val  any
-	err  error
-}
-
 func newCache() *cache {
-	return &cache{entries: map[any]cacheEntry{}, flights: map[any]*flight{}}
+	return &cache{entries: map[any]cacheEntry{}, flight: new(singleflight.Group)}
 }
 
 // cached returns the value stored under key if it is younger than ttl.
@@ -69,10 +64,11 @@ func newCache() *cache {
 // A served value is at most ttl plus its fetch time old: ttl counts from
 // when the fetch finished.
 //
-// fetch runs in its own goroutine under ctx without its cancelation, so a
-// viewer that goes away does not fail the fetch for the others; fetch must
-// be bounded by its own timeouts. A caller whose ctx ends stops waiting and
-// gets ctx's error, while the fetch goes on and is stored for later callers.
+// fetch runs in its own goroutine (singleflight's DoChan) under ctx
+// without its cancelation, so a viewer that goes away does not fail the
+// fetch for the others; fetch must be bounded by its own timeouts. A
+// caller whose ctx ends stops waiting and gets ctx's error, while the
+// fetch goes on and is stored for later callers.
 //
 // The value is shared between callers, who must not modify it.
 func cached[T any](ctx context.Context, c *cache, key cacheKey[T], ttl time.Duration, fetch func(context.Context) (T, error)) (T, error) {
@@ -82,38 +78,38 @@ func cached[T any](ctx context.Context, c *cache, key cacheKey[T], ttl time.Dura
 		c.mu.Unlock()
 		return e.val.(T), nil
 	}
-	f, ok := c.flights[key]
-	if !ok {
-		f = &flight{done: make(chan struct{}), gen: c.gen}
-		c.flights[key] = f
-		fctx := context.WithoutCancel(ctx)
-		go c.fly(key, f, ttl, func() (any, error) { return fetch(fctx) })
-	}
+	flight := c.flight
 	c.mu.Unlock()
 
-	select {
-	case <-f.done:
-		if f.err != nil {
-			return zero, f.err
+	fctx := context.WithoutCancel(ctx)
+	// The type is part of the key: the same name with another T is
+	// another key.
+	ch := flight.DoChan(fmt.Sprintf("%T/%s", key, key), func() (any, error) {
+		c.mu.Lock()
+		gen := c.gen
+		c.mu.Unlock()
+		v, err := recovered(func() (T, error) { return fetch(fctx) })
+		if err == nil {
+			c.store(key, v, ttl, gen)
 		}
-		return f.val.(T), nil
+		return v, err
+	})
+	select {
+	case r := <-ch:
+		if r.Err != nil {
+			return zero, r.Err
+		}
+		return r.Val.(T), nil
 	case <-ctx.Done():
 		return zero, ctx.Err()
 	}
 }
 
-// fly runs the fetch of flight f, stores a successful result under key and
-// releases the waiters.
-func (c *cache) fly(key any, f *flight, ttl time.Duration, fetch func() (any, error)) {
-	defer close(f.done)
-	f.val, f.err = recovered(fetch)
-
+// store keeps v under key for ttl, unless a reset happened since gen.
+func (c *cache) store(key any, v any, ttl time.Duration, gen uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.flights[key] == f {
-		delete(c.flights, key)
-	}
-	if f.err != nil || f.gen != c.gen {
+	if gen != c.gen {
 		return
 	}
 	now := time.Now()
@@ -127,7 +123,7 @@ func (c *cache) fly(key any, f *flight, ttl time.Duration, fetch func() (any, er
 		}
 		c.nextSweep = now.Add(sweepInterval)
 	}
-	c.entries[key] = cacheEntry{val: f.val, expires: now.Add(ttl)}
+	c.entries[key] = cacheEntry{val: v, expires: now.Add(ttl)}
 }
 
 // reset drops every stored value and detaches the fetches in flight: they
@@ -139,7 +135,7 @@ func (c *cache) reset() {
 	defer c.mu.Unlock()
 	c.gen++
 	clear(c.entries)
-	clear(c.flights)
+	c.flight = new(singleflight.Group)
 }
 
 // recovered calls fn and returns a panic in it as an error, since nothing
