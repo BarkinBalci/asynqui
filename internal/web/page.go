@@ -162,14 +162,15 @@ func (d *deps) doc(r *http.Request) views.Doc {
 // layout builds the app shell for a page in section. crumbs after
 // "Overview" are passed in; the Overview crumb is always first.
 func (d *deps) layout(r *http.Request, a access, section components.Section, crumbs []components.Crumb) views.Layout {
-	return d.layoutWith(r, a, section, crumbs, d.visible(a.id), nil)
+	return d.layoutWith(r, a, section, crumbs, nil)
 }
 
-// layoutWith is layout with the visible connections given, and health
-// overrides for the sidebar (the Overview passes what its cards found, so
-// a connection whose Summary failed shows down in both places).
+// layoutWith is layout with health overrides for the sidebar (the Overview
+// passes what its cards found, so a connection whose Summary failed shows
+// down in both places).
 func (d *deps) layoutWith(r *http.Request, a access, section components.Section, crumbs []components.Crumb,
-	visible []visibleConn, health map[string]components.Health) views.Layout {
+	health map[string]components.Health) views.Layout {
+	visible := d.visibleOf(a)
 	side := components.Sidebar{
 		OverviewURL: d.url(),
 		Section:     section,
@@ -182,7 +183,7 @@ func (d *deps) layoutWith(r *http.Request, a access, section components.Section,
 		names = append(names, name)
 		h, ok := health[name]
 		if !ok {
-			h = healthView(c.Health().State)
+			h = healthView(c.health.State)
 		}
 		sc := components.SidebarConn{
 			Name:   name,

@@ -29,16 +29,6 @@ type Conn interface {
 	InfoSource
 }
 
-// lookup finds a connection by name.
-func lookup(src ConnectionSource, name string) (Conn, bool) {
-	for _, c := range src.Connections() {
-		if c.Name() == name {
-			return c, true
-		}
-	}
-	return nil, false
-}
-
 // isValkey reports whether c's backend was detected as Valkey.
 func isValkey(c Conn) bool {
 	b, _ := c.Backend()

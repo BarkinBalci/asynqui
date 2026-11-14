@@ -48,6 +48,8 @@ type fakeConns struct {
 	historyBlock map[string]bool
 	// historyAsked records the queue and days of each History call.
 	historyAsked []string
+	// onQueues runs at each Queues read, outside the lock.
+	onQueues func()
 	// actErrs fails actions on a queue; acted records "verb conn/queue".
 	actErrs map[string]error
 	acted   []string
@@ -61,8 +63,11 @@ type fakeConns struct {
 func (c fakeConn) Queues(ctx context.Context) ([]conn.Queue, error) {
 	f, name := c.f, c.name
 	f.mu.Lock()
-	block, err, qs := f.block[name], f.queueErrs[name], f.queues[name]
+	block, err, qs, hook := f.block[name], f.queueErrs[name], f.queues[name], f.onQueues
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	if block {
 		<-ctx.Done()
 		return nil, ctx.Err()

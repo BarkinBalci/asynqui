@@ -61,14 +61,13 @@ func handleRecheck(d *deps) http.Handler {
 // overview builds the Overview model: the cards, and a layout whose sidebar
 // shows the health the cards found.
 func (d *deps) overview(r *http.Request, a access) pages.Overview {
-	visible := d.visible(a.id)
-	cards := d.cards(r.Context(), visible)
+	cards := d.cards(r.Context(), d.visibleOf(a))
 	health := make(map[string]components.Health, len(cards))
 	for _, c := range cards {
 		health[c.Name] = c.Health
 	}
 	return pages.Overview{
-		Layout:  d.layoutWith(r, a, components.SectionOverview, nil, visible, health),
+		Layout:  d.layoutWith(r, a, components.SectionOverview, nil, health),
 		Cards:   cards,
 		PollURL: d.url(),
 	}
@@ -84,7 +83,7 @@ func (d *deps) cards(ctx context.Context, conns []visibleConn) []components.Conn
 	out := make([]components.ConnCard, len(conns))
 	var wg sync.WaitGroup
 	for i, c := range conns {
-		name, health := c.Name(), c.Health()
+		name, health := c.Name(), c.health
 		out[i] = components.ConnCard{
 			Name:       name,
 			Addr:       c.Addr(),

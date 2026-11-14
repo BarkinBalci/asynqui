@@ -164,7 +164,7 @@ func (d *deps) queuesModel(r *http.Request, a access, v queuesView, ans answer) 
 	m := pages.Queues{
 		Layout:  d.liveLayout(r, a, components.SectionQueues, rd),
 		Addr:    a.conn.Addr(),
-		Health:  healthView(a.conn.Health().State),
+		Health:  healthView(a.health.State),
 		FormURL: d.url("c", name, "queues", "pause"),
 	}
 	if rd.down {

@@ -488,6 +488,23 @@ func TestQueueActions(t *testing.T) {
 	})
 }
 
+// TestHealthReadOnce: a page reads each connection's health once, so a
+// check that lands while the page reads its data does not show the
+// connection down next to that data.
+func TestHealthReadOnce(t *testing.T) {
+	conns := defaultConns()
+	conns.onQueues = func() {
+		conns.mu.Lock()
+		defer conns.mu.Unlock()
+		conns.conns[0].Health = conn.Health{State: conn.StateDown, Err: errors.New("dial tcp: i/o timeout")}
+	}
+	h, _ := newTestServer(t, testOpts{conns: conns})
+	doc := parse(t, do(t, h, request{path: "/c/main"}))
+	if text(doc.Find("#conn-health")) == "Unreachable" || doc.Find("#nav-main .dot-down").Length() != 0 || len(rowNames(doc)) != 4 {
+		t.Errorf("badge %q, sidebar down %d, rows %d", text(doc.Find("#conn-health")), doc.Find("#nav-main .dot-down").Length(), len(rowNames(doc)))
+	}
+}
+
 // TestQueuesUnavailable has the Connection page's own cases; see
 // TestInfraUnavailable for the ones every connection page shares.
 func TestQueuesUnavailable(t *testing.T) {

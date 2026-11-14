@@ -67,8 +67,8 @@ func (d *deps) pageContext(ctx context.Context) (context.Context, context.Cancel
 // goes on in conn's cache, so the next poll usually has it.
 func readLive[T any](ctx context.Context, a access, fetch func(ctx context.Context) (T, error)) (T, liveRead) {
 	var zero T
-	if h := a.conn.Health(); h.State == conn.StateDown {
-		return zero, liveRead{state: pages.DataFailed, err: errText(h.Err), unreachable: true}
+	if a.health.State == conn.StateDown {
+		return zero, liveRead{state: pages.DataFailed, err: errText(a.health.Err), unreachable: true}
 	}
 	v, err := fetch(ctx)
 	switch {
@@ -129,7 +129,7 @@ func (d *deps) liveLayout(r *http.Request, a access, section components.Section,
 		health = map[string]components.Health{a.conn.Name(): components.HealthDown}
 	}
 	all := append([]components.Crumb{{Text: a.conn.Name(), URL: d.url("c", a.conn.Name())}}, crumbs...)
-	return d.layoutWith(r, a, section, all, d.visible(a.id), health)
+	return d.layoutWith(r, a, section, all, health)
 }
 
 // sectionCrumb is the breadcrumb of a connection's section page.
