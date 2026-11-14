@@ -72,6 +72,16 @@ func TestTimes(t *testing.T) {
 	if render(t, TimeOrDash(at)).Find("time").Length() != 1 {
 		t.Error("TimeOrDash without a time")
 	}
+	doc := render(t, TimeWithRel(at, "in 6h 00m"))
+	if got := doc.Find("body").Text(); got != "Nov 8, 00:11:52 (in 6h 00m)" {
+		t.Errorf("TimeWithRel text = %q", got)
+	}
+	if abs := doc.Find("time").First(); abs.AttrOr("data-format", "") != "absolute" || abs.AttrOr("datetime", "") != "2026-11-08T00:11:52Z" {
+		t.Errorf("TimeWithRel absolute time = %v", abs.Nodes)
+	}
+	if rel := doc.Find(".rel time"); rel.AttrOr("datetime", "") != "2026-11-08T00:11:52Z" || rel.AttrOr("data-format", "") != "" {
+		t.Errorf("TimeWithRel relative time = %v", rel.Nodes)
+	}
 }
 
 func TestCrumbMono(t *testing.T) {

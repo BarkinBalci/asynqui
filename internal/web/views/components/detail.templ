@@ -64,6 +64,15 @@ templ TimeAbs(t time.Time) {
 	<time datetime={ format.TimeAttr(t) } data-format="absolute">{ format.TimeText(t) }</time>
 }
 
+// TimeWithRel is an absolute time, as TimeAbs, followed by the muted
+// relative time in parentheses, "Nov 9, 06:00:00 (in 5h 45m)". rel is
+// the relative text before app.js rewrites it. Each part stays on one
+// line, so a narrow column wraps between them.
+templ TimeWithRel(t time.Time, rel string) {
+	<time datetime={ format.TimeAttr(t) } data-format="absolute">{ format.TimeText(t) }</time>
+	<span class="muted rel">(<time datetime={ format.TimeAttr(t) }>{ rel }</time>)</span>
+}
+
 // TimeOrDash is Time, or "—" for the zero time.
 templ TimeOrDash(t time.Time) {
 	if t.IsZero() {

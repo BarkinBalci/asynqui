@@ -675,7 +675,6 @@ html:not(.js) .js-only{display:none}
 .raw-card pre{max-height:300px}
 .c-type{font-weight:500}
 .c-payload{color:var(--text-2)}
-.run-rel{margin-left:4px;font-weight:400}
 .pager{display:inline-flex;align-items:center;gap:6px;font-size:13px}
 .pager .muted{margin-right:4px}
 .pager-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:1px solid var(--control-border);border-radius:var(--radius);color:var(--text-2);font-size:16px;line-height:1}
@@ -687,7 +686,8 @@ span.pager-btn{opacity:.45}
 .info-v{font-size:18px;font-weight:700;letter-spacing:-0.01em;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .info-v.info-mono{font-size:16px}
 .info-n{color:var(--muted);font-size:12px}
-.dl .rel{font-weight:400}
+.rel{font-weight:400;white-space:nowrap}
+.dl time[data-format="absolute"]{white-space:nowrap}
 .headers{margin:0;padding:0;list-style:none}
 .dlg-id{overflow-wrap:anywhere}
 

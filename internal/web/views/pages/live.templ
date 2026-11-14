@@ -189,8 +189,6 @@ templ runTime(t, now time.Time) {
 	if t.IsZero() {
 		<span class="muted">—</span>
 	} else {
-		@components.TimeAbs(t)
-		{ " " }
-		<span class="muted run-rel">(<time datetime={ format.TimeAttr(t) }>{ format.Relative(t, now) }</time>)</span>
+		@components.TimeWithRel(t, format.Relative(t, now))
 	}
 }

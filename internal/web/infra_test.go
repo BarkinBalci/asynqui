@@ -557,7 +557,7 @@ func TestSchedulerEntryPage(t *testing.T) {
 	if diff := cmp.Diff(wantDetails, details); diff != "" {
 		t.Errorf("details (-want +got):\n%s", diff)
 	}
-	if v := doc.Find("#entry-details .run-rel time").First().AttrOr("datetime", ""); v != "2026-11-08T06:41:52Z" {
+	if v := doc.Find("#entry-details .rel time").First().AttrOr("datetime", ""); v != "2026-11-08T06:41:52Z" {
 		t.Errorf("relative time datetime = %q", v)
 	}
 	if href, _ := doc.Find("#entry-queue").Attr("href"); href != "/c/main/queues/reports" {
