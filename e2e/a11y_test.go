@@ -42,9 +42,8 @@ type axeResult struct {
 	} `json:"violations"`
 }
 
-// Every page, in the light and the dark theme, has no serious or critical
-// axe-core violation (WCAG 2.2 A/AA rules and best practices). Lesser
-// ones are logged.
+// Every page, in the light and the dark theme, has no axe-core violation
+// of any impact (WCAG 2.2 A/AA rules and best practices).
 func testAccessibility(t *testing.T, h *harness) {
 	src, err := os.ReadFile(axeFile)
 	if err != nil {
@@ -73,13 +72,9 @@ func testAccessibility(t *testing.T, h *harness) {
 					where = append(where, string(b))
 				}
 				msg := pg.name + " (" + theme + "): " + v.Impact + " " + v.ID + ": " + v.Help + " at " + strings.Join(where, ", ")
-				if v.Impact == "serious" || v.Impact == "critical" {
-					t.Error(msg)
-					for _, n := range v.Nodes {
-						t.Logf("    %s", n.HTML)
-					}
-				} else {
-					t.Log(msg)
+				t.Error(msg)
+				for _, n := range v.Nodes {
+					t.Logf("    %s", n.HTML)
 				}
 			}
 		}

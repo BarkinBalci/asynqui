@@ -290,13 +290,15 @@ templ throughputCard(t Throughput, oob bool) {
 			<div class="cardhead">
 				<h2 class="card-title" id="tp-heading">Throughput</h2>
 				<div class="tp-controls">
-					<form id={ RangeFormID } class="seg" role="group" aria-label="Range" method="get" action={ templ.SafeURL(t.FormURL) } hx-get={ t.FormURL } hx-swap="none" hx-push-url="true">
+					<form id={ RangeFormID } method="get" action={ templ.SafeURL(t.FormURL) } hx-get={ t.FormURL } hx-swap="none" hx-push-url="true">
 						for _, p := range t.RangeHidden {
 							<input type="hidden" name={ p.Name } value={ p.Value }/>
 						}
-						for _, r := range t.Ranges {
-							<button id={ r.ID } type="submit" name="range" value={ r.Value } aria-pressed={ pressed(r.On) } { onClass(r.On)... }>{ format.Number(int64(r.Days)) }d</button>
-						}
+						<div class="seg" role="group" aria-label="Range">
+							for _, r := range t.Ranges {
+								<button id={ r.ID } type="submit" name="range" value={ r.Value } aria-pressed={ pressed(r.On) } { onClass(r.On)... }>{ format.Number(int64(r.Days)) }d</button>
+							}
+						</div>
 					</form>
 					<form id={ PickerFormID } class="tp-picker" method="get" action={ templ.SafeURL(t.FormURL) } hx-get={ t.FormURL } hx-trigger="change" hx-swap="none" hx-push-url="true">
 						for _, p := range t.PickerHidden {

@@ -671,7 +671,10 @@ func TestQueuesThroughput(t *testing.T) {
 			if got := text(card.Find("h2")); got != "Throughput" {
 				t.Errorf("title = %q", got)
 			}
-			rf := card.Find("form#tp-range.seg[role=group][aria-label=Range]")
+			rf := card.Find("form#tp-range")
+			if rf.Children().Filter(".seg[role=group][aria-label=Range]").Length() != 1 {
+				t.Errorf("range buttons are not in a labeled group")
+			}
 			for attr, want := range map[string]string{"method": "get", "action": "/c/main", "hx-get": "/c/main", "hx-swap": "none", "hx-push-url": "true"} {
 				if got, _ := rf.Attr(attr); got != want {
 					t.Errorf("range form %s = %q, want %q", attr, got, want)

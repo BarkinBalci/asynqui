@@ -24,19 +24,23 @@ templ TopBarView(m TopBar) {
 				Updated{ " " }
 				@TimeID(UpdatedID, m.UpdatedAt, false)
 			</span>
-			<form class="seg" method="post" action={ templ.SafeURL(m.PrefsURL) } data-pref="refresh" role="group" aria-label="Auto refresh">
+			<form method="post" action={ templ.SafeURL(m.PrefsURL) } data-pref="refresh">
 				<input type="hidden" name="next" value={ m.Next }/>
-				for _, r := range Refreshes() {
-					@segButton("refresh", r.Value(), r == m.Refresh, nil) {
-						@refreshLabel(r)
+				<div class="seg" role="group" aria-label="Auto refresh">
+					for _, r := range Refreshes() {
+						@segButton("refresh", r.Value(), r == m.Refresh, nil) {
+							@refreshLabel(r)
+						}
 					}
-				}
+				</div>
 			</form>
-			<form class="seg" method="post" action={ templ.SafeURL(m.PrefsURL) } data-pref="theme" role="group" aria-label="Theme">
+			<form method="post" action={ templ.SafeURL(m.PrefsURL) } data-pref="theme">
 				<input type="hidden" name="next" value={ m.Next }/>
-				for _, t := range Themes() {
-					@themeButton(t, t == m.Theme)
-				}
+				<div class="seg" role="group" aria-label="Theme">
+					for _, t := range Themes() {
+						@themeButton(t, t == m.Theme)
+					}
+				</div>
 			</form>
 			@AccountMenu(m.Account)
 		</div>

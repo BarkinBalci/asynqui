@@ -34,7 +34,7 @@ The harness flushes and seeds a Redis with asynq (a worker and a scheduler inclu
    go test -tags e2e ./e2e -run 'TestBrowser/FindTask' -v   # one test
    ```
 
-The axe-core build is vendored in `e2e/testdata` (never fetched at run time); to upgrade it, replace the directory with the new release's `axe.min.js` and `LICENSE` and update the path in `e2e/a11y_test.go`. The accessibility check fails on serious and critical violations and logs the rest (`-v`).
+The axe-core build is vendored in `e2e/testdata` (never fetched at run time); to upgrade it, replace the directory with the new release's `axe.min.js` and `LICENSE` and update the path in `e2e/a11y_test.go`. The accessibility check fails on any violation, minor ones included.
 
 ## Releases
 

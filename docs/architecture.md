@@ -277,7 +277,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
    - a sort or a picker during a poll, selection and focus across polls, the Delete rule
    - "select all N" then Delete all, none on Active, the Archive warning, Find task
    - copy, local times, login and a viewer's disabled actions, the account menu
-   - an axe-core check per page in both themes (vendored axe-core; fails on serious and critical), and no console error or CSP violation on any page
+   - an axe-core check per page in both themes (vendored axe-core; fails on any violation), and no console error or CSP violation on any page
 
 Other conventions:
 - **No mock frameworks.** Use small hand-written fakes for error paths and a fake OIDC provider built on `httptest.Server`.
