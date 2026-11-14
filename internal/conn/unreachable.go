@@ -18,8 +18,7 @@ func Unreachable(err error) bool {
 	if err == nil {
 		return false
 	}
-	var reply redis.Error
-	if errors.As(err, &reply) {
+	if _, ok := errors.AsType[redis.Error](err); ok {
 		return false
 	}
 	var ne net.Error

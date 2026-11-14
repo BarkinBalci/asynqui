@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"slices"
 
 	"github.com/BarkinBalci/asynqui/internal/conn"
 )
@@ -67,12 +68,7 @@ func allowsAll(s conn.TaskState, verb conn.TaskVerb) bool {
 	if s == conn.TaskActive {
 		return false
 	}
-	for _, v := range tabVerbs(s) {
-		if v == verb {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(tabVerbs(s), verb)
 }
 
 // sortable reports whether the state's table sorts by its time column:

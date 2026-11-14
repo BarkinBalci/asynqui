@@ -1,8 +1,8 @@
 module github.com/BarkinBalci/asynqui/tools
 
-go 1.26.4
+go 1.27.0
 
-toolchain go1.26.10
+toolchain go1.27.3
 
 tool (
 	github.com/a-h/templ/cmd/templ

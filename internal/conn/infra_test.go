@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -365,10 +366,8 @@ func (f *fakeSchedulers) GetTaskInfo(queue, id string) (*asynq.TaskInfo, error) 
 	if !ok {
 		return nil, fmt.Errorf("asynq: %w", asynq.ErrQueueNotFound)
 	}
-	for _, t := range ids {
-		if t == id {
-			return &asynq.TaskInfo{ID: id, Queue: queue}, nil
-		}
+	if slices.Contains(ids, id) {
+		return &asynq.TaskInfo{ID: id, Queue: queue}, nil
 	}
 	return nil, fmt.Errorf("asynq: %w", asynq.ErrTaskNotFound)
 }

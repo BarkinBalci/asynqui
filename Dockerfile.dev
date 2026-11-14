@@ -3,8 +3,8 @@
 #   task docker
 # Releases use Dockerfile, which copies GoReleaser's prebuilt binaries.
 
-# golang:1.26-trixie, multi-arch index.
-FROM --platform=$BUILDPLATFORM golang:1.26-trixie@sha256:19ce7a1fdc59527aa568805ea100c380900d059d251e914fb86e11fd0ce68952 AS build
+# golang:1.27.3-trixie, multi-arch index.
+FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev

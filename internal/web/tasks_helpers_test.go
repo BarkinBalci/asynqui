@@ -16,7 +16,7 @@ import (
 // TestTaskEnumsMatch pins the mapping web relies on: pages' task states
 // and verbs are conn's, in the same order.
 func TestTaskEnumsMatch(t *testing.T) {
-	qi := conn.QueueInfo{Queue: conn.Queue{Active: 1, Pending: 2, Scheduled: 4, Retry: 5, Archived: 6}, Aggregating: 3, Completed: 7}
+	qi := conn.QueueInfo{Active: 1, Pending: 2, Scheduled: 4, Retry: 5, Archived: 6, Aggregating: 3, Completed: 7}
 	want := map[string]int{"active": 1, "pending": 2, "aggregating": 3, "scheduled": 4, "retry": 5, "archived": 6, "completed": 7}
 	for _, s := range pages.TaskStates() {
 		if got := qi.Count(conn.TaskState(s)); got != want[pages.StateParam(s)] {

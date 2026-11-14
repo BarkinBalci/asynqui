@@ -86,12 +86,12 @@ const recordCSP = `document.addEventListener("securitypolicyviolation", function
 func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 	t.Helper()
 	opts := playwright.BrowserNewContextOptions{
-		BaseURL:     playwright.String(inst.url),
-		Locale:      playwright.String("en-US"),
+		BaseURL:     new(inst.url),
+		Locale:      new("en-US"),
 		Permissions: o.permissions,
 	}
 	if o.timezone != "" {
-		opts.TimezoneId = playwright.String(o.timezone)
+		opts.TimezoneId = new(o.timezone)
 	}
 	bctx, err := h.browser.NewContext(opts)
 	if err != nil {
@@ -101,13 +101,13 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 	if len(o.cookies) > 0 {
 		var cs []playwright.OptionalCookie
 		for k, v := range o.cookies {
-			cs = append(cs, playwright.OptionalCookie{Name: k, Value: v, URL: playwright.String(inst.url)})
+			cs = append(cs, playwright.OptionalCookie{Name: k, Value: v, URL: new(inst.url)})
 		}
 		if err := bctx.AddCookies(cs); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := bctx.AddInitScript(playwright.Script{Content: playwright.String(recordCSP)}); err != nil {
+	if err := bctx.AddInitScript(playwright.Script{Content: new(recordCSP)}); err != nil {
 		t.Fatal(err)
 	}
 	pg, err := bctx.NewPage()
