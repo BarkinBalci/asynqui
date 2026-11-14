@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -15,7 +13,6 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/authz"
 	"github.com/BarkinBalci/asynqui/internal/config"
 	"github.com/BarkinBalci/asynqui/internal/conn"
-	"github.com/BarkinBalci/asynqui/internal/web"
 )
 
 // closedAddr returns a local address nothing listens on.
@@ -30,64 +27,21 @@ func closedAddr(t *testing.T) string {
 	return addr
 }
 
-// TestRegistrySource drives the adapter against a registry whose Redis is
-// down, which needs no Redis: unknown until checked, then down with the
-// dial error; Summary fails.
+// TestRegistrySource lists the registry's connections, in config order,
+// as the connections themselves.
 func TestRegistrySource(t *testing.T) {
 	addr := closedAddr(t)
 	reg, err := conn.NewRegistry([]config.Connection{
 		{Name: "a", Addr: addr, DB: 2, DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second},
+		{Name: "b", Addr: addr, DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reg.Close() })
-	src := registrySource{reg: reg}
-
-	got := src.Connections()
-	if len(got) != 1 || got[0].Name != "a" || got[0].Addr != addr+"/2" || got[0].Health.State != web.HealthUnknown {
+	got := registrySource{reg: reg}.Connections()
+	if len(got) != 2 || got[0].Name() != "a" || got[0].Addr() != addr+"/2" || got[1].Name() != "b" {
 		t.Fatalf("Connections = %+v", got)
-	}
-	h := src.Recheck(t.Context(), "a")
-	if h.State != web.HealthDown || h.Err == nil || h.CheckedAt.IsZero() {
-		t.Fatalf("Recheck = %+v", h)
-	}
-	if c := src.Connections()[0]; c.Health.State != web.HealthDown {
-		t.Errorf("health not stored: %+v", c.Health)
-	}
-	if _, err := src.Summary(t.Context(), "a"); err == nil {
-		t.Error("Summary of a down connection succeeded")
-	}
-	if _, err := src.Summary(t.Context(), "nope"); !errors.Is(err, conn.ErrNotFound) {
-		t.Errorf("Summary(nope) = %v", err)
-	}
-	if h := src.Recheck(t.Context(), "nope"); h.State != web.HealthUnknown {
-		t.Errorf("Recheck(nope) = %+v", h)
-	}
-
-	// A canceled check stores nothing; the cached health is returned.
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	if h := src.Recheck(ctx, "a"); h.State != web.HealthDown {
-		t.Errorf("canceled Recheck = %+v, want the cached down", h)
-	}
-}
-
-func TestWebHealth(t *testing.T) {
-	at := time.Unix(100, 0)
-	boom := errors.New("boom")
-	tests := []struct {
-		in   conn.Health
-		want web.Health
-	}{
-		{conn.Health{}, web.Health{State: web.HealthUnknown}},
-		{conn.Health{State: conn.StateUp, CheckedAt: at, Latency: time.Millisecond}, web.Health{State: web.HealthUp, CheckedAt: at}},
-		{conn.Health{State: conn.StateDown, Err: boom, CheckedAt: at}, web.Health{State: web.HealthDown, Err: boom, CheckedAt: at}},
-	}
-	for _, tt := range tests {
-		if diff := cmp.Diff(tt.want, webHealth(tt.in), cmp.Comparer(func(a, b error) bool { return errors.Is(a, b) && errors.Is(b, a) })); diff != "" {
-			t.Errorf("webHealth(%+v) (-want +got):\n%s", tt.in, diff)
-		}
 	}
 }
 

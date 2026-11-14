@@ -7,14 +7,16 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
 // fakeTasks backs fakeConns' TaskSource methods: the tasks of every queue
 // of "main", in list order.
 type fakeTasks struct {
 	mu     sync.Mutex
-	tasks  []Task
-	groups map[string][]Group
+	tasks  []conn.Task
+	groups map[string][]conn.Group
 	// block makes the reads wait until ctx ends.
 	block bool
 	// readErr fails the reads; actErr fails actions on a task ID ("" for
@@ -31,36 +33,36 @@ const uuidTask = "c3e81b90-04aa-4f1e-9d27-6b52e0c8a113"
 
 func defaultTasks() *fakeTasks {
 	now := fixedNow()
-	var ts []Task
+	var ts []conn.Task
 	for i := range 25 {
-		ts = append(ts, Task{ID: fmt.Sprintf("p%02d", i), Queue: "default", Type: "email:welcome", State: TaskPending,
+		ts = append(ts, conn.Task{ID: fmt.Sprintf("p%02d", i), Queue: "default", Type: "email:welcome", State: conn.TaskPending,
 			Payload: []byte(fmt.Sprintf(`{"user_id":%d}`, i)), MaxRetry: 25})
 	}
 	ts = append(ts,
-		Task{ID: "a0", Queue: "default", Type: "email:digest", State: TaskActive, Started: now.Add(-4 * time.Second), Payload: []byte("\x00bin\xff")},
-		Task{ID: "a1", Queue: "default", Type: "email:digest", State: TaskActive, IsOrphaned: true},
-		Task{ID: "s0", Queue: "default", Type: "report", State: TaskScheduled, NextProcessAt: now.Add(45 * time.Minute)},
-		Task{ID: "s1", Queue: "default", Type: "report", State: TaskScheduled, NextProcessAt: now.Add(2 * time.Hour)},
-		Task{ID: uuidTask, Queue: "default", Type: "email:receipt", State: TaskRetry, Retried: 3, MaxRetry: 25,
+		conn.Task{ID: "a0", Queue: "default", Type: "email:digest", State: conn.TaskActive, Started: now.Add(-4 * time.Second), Payload: []byte("\x00bin\xff")},
+		conn.Task{ID: "a1", Queue: "default", Type: "email:digest", State: conn.TaskActive, IsOrphaned: true},
+		conn.Task{ID: "s0", Queue: "default", Type: "report", State: conn.TaskScheduled, NextProcessAt: now.Add(45 * time.Minute)},
+		conn.Task{ID: "s1", Queue: "default", Type: "report", State: conn.TaskScheduled, NextProcessAt: now.Add(2 * time.Hour)},
+		conn.Task{ID: uuidTask, Queue: "default", Type: "email:receipt", State: conn.TaskRetry, Retried: 3, MaxRetry: 25,
 			Payload: []byte(`{"order_id":"ORD-88213","amount":4200}`), Headers: map[string]string{"trace": "t-1", "a": "b"},
 			LastErr: "smtp: 450 mailbox unavailable", LastFailedAt: now.Add(-time.Minute), NextProcessAt: now.Add(160 * time.Second),
 			Timeout: 30 * time.Second},
-		Task{ID: "x0", Queue: "default", Type: "email:receipt", State: TaskArchived, Retried: 25, MaxRetry: 25,
+		conn.Task{ID: "x0", Queue: "default", Type: "email:receipt", State: conn.TaskArchived, Retried: 25, MaxRetry: 25,
 			LastErr: "context deadline exceeded", LastFailedAt: now.Add(-time.Hour), Payload: []byte("<script>alert(1)</script>")},
-		Task{ID: "c0", Queue: "default", Type: "email:welcome", State: TaskCompleted, CompletedAt: now.Add(-time.Minute),
+		conn.Task{ID: "c0", Queue: "default", Type: "email:welcome", State: conn.TaskCompleted, CompletedAt: now.Add(-time.Minute),
 			Retention: 24 * time.Hour, Result: []byte(`{"sent":true}`)},
-		Task{ID: "low-1", Queue: "low", Type: "cleanup", State: TaskPending},
+		conn.Task{ID: "low-1", Queue: "low", Type: "cleanup", State: conn.TaskPending},
 	)
 	for i := range 4 {
-		ts = append(ts, Task{ID: fmt.Sprintf("g1-%d", i), Queue: "default", Type: "batch", State: TaskAggregating, Group: "g1"})
+		ts = append(ts, conn.Task{ID: fmt.Sprintf("g1-%d", i), Queue: "default", Type: "batch", State: conn.TaskAggregating, Group: "g1"})
 	}
-	return &fakeTasks{tasks: ts, groups: map[string][]Group{"default": {{Name: "g1", Size: 4}}}, actErr: map[string]error{}}
+	return &fakeTasks{tasks: ts, groups: map[string][]conn.Group{"default": {{Name: "g1", Size: 4}}}, actErr: map[string]error{}}
 }
 
 func (f *fakeConns) queueExists(name, queue string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.ContainsFunc(f.queues[name], func(q Queue) bool { return q.Name == queue })
+	return slices.ContainsFunc(f.queues[name], func(q conn.Queue) bool { return q.Name == queue })
 }
 
 func (f *fakeConns) read(ctx context.Context, name, queue string) error {
@@ -76,17 +78,18 @@ func (f *fakeConns) read(ctx context.Context, name, queue string) error {
 		return err
 	}
 	if !f.queueExists(name, queue) {
-		return fmt.Errorf("%w: %q", ErrQueueNotFound, queue)
+		return fmt.Errorf("%w: %q", conn.ErrQueueNotFound, queue)
 	}
 	return nil
 }
 
-func (f *fakeConns) QueueInfo(ctx context.Context, name, queue string) (QueueInfo, error) {
+func (c fakeConn) QueueInfo(ctx context.Context, queue string) (conn.QueueInfo, error) {
+	f, name := c.f, c.name
 	if err := f.read(ctx, name, queue); err != nil {
-		return QueueInfo{}, err
+		return conn.QueueInfo{}, err
 	}
 	f.mu.Lock()
-	var qi QueueInfo
+	var qi conn.QueueInfo
 	for _, q := range f.queues[name] {
 		if q.Name == queue {
 			qi.Queue = q
@@ -102,17 +105,17 @@ func (f *fakeConns) QueueInfo(ctx context.Context, name, queue string) (QueueInf
 			continue
 		}
 		switch task.State {
-		case TaskPending:
+		case conn.TaskPending:
 			qi.Pending++
-		case TaskActive:
+		case conn.TaskActive:
 			qi.Active++
-		case TaskScheduled:
+		case conn.TaskScheduled:
 			qi.Scheduled++
-		case TaskRetry:
+		case conn.TaskRetry:
 			qi.Retry++
-		case TaskArchived:
+		case conn.TaskArchived:
 			qi.Archived++
-		case TaskCompleted:
+		case conn.TaskCompleted:
 			qi.Completed++
 		}
 	}
@@ -124,22 +127,24 @@ func (f *fakeConns) QueueInfo(ctx context.Context, name, queue string) (QueueInf
 
 // Tasks pages over the state's tasks in list order (oldest first), or
 // reversed with desc.
-func (f *fakeConns) Tasks(ctx context.Context, name, queue string, state TaskState, page, size int, desc bool) ([]Task, error) {
-	return f.page(ctx, name, queue, page, size, desc, func(t Task) bool { return t.State == state })
+func (c fakeConn) ListTasks(ctx context.Context, queue string, state conn.TaskState, page, size int, desc bool) ([]conn.Task, error) {
+	f, name := c.f, c.name
+	return f.page(ctx, name, queue, page, size, desc, func(t conn.Task) bool { return t.State == state })
 }
 
-func (f *fakeConns) GroupTasks(ctx context.Context, name, queue, group string, page, size int) ([]Task, error) {
-	return f.page(ctx, name, queue, page, size, false, func(t Task) bool { return t.State == TaskAggregating && t.Group == group })
+func (c fakeConn) ListGroupTasks(ctx context.Context, queue, group string, page, size int) ([]conn.Task, error) {
+	f, name := c.f, c.name
+	return f.page(ctx, name, queue, page, size, false, func(t conn.Task) bool { return t.State == conn.TaskAggregating && t.Group == group })
 }
 
-func (f *fakeConns) page(ctx context.Context, name, queue string, page, size int, desc bool, keep func(Task) bool) ([]Task, error) {
+func (f *fakeConns) page(ctx context.Context, name, queue string, page, size int, desc bool, keep func(conn.Task) bool) ([]conn.Task, error) {
 	if err := f.read(ctx, name, queue); err != nil {
 		return nil, err
 	}
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	var all []Task
+	var all []conn.Task
 	for _, task := range t.tasks {
 		if task.Queue == queue && keep(task) {
 			all = append(all, task)
@@ -155,7 +160,8 @@ func (f *fakeConns) page(ctx context.Context, name, queue string, page, size int
 	return all[start:min(start+size, len(all))], nil
 }
 
-func (f *fakeConns) Groups(ctx context.Context, name, queue string) ([]Group, error) {
+func (c fakeConn) Groups(ctx context.Context, queue string) ([]conn.Group, error) {
+	f, name := c.f, c.name
 	if err := f.read(ctx, name, queue); err != nil {
 		return nil, err
 	}
@@ -164,9 +170,10 @@ func (f *fakeConns) Groups(ctx context.Context, name, queue string) ([]Group, er
 	return f.tasks.groups[queue], nil
 }
 
-func (f *fakeConns) Task(ctx context.Context, name, queue, id string) (Task, error) {
+func (c fakeConn) Task(ctx context.Context, queue, id string) (conn.Task, error) {
+	f, name := c.f, c.name
 	if err := f.read(ctx, name, queue); err != nil {
-		return Task{}, err
+		return conn.Task{}, err
 	}
 	f.tasks.mu.Lock()
 	defer f.tasks.mu.Unlock()
@@ -175,10 +182,10 @@ func (f *fakeConns) Task(ctx context.Context, name, queue, id string) (Task, err
 			return task, nil
 		}
 	}
-	return Task{}, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	return conn.Task{}, fmt.Errorf("%w: %s", conn.ErrTaskNotFound, id)
 }
 
-func (f *fakeConns) TaskAction(_ context.Context, _, queue string, verb TaskVerb, id string) error {
+func (f *fakeConns) taskAction(queue string, verb TaskVerb, id string) error {
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -190,27 +197,27 @@ func (f *fakeConns) TaskAction(_ context.Context, _, queue string, verb TaskVerb
 		if task.Queue != queue || task.ID != id {
 			continue
 		}
-		if task.State == TaskActive && verb != TaskCancel {
+		if task.State == conn.TaskActive && verb != TaskCancel {
 			return errors.New("asynq: task is already running")
 		}
 		switch verb {
 		case TaskRun:
-			t.tasks[i].State = TaskPending
+			t.tasks[i].State = conn.TaskPending
 		case TaskArchive:
-			t.tasks[i].State = TaskArchived
+			t.tasks[i].State = conn.TaskArchived
 		case TaskDelete:
 			t.tasks = slices.Delete(t.tasks, i, i+1)
 		case TaskCancel:
-			if task.State != TaskActive {
+			if task.State != conn.TaskActive {
 				return errors.New("conn: action does not apply to the task state")
 			}
 		}
 		return nil
 	}
-	return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	return fmt.Errorf("%w: %s", conn.ErrTaskNotFound, id)
 }
 
-func (f *fakeConns) TaskActionAll(_ context.Context, _, queue string, verb TaskVerb, state TaskState) (int, error) {
+func (f *fakeConns) allAction(queue string, verb TaskVerb, state conn.TaskState) (int, error) {
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -225,9 +232,9 @@ func (f *fakeConns) TaskActionAll(_ context.Context, _, queue string, verb TaskV
 			n++
 			switch verb {
 			case TaskRun:
-				task.State = TaskPending
+				task.State = conn.TaskPending
 			case TaskArchive:
-				task.State = TaskArchived
+				task.State = conn.TaskArchived
 			case TaskDelete:
 				continue
 			}
@@ -238,7 +245,7 @@ func (f *fakeConns) TaskActionAll(_ context.Context, _, queue string, verb TaskV
 	return n, nil
 }
 
-func (f *fakeConns) GroupActionAll(_ context.Context, _, queue string, verb TaskVerb, group string) (int, error) {
+func (f *fakeConns) groupAction(queue string, verb TaskVerb, group string) (int, error) {
 	t := f.tasks
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -249,13 +256,13 @@ func (f *fakeConns) GroupActionAll(_ context.Context, _, queue string, verb Task
 	n := 0
 	kept := t.tasks[:0]
 	for _, task := range t.tasks {
-		if task.Queue == queue && task.State == TaskAggregating && task.Group == group {
+		if task.Queue == queue && task.State == conn.TaskAggregating && task.Group == group {
 			n++
 			switch verb {
 			case TaskRun:
-				task.State = TaskPending
+				task.State = conn.TaskPending
 			case TaskArchive:
-				task.State = TaskArchived
+				task.State = conn.TaskArchived
 			case TaskDelete:
 				continue
 			}
@@ -270,6 +277,46 @@ func (f *fakeConns) GroupActionAll(_ context.Context, _, queue string, verb Task
 		}
 	}
 	return n, nil
+}
+
+func (c fakeConn) RunTask(_ context.Context, q, id string) error {
+	return c.f.taskAction(q, TaskRun, id)
+}
+
+func (c fakeConn) ArchiveTask(_ context.Context, q, id string) error {
+	return c.f.taskAction(q, TaskArchive, id)
+}
+
+func (c fakeConn) DeleteTask(_ context.Context, q, id string) error {
+	return c.f.taskAction(q, TaskDelete, id)
+}
+
+func (c fakeConn) CancelTask(_ context.Context, q, id string) error {
+	return c.f.taskAction(q, TaskCancel, id)
+}
+
+func (c fakeConn) RunAllTasks(_ context.Context, q string, s conn.TaskState) (int, error) {
+	return c.f.allAction(q, TaskRun, s)
+}
+
+func (c fakeConn) ArchiveAllTasks(_ context.Context, q string, s conn.TaskState) (int, error) {
+	return c.f.allAction(q, TaskArchive, s)
+}
+
+func (c fakeConn) DeleteAllTasks(_ context.Context, q string, s conn.TaskState) (int, error) {
+	return c.f.allAction(q, TaskDelete, s)
+}
+
+func (c fakeConn) RunAllGroupTasks(_ context.Context, q, g string) (int, error) {
+	return c.f.groupAction(q, TaskRun, g)
+}
+
+func (c fakeConn) ArchiveAllGroupTasks(_ context.Context, q, g string) (int, error) {
+	return c.f.groupAction(q, TaskArchive, g)
+}
+
+func (c fakeConn) DeleteAllGroupTasks(_ context.Context, q, g string) (int, error) {
+	return c.f.groupAction(q, TaskDelete, g)
 }
 
 func (f *fakeConns) taskActions() []string {

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/format"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
@@ -73,7 +74,7 @@ func handleTask(d *deps) http.Handler {
 		if m.NotFound {
 			status = http.StatusNotFound
 		}
-		if f, ok := d.takeFlash(w, r, a.conn.Name); ok {
+		if f, ok := d.takeFlash(w, r, a.conn.Name()); ok {
 			m.Layout.Toasts = pages.FlashToasts(f)
 		}
 		d.render(w, r, status, pages.TaskPage(m))
@@ -82,31 +83,31 @@ func handleTask(d *deps) http.Handler {
 
 // taskModel reads the task within the page budget and builds the page.
 func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView, ans taskAnswer) pages.Task {
-	name := a.conn.Name
+	name, health := a.conn.Name(), a.conn.Health()
 	m := pages.Task{Queue: queue, ID: id, Poll: ans.poll, Init: ans.init}
 	var (
-		t      Task
-		health map[string]components.Health
+		t        conn.Task
+		override map[string]components.Health
 	)
-	switch a.conn.Health.State {
-	case HealthDown:
-		m.State, m.Error, m.Down = pages.DataFailed, errText(a.conn.Health.Err), true
+	switch health.State {
+	case conn.StateDown:
+		m.State, m.Error, m.Down = pages.DataFailed, errText(health.Err), true
 	default:
 		ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
 		defer cancel()
 		var err error
-		t, err = d.conns.Task(ctx, name, queue, id)
+		t, err = a.conn.Task(ctx, queue, id)
 		switch {
-		case errors.Is(err, ErrTaskNotFound), errors.Is(err, ErrQueueNotFound):
+		case errors.Is(err, conn.ErrTaskNotFound), errors.Is(err, conn.ErrQueueNotFound):
 			m.NotFound = true
 		case err != nil && ctx.Err() != nil:
 			m.State = pages.DataChecking
 		case err != nil:
 			// Only a server that cannot be reached is down; an error
 			// reply (NOPERM, LOADING) shows as itself.
-			m.State, m.Error, m.Down = pages.DataFailed, errText(err), errors.Is(err, ErrUnreachable)
+			m.State, m.Error, m.Down = pages.DataFailed, errText(err), conn.Unreachable(err)
 			if m.Down {
-				health = map[string]components.Health{name: components.HealthDown}
+				override = map[string]components.Health{name: components.HealthDown}
 			}
 		}
 	}
@@ -116,7 +117,7 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 	crumbs := []components.Crumb{{Text: name, URL: d.url("c", name)}, {Text: queue, URL: queueURL}}
 	if m.State == pages.DataReady && !m.NotFound {
 		tv := tabView(t.State, pageSizes()[0])
-		if t.State == TaskAggregating {
+		if t.State == conn.TaskAggregating {
 			tv.group = t.Group
 		}
 		tab := d.queueURL(name, queue, tv)
@@ -124,7 +125,7 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 		crumbs = append(crumbs, components.Crumb{Label: pages.StateName(pageState(t.State)), URL: tab})
 	}
 	crumbs = append(crumbs, components.Crumb{Text: format.ShortID(format.VisibleID(id)), Mono: true, Title: id})
-	m.Layout = d.layoutWith(r, a, components.SectionQueues, crumbs, d.visible(a.id), health)
+	m.Layout = d.layoutWith(r, a, components.SectionQueues, crumbs, d.visible(a.id), override)
 	m.QueueURL = queueURL
 
 	pq := v.values()
@@ -214,11 +215,11 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 func handleFindTask(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
-		name, queue := a.conn.Name, r.PathValue("queue")
+		name, queue := a.conn.Name(), r.PathValue("queue")
 		f := pages.Find{Action: d.url("c", name, "queues", queue, "find"), Queue: queue, ID: strings.TrimSpace(r.URL.Query().Get("id"))}
 		if f.ID != "" {
 			ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
-			_, err := d.conns.Task(ctx, name, queue, f.ID)
+			_, err := a.conn.Task(ctx, queue, f.ID)
 			cancel()
 			switch {
 			case err == nil:
@@ -231,10 +232,10 @@ func handleFindTask(d *deps) http.Handler {
 				}
 				http.Redirect(w, r, target, http.StatusSeeOther) //nolint:gosec // G710: built by d.url for this connection.
 				return
-			case errors.Is(err, ErrTaskNotFound), errors.Is(err, ErrQueueNotFound):
+			case errors.Is(err, conn.ErrTaskNotFound), errors.Is(err, conn.ErrQueueNotFound):
 				f.Missed = true
 			default:
-				f.Failed, f.Down = errText(err), errors.Is(err, ErrUnreachable)
+				f.Failed, f.Down = errText(err), conn.Unreachable(err)
 			}
 		}
 		if isFragment(r) {
@@ -256,7 +257,7 @@ type taskForm struct {
 	// aggregating tasks.
 	all     bool
 	groups  []string
-	state   TaskState
+	state   conn.TaskState
 	stateOK bool
 	confirm bool
 	// fromTask: posted by the Task page for its one task.
@@ -301,7 +302,7 @@ func parseTaskForm(r *http.Request) taskForm {
 func handleTaskAction(d *deps, verb TaskVerb) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
-		name, queue := a.conn.Name, r.PathValue("queue")
+		name, queue := a.conn.Name(), r.PathValue("queue")
 		r.Body = http.MaxBytesReader(w, r.Body, maxActionForm)
 		if err := r.ParseForm(); err != nil {
 			plainError(w, http.StatusBadRequest)
@@ -319,14 +320,14 @@ func handleTaskAction(d *deps, verb TaskVerb) http.Handler {
 				return
 			}
 		}
-		if !f.all || f.state != TaskAggregating {
+		if !f.all || f.state != conn.TaskAggregating {
 			f.groups = nil
 		}
 		back := d.queueURL(name, queue, f.queueView)
 		if f.fromTask {
 			back = d.taskURL(name, queue, f.ids[0], f.taskView)
 		}
-		if (!f.all && len(f.ids) == 0) || (f.all && f.state == TaskAggregating && len(f.groups) == 0) {
+		if (!f.all && len(f.ids) == 0) || (f.all && f.state == conn.TaskAggregating && len(f.groups) == 0) {
 			if isFragment(r) {
 				plainError(w, http.StatusBadRequest)
 				return
@@ -345,22 +346,22 @@ func handleTaskAction(d *deps, verb TaskVerb) http.Handler {
 
 		// A task deleted from its own page goes back to its tab: the state
 		// it is in now, not the one the page showed.
-		tabState, tabGroup := TaskPending, ""
+		tabState, tabGroup := conn.TaskPending, ""
 		if f.stateOK {
 			tabState = f.state
 		}
 		if f.fromTask && verb == TaskDelete {
 			ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
-			if t, err := d.conns.Task(ctx, name, queue, f.ids[0]); err == nil && t.State != 0 {
+			if t, err := a.conn.Task(ctx, queue, f.ids[0]); err == nil && t.State != 0 {
 				tabState, tabGroup = t.State, t.Group
 			}
 			cancel()
 		}
-		notice, failures := d.runTaskAction(r.Context(), name, queue, verb, f)
+		notice, failures := d.runTaskAction(r.Context(), a.conn, queue, verb, f)
 		switch {
 		case f.fromTask && verb == TaskDelete && len(failures) == 0:
 			tab := tabView(tabState, pageSizes()[0])
-			if tabState == TaskAggregating {
+			if tabState == conn.TaskAggregating {
 				tab.group = tabGroup
 			}
 			target := d.queueURL(name, queue, tab)
@@ -392,7 +393,7 @@ func handleTaskAction(d *deps, verb TaskVerb) http.Handler {
 // confirmTasks answers a delete or "all" action posted without JS with a
 // confirmation page that posts it again with confirm=1.
 func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, queue string, verb TaskVerb, f taskForm, back string) {
-	name := a.conn.Name
+	name := a.conn.Name()
 	m := pages.ConfirmTasks{
 		Verb:      pageVerb(verb),
 		IDs:       f.ids,
@@ -411,7 +412,7 @@ func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, qu
 	if f.all {
 		m.Hidden = append(m.Hidden, pages.Param{Name: "all", Value: "1"})
 		ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
-		if qi, err := d.conns.QueueInfo(ctx, name, queue); err == nil {
+		if qi, err := a.conn.QueueInfo(ctx, queue); err == nil {
 			m.Total = int64(qi.Count(f.state))
 		}
 		cancel()
@@ -436,25 +437,25 @@ func (d *deps) confirmTasks(w http.ResponseWriter, r *http.Request, a access, qu
 // runTaskAction applies verb to the selected tasks in turn, or to every
 // task of the state, and returns the notice (how many it acted on; nil
 // when it acted on none of several) and the failures.
-func (d *deps) runTaskAction(ctx context.Context, conn, queue string, verb TaskVerb, f taskForm) (*pages.TaskNotice, []pages.TaskFailure) {
+func (d *deps) runTaskAction(ctx context.Context, c Conn, queue string, verb TaskVerb, f taskForm) (*pages.TaskNotice, []pages.TaskFailure) {
 	pv := pageVerb(verb)
 	var failures []pages.TaskFailure
 	failGroup := func(id, group string, err error) {
 		tf := pages.TaskFailure{Verb: pv, ID: id, Group: group}
-		if errors.Is(err, ErrTaskNotFound) || errors.Is(err, ErrQueueNotFound) {
+		if errors.Is(err, conn.ErrTaskNotFound) || errors.Is(err, conn.ErrQueueNotFound) {
 			tf.NotFound = true
 		} else {
 			tf.Detail = errText(err)
-			d.logger.WarnContext(ctx, "task action failed", slog.String("conn", conn), slog.String("queue", queue),
+			d.logger.WarnContext(ctx, "task action failed", slog.String("conn", c.Name()), slog.String("queue", queue),
 				slog.String("task", id), slog.String("group", group), slog.String("verb", taskVerbName(verb)), slog.Any("error", err))
 		}
 		failures = append(failures, tf)
 	}
 	fail := func(id string, err error) { failGroup(id, "", err) }
-	if f.all && f.state == TaskAggregating {
+	if f.all && f.state == conn.TaskAggregating {
 		total, acted := 0, false
 		for _, g := range f.groups {
-			n, err := d.conns.GroupActionAll(ctx, conn, queue, verb, g)
+			n, err := groupAction(ctx, c, queue, verb, g)
 			total += n
 			if err != nil {
 				failGroup("", g, err)
@@ -470,7 +471,7 @@ func (d *deps) runTaskAction(ctx context.Context, conn, queue string, verb TaskV
 		return &pages.TaskNotice{Verb: pv, Count: int64(total)}, failures
 	}
 	if f.all {
-		n, err := d.conns.TaskActionAll(ctx, conn, queue, verb, f.state)
+		n, err := allAction(ctx, c, queue, verb, f.state)
 		if err != nil {
 			fail("", err)
 			if n == 0 {
@@ -481,7 +482,7 @@ func (d *deps) runTaskAction(ctx context.Context, conn, queue string, verb TaskV
 	}
 	done := 0
 	for _, id := range f.ids {
-		if err := d.conns.TaskAction(ctx, conn, queue, verb, id); err != nil {
+		if err := taskAction(ctx, c, queue, verb, id); err != nil {
 			fail(id, err)
 			continue
 		}
@@ -495,7 +496,7 @@ func (d *deps) runTaskAction(ctx context.Context, conn, queue string, verb TaskV
 
 // taskVersion is a short hash of what the Task page's polled cards show,
 // so a poll can tell whether the task changed since the page rendered.
-func taskVersion(t Task) string {
+func taskVersion(t conn.Task) string {
 	h := fnv.New64a()
 	w := func(parts ...string) {
 		for _, p := range parts {
@@ -524,11 +525,11 @@ func taskVersion(t Task) string {
 // archived task's is Retried+1, and a task run back to pending or
 // scheduled keeps the count it had: Retried+1 when its retries were used
 // up (it came from archived), Retried otherwise.
-func attempt(t Task) int {
+func attempt(t conn.Task) int {
 	switch {
-	case t.State == TaskRetry:
+	case t.State == conn.TaskRetry:
 		return max(t.Retried, 1)
-	case t.State == TaskArchived, t.Retried >= t.MaxRetry:
+	case t.State == conn.TaskArchived, t.Retried >= t.MaxRetry:
 		return t.Retried + 1
 	}
 	return max(t.Retried, 1)

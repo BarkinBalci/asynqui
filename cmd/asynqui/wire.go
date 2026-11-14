@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -89,142 +88,17 @@ func authOptions(cfg *config.Config, sessionGroups []string, logger *slog.Logger
 	return o, nil
 }
 
-// registrySource adapts the connection registry to the web layer's
-// ConnectionSource, which web declares as its consumer contract.
+// registrySource lists the registry's connections for web, which uses
+// each *conn.Conn through its own interfaces.
 type registrySource struct {
 	reg *conn.Registry
 }
 
-func (s registrySource) Connections() []web.Connection {
+func (s registrySource) Connections() []web.Conn {
 	all := s.reg.All()
-	out := make([]web.Connection, len(all))
+	out := make([]web.Conn, len(all))
 	for i, c := range all {
-		out[i] = web.Connection{Name: c.Name(), Addr: c.Addr(), Health: webHealth(c.Health()), Valkey: isValkey(c)}
-	}
-	return out
-}
-
-func (s registrySource) Summary(ctx context.Context, name string) (web.Summary, error) {
-	c, ok := s.reg.Get(name)
-	if !ok {
-		return web.Summary{}, conn.ErrNotFound
-	}
-	sum, err := c.Summary(ctx)
-	if err != nil {
-		return web.Summary{}, err
-	}
-	return web.Summary{
-		Queues:         sum.Queues,
-		Pending:        sum.Pending,
-		Active:         sum.Active,
-		Retry:          sum.Retry,
-		ProcessedToday: sum.ProcessedToday,
-		FailedToday:    sum.FailedToday,
-		OldestPending:  sum.OldestPending,
-	}, nil
-}
-
-func (s registrySource) Queues(ctx context.Context, name string) ([]web.Queue, error) {
-	c, ok := s.reg.Get(name)
-	if !ok {
-		return nil, conn.ErrNotFound
-	}
-	qs, err := c.Queues(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]web.Queue, len(qs))
-	for i, q := range qs {
-		out[i] = web.Queue{
-			Name:           q.Name,
-			Paused:         q.Paused,
-			Size:           q.Size,
-			Pending:        q.Pending,
-			Active:         q.Active,
-			Scheduled:      q.Scheduled,
-			Retry:          q.Retry,
-			Archived:       q.Archived,
-			ProcessedToday: q.ProcessedToday,
-			FailedToday:    q.FailedToday,
-			Latency:        q.Latency,
-			MemoryUsage:    q.MemoryUsage,
-		}
-	}
-	return out, nil
-}
-
-func (s registrySource) History(ctx context.Context, name, queue string, days int) ([]web.DailyStat, error) {
-	c, ok := s.reg.Get(name)
-	if !ok {
-		return nil, conn.ErrNotFound
-	}
-	stats, err := c.History(ctx, queue, days)
-	if err != nil {
-		return nil, webQueueErr(err)
-	}
-	out := make([]web.DailyStat, len(stats))
-	for i, st := range stats {
-		out[i] = web.DailyStat{Date: st.Date, Processed: st.Processed, Failed: st.Failed}
-	}
-	return out, nil
-}
-
-func (s registrySource) PauseQueue(ctx context.Context, name, queue string) error {
-	return s.act(ctx, name, queue, (*conn.Conn).PauseQueue)
-}
-
-func (s registrySource) ResumeQueue(ctx context.Context, name, queue string) error {
-	return s.act(ctx, name, queue, (*conn.Conn).UnpauseQueue)
-}
-
-func (s registrySource) DeleteQueue(ctx context.Context, name, queue string) error {
-	return s.act(ctx, name, queue, (*conn.Conn).DeleteQueue)
-}
-
-func (s registrySource) act(ctx context.Context, name, queue string, fn func(*conn.Conn, context.Context, string) error) error {
-	c, ok := s.reg.Get(name)
-	if !ok {
-		return conn.ErrNotFound
-	}
-	return webQueueErr(fn(c, ctx, queue))
-}
-
-// webQueueErr adds the web error a handler tests for to conn's typed
-// queue errors.
-func webQueueErr(err error) error {
-	switch {
-	case errors.Is(err, conn.ErrQueueNotFound):
-		return fmt.Errorf("%w: %w", web.ErrQueueNotFound, err)
-	case errors.Is(err, conn.ErrQueueNotEmpty):
-		return fmt.Errorf("%w: %w", web.ErrQueueNotEmpty, err)
-	}
-	return err
-}
-
-// Recheck runs a check now. When it does not finish (the request ended, or
-// the registry is closing) nothing was stored, and the health is the cached
-// one.
-func (s registrySource) Recheck(ctx context.Context, name string) web.Health {
-	c, ok := s.reg.Get(name)
-	if !ok {
-		return web.Health{}
-	}
-	h, err := c.Recheck(ctx)
-	if err != nil {
-		return webHealth(c.Health())
-	}
-	return webHealth(h)
-}
-
-func webHealth(h conn.Health) web.Health {
-	out := web.Health{Err: h.Err, CheckedAt: h.CheckedAt}
-	switch h.State {
-	case conn.StateUp:
-		out.State = web.HealthUp
-	case conn.StateDown:
-		out.State = web.HealthDown
-	default:
-		out.State = web.HealthUnknown
+		out[i] = c
 	}
 	return out
 }

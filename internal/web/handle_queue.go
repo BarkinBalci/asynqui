@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/BarkinBalci/asynqui/internal/authz"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
@@ -25,7 +26,7 @@ const maxPage = 1 << 20
 // ?state=&group=&dir=&page=&size=. Defaults are left out of generated
 // URLs.
 type queueView struct {
-	state TaskState
+	state conn.TaskState
 	// group is the aggregation group whose tasks the Aggregating tab
 	// lists; empty lists the groups.
 	group string
@@ -37,11 +38,11 @@ type queueView struct {
 }
 
 func defaultQueueView() queueView {
-	return queueView{state: TaskPending, page: 1, size: pageSizes()[0]}
+	return queueView{state: conn.TaskPending, page: 1, size: pageSizes()[0]}
 }
 
 // tabView is the first page of state s, in its default order.
-func tabView(s TaskState, size int) queueView {
+func tabView(s conn.TaskState, size int) queueView {
 	return queueView{state: s, desc: taskDefaultDesc(s), page: 1, size: size}
 }
 
@@ -61,7 +62,7 @@ func parseQueueView(q url.Values) queueView {
 			v.desc = true
 		}
 	}
-	if v.state == TaskAggregating {
+	if v.state == conn.TaskAggregating {
 		v.group = q.Get("group")
 	}
 	if n, err := strconv.Atoi(q.Get("page")); err == nil && n > 1 {
@@ -75,10 +76,10 @@ func parseQueueView(q url.Values) queueView {
 
 func (v queueView) values() url.Values {
 	q := url.Values{}
-	if v.state != TaskPending {
+	if v.state != conn.TaskPending {
 		q.Set("state", stateParam(v.state))
 	}
-	if v.state == TaskAggregating && v.group != "" {
+	if v.state == conn.TaskAggregating && v.group != "" {
 		q.Set("group", v.group)
 	}
 	if sortable(v.state) && v.desc != taskDefaultDesc(v.state) {
@@ -98,7 +99,7 @@ func (v queueView) values() url.Values {
 }
 
 // groupList reports whether the view lists the Aggregating tab's groups.
-func (v queueView) groupList() bool { return v.state == TaskAggregating && v.group == "" }
+func (v queueView) groupList() bool { return v.state == conn.TaskAggregating && v.group == "" }
 
 // queueURL is the Queue page URL showing state v.
 func (d *deps) queueURL(conn, queue string, v queueView) string {
@@ -138,7 +139,7 @@ func handleQueue(d *deps) http.Handler {
 			d.render(w, r, http.StatusOK, pages.QueuePoll(m))
 			return
 		}
-		if f, ok := d.takeFlash(w, r, a.conn.Name); ok {
+		if f, ok := d.takeFlash(w, r, a.conn.Name()); ok {
 			m.Layout.Toasts = pages.FlashToasts(f)
 			if f.Notice != nil && !m.NotFound {
 				m.Notice = f.Notice
@@ -151,21 +152,21 @@ func handleQueue(d *deps) http.Handler {
 // queueModel reads the queue's counters and the tab's tasks, in parallel
 // and within the page budget, and builds the page model for state v.
 func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, ans queueAnswer) pages.Queue {
-	name := a.conn.Name
+	name, health := a.conn.Name(), a.conn.Health()
 	m := pages.Queue{Name: queue, Poll: ans.poll, Init: ans.init, Notice: ans.notice}
 
 	var (
-		qi     QueueInfo
-		tasks  []Task
-		groups []Group
+		qi     conn.QueueInfo
+		tasks  []conn.Task
+		groups []conn.Group
 		// total is the number of tasks the view pages over: the state's,
 		// or the group's.
 		total int
 	)
-	health := map[string]components.Health(nil)
-	switch a.conn.Health.State {
-	case HealthDown:
-		m.State, m.Error, m.Down = pages.DataFailed, errText(a.conn.Health.Err), true
+	override := map[string]components.Health(nil)
+	switch health.State {
+	case conn.StateDown:
+		m.State, m.Error, m.Down = pages.DataFailed, errText(health.Err), true
 	default:
 		ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
 		defer cancel()
@@ -176,22 +177,22 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 		list := func(page int) {
 			switch {
 			case v.groupList():
-			case v.state == TaskAggregating:
-				tasks, listErr = d.conns.GroupTasks(ctx, name, queue, v.group, page, v.size)
+			case v.state == conn.TaskAggregating:
+				tasks, listErr = a.conn.ListGroupTasks(ctx, queue, v.group, page, v.size)
 			default:
-				tasks, listErr = d.conns.Tasks(ctx, name, queue, v.state, page, v.size, v.desc)
+				tasks, listErr = a.conn.ListTasks(ctx, queue, v.state, page, v.size, v.desc)
 			}
 		}
 		wg.Go(func() { list(v.page) })
-		if v.state == TaskAggregating {
+		if v.state == conn.TaskAggregating {
 			// The group list, or the group's size for the pager.
-			wg.Go(func() { groups, groupsErr = d.conns.Groups(ctx, name, queue) })
+			wg.Go(func() { groups, groupsErr = a.conn.Groups(ctx, queue) })
 		}
 		var err error
-		qi, err = d.conns.QueueInfo(ctx, name, queue)
+		qi, err = a.conn.QueueInfo(ctx, queue)
 		wg.Wait()
 		total = qi.Count(v.state)
-		if v.state == TaskAggregating && !v.groupList() {
+		if v.state == conn.TaskAggregating && !v.groupList() {
 			total = 0
 			for _, g := range groups {
 				if g.Name == v.group {
@@ -211,30 +212,30 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 		}
 		err = firstErr(err, listErr, groupsErr)
 		switch {
-		case errors.Is(err, ErrQueueNotFound):
+		case errors.Is(err, conn.ErrQueueNotFound):
 			m.NotFound = true
 		case err != nil && ctx.Err() != nil:
 			m.State = pages.DataChecking
 		case err != nil:
 			// Only a server that cannot be reached is down; an error
 			// reply (NOPERM, LOADING) shows as itself.
-			m.State, m.Error, m.Down = pages.DataFailed, errText(err), errors.Is(err, ErrUnreachable)
+			m.State, m.Error, m.Down = pages.DataFailed, errText(err), conn.Unreachable(err)
 			if m.Down {
-				health = map[string]components.Health{name: components.HealthDown}
+				override = map[string]components.Health{name: components.HealthDown}
 			}
 		}
 	}
 	m.KeepTable = ans.poll && !ans.init && m.State != pages.DataReady
 
 	crumbs := []components.Crumb{{Text: name, URL: d.url("c", name)}, {Text: queue}}
-	m.Layout = d.layoutWith(r, a, components.SectionQueues, crumbs, d.visible(a.id), health)
+	m.Layout = d.layoutWith(r, a, components.SectionQueues, crumbs, d.visible(a.id), override)
 	if m.NotFound {
 		return m
 	}
 
 	m.Tab = pageState(v.state)
 	m.Group = v.group
-	m.GroupsURL = d.queueURL(name, queue, tabView(TaskAggregating, v.size))
+	m.GroupsURL = d.queueURL(name, queue, tabView(conn.TaskAggregating, v.size))
 	m.Next = d.queueURL(name, queue, v)
 	m.FormURL = d.url("c", name, "queues", queue, "tasks", "archive")
 	m.FindURL = d.url("c", name, "queues", queue, "find")
@@ -261,13 +262,13 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 	m.Toggle = pages.QueueToggle{
 		URL: d.url("c", name, "queues", toggle), Allowed: a.role >= authz.RoleOperator, Queue: queue, Next: m.Next,
 	}
-	for _, s := range []TaskState{TaskActive, TaskPending, TaskAggregating, TaskScheduled, TaskRetry, TaskArchived, TaskCompleted} {
+	for _, s := range []conn.TaskState{conn.TaskActive, conn.TaskPending, conn.TaskAggregating, conn.TaskScheduled, conn.TaskRetry, conn.TaskArchived, conn.TaskCompleted} {
 		m.Tabs = append(m.Tabs, pages.Tab{State: pageState(s), Count: int64(qi.Count(s)), URL: d.queueURL(name, queue, tabView(s, v.size)), On: s == v.state})
 	}
 	m.Total = int64(total)
 	if v.groupList() {
 		for _, g := range groups {
-			gv := tabView(TaskAggregating, v.size)
+			gv := tabView(conn.TaskAggregating, v.size)
 			gv.group = g.Name
 			m.Groups = append(m.Groups, pages.GroupRow{
 				Name:   g.Name,
@@ -306,12 +307,12 @@ func firstErr(errs ...error) error {
 	return nil
 }
 
-func (d *deps) taskRows(m *pages.Queue, conn, queue string, tasks []Task, fresh bool) {
+func (d *deps) taskRows(m *pages.Queue, name, queue string, tasks []conn.Task, fresh bool) {
 	now := d.now()
 	for _, t := range tasks {
 		row := pages.TaskRow{
 			ID:     t.ID,
-			URL:    d.url("c", conn, "queues", queue, "tasks", t.ID),
+			URL:    d.url("c", name, "queues", queue, "tasks", t.ID),
 			LinkID: components.HexID("tlink-", t.ID),
 			Select: components.RowSelect{
 				ID: components.HexID("tsel-", t.ID), Form: pages.TasksFormID, Name: "id", Value: t.ID, Fresh: fresh,
@@ -371,7 +372,7 @@ func (d *deps) taskActions(m *pages.Queue, a access, queue string, v queueView) 
 // Archive all and Delete all of the selected groups (asynq's
 // *AllAggregatingTasks per group), each confirmed in a dialog.
 func (d *deps) groupActions(m *pages.Queue, a access, queue string) {
-	for _, verb := range tabVerbs(TaskAggregating) {
+	for _, verb := range tabVerbs(conn.TaskAggregating) {
 		act := d.verbAction(a, queue, verb, pages.TasksFormID)
 		act.ID = "act-all-" + verbParam(verb)
 		act.Confirm = pages.GroupDialogID(pageVerb(verb))
@@ -391,7 +392,7 @@ func (d *deps) verbAction(a access, queue string, verb TaskVerb, form string) co
 		need, role = components.RoleAdmin, authz.RoleAdmin
 	}
 	return components.Action{
-		URL:     d.url("c", a.conn.Name, "queues", queue, "tasks", verbParam(verb)),
+		URL:     d.url("c", a.conn.Name(), "queues", queue, "tasks", verbParam(verb)),
 		Form:    form,
 		Allowed: a.role >= role,
 		Need:    need,
@@ -403,7 +404,7 @@ func (d *deps) verbAction(a access, queue string, verb TaskVerb, form string) co
 
 // pager fills the footer: the range shown, the page links and the
 // rows-per-page picker.
-func (d *deps) pager(m *pages.Queue, conn, queue string, v queueView, rows int) {
+func (d *deps) pager(m *pages.Queue, name, queue string, v queueView, rows int) {
 	p := pages.Pager{Total: m.Total}
 	if rows > 0 {
 		p.From = int64((v.page-1)*v.size + 1)
@@ -412,15 +413,15 @@ func (d *deps) pager(m *pages.Queue, conn, queue string, v queueView, rows int) 
 	if v.page > 1 {
 		prev := v
 		prev.page--
-		p.PrevURL = d.queueURL(conn, queue, prev)
+		p.PrevURL = d.queueURL(name, queue, prev)
 	}
 	if int64(v.page*v.size) < m.Total {
 		next := v
 		next.page++
-		p.NextURL = d.queueURL(conn, queue, next)
+		p.NextURL = d.queueURL(name, queue, next)
 	}
 	m.Pager = p
-	s := pages.SizePicker{FormURL: d.url("c", conn, "queues", queue), Size: v.size, Choices: pageSizes()}
+	s := pages.SizePicker{FormURL: d.url("c", name, "queues", queue), Size: v.size, Choices: pageSizes()}
 	q := v.values()
 	for _, k := range []string{"state", "group", "dir"} {
 		if q.Has(k) {
@@ -436,12 +437,12 @@ func (d *deps) pager(m *pages.Queue, conn, queue string, v queueView, rows int) 
 // without JS a redirect back to it. The M5a semantics stand: Pause skips
 // a queue already paused and Resume a running one.
 func (d *deps) queuePageAction(w http.ResponseWriter, r *http.Request, a access, verb pages.QueueVerb, queue string, v queueView) {
-	failures := d.runQueueAction(r.Context(), a.conn.Name, verb, []string{queue})
+	failures := d.runQueueAction(r.Context(), a.conn, verb, []string{queue})
 	if isFragment(r) {
 		m := d.queueModel(r, a, queue, v, queueAnswer{})
 		d.render(w, r, http.StatusOK, pages.QueueActionResult(m, failures, nil))
 		return
 	}
-	d.setFlash(w, a.conn.Name, failures)
-	http.Redirect(w, r, d.queueURL(a.conn.Name, queue, v), http.StatusSeeOther) //nolint:gosec // G710: built by d.url for this connection.
+	d.setFlash(w, a.conn.Name(), failures)
+	http.Redirect(w, r, d.queueURL(a.conn.Name(), queue, v), http.StatusSeeOther) //nolint:gosec // G710: built by d.url for this connection.
 }

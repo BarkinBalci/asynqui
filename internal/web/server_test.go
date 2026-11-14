@@ -24,7 +24,7 @@ func TestAccess(t *testing.T) {
 	}
 	conns := func() *fakeConns {
 		c := defaultConns()
-		c.conns = append(c.conns, Connection{Name: "hidden", Addr: "h:6379/0"})
+		c.conns = append(c.conns, connInfo{Name: "hidden", Addr: "h:6379/0"})
 		return c
 	}
 	tests := []struct {

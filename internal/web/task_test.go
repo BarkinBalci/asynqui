@@ -3,7 +3,6 @@ package web
 import (
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/BarkinBalci/asynqui/internal/config"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
 const uuidPath = "/c/main/queues/default/tasks/" + uuidTask
@@ -232,7 +232,7 @@ func TestTaskPoll(t *testing.T) {
 	}
 	// The state changed (run elsewhere): the actions follow, with the
 	// action form's state and the delete dialog.
-	if err := conns.TaskAction(t.Context(), "main", "default", TaskRun, uuidTask); err != nil {
+	if err := conns.taskAction("default", TaskRun, uuidTask); err != nil {
 		t.Fatal(err)
 	}
 	changed := poll(second)
@@ -245,7 +245,7 @@ func TestTaskPoll(t *testing.T) {
 		t.Error("poll URL does not follow the state")
 	}
 	// Gone: the page says so and stops polling.
-	if err := conns.TaskAction(t.Context(), "main", "default", TaskDelete, uuidTask); err != nil {
+	if err := conns.taskAction("default", TaskDelete, uuidTask); err != nil {
 		t.Fatal(err)
 	}
 	gone := poll(second)
@@ -285,20 +285,20 @@ func TestTaskFocusablesHaveIDs(t *testing.T) {
 
 func TestAttempt(t *testing.T) {
 	tests := []struct {
-		state             TaskState
+		state             conn.TaskState
 		retried, maxRetry int
 		want              int
 	}{
-		{TaskRetry, 3, 25, 3},
-		{TaskRetry, 25, 25, 25},
-		{TaskArchived, 25, 25, 26},
-		{TaskArchived, 0, 25, 1},  // SkipRetry on the first attempt
-		{TaskPending, 25, 25, 26}, // run back from archived
-		{TaskPending, 3, 25, 3},   // run back from retry
-		{TaskPending, 0, 25, 1},
+		{conn.TaskRetry, 3, 25, 3},
+		{conn.TaskRetry, 25, 25, 25},
+		{conn.TaskArchived, 25, 25, 26},
+		{conn.TaskArchived, 0, 25, 1},  // SkipRetry on the first attempt
+		{conn.TaskPending, 25, 25, 26}, // run back from archived
+		{conn.TaskPending, 3, 25, 3},   // run back from retry
+		{conn.TaskPending, 0, 25, 1},
 	}
 	for _, tt := range tests {
-		if got := attempt(Task{State: tt.state, Retried: tt.retried, MaxRetry: tt.maxRetry}); got != tt.want {
+		if got := attempt(conn.Task{State: tt.state, Retried: tt.retried, MaxRetry: tt.maxRetry}); got != tt.want {
 			t.Errorf("attempt(%v, %d/%d) = %d, want %d", tt.state, tt.retried, tt.maxRetry, got, tt.want)
 		}
 	}
@@ -344,7 +344,7 @@ func TestTaskDeleteRedirectsToRealState(t *testing.T) {
 	h, conns := newTestServer(t, adminOpts())
 	// The page showed retry, but the task was run meanwhile: back to
 	// pending, where it was deleted from.
-	if err := conns.TaskAction(t.Context(), "main", "default", TaskRun, uuidTask); err != nil {
+	if err := conns.taskAction("default", TaskRun, uuidTask); err != nil {
 		t.Fatal(err)
 	}
 	rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete",
@@ -356,7 +356,7 @@ func TestTaskDeleteRedirectsToRealState(t *testing.T) {
 
 func TestUntrustedText(t *testing.T) {
 	conns := defaultConns()
-	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "abc\u202Eexe.txt", Queue: "default", Type: "t\u202Ex", State: TaskPending,
+	conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: "abc\u202Eexe.txt", Queue: "default", Type: "t\u202Ex", State: conn.TaskPending,
 		Payload: []byte("\u202Eevil")})
 	h, _ := newTestServer(t, testOpts{conns: conns})
 	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?page=2"}))
@@ -675,7 +675,7 @@ func TestTaskPagesReadErrors(t *testing.T) {
 		down  bool
 	}{
 		{"error reply", errors.New("NOPERM this user has no permissions"), "", false},
-		{"unreachable", fmt.Errorf("%w: dial tcp: i/o timeout", ErrUnreachable), "Connection failed", true},
+		{"unreachable", unreachable("i/o timeout"), "Connection failed", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

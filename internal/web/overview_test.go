@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
 func TestOverviewFullPage(t *testing.T) {
@@ -85,7 +87,7 @@ func TestOverviewPoll(t *testing.T) {
 // stable, unique id.
 func TestPolledFocusablesHaveIDs(t *testing.T) {
 	conns := defaultConns()
-	conns.conns = append(conns.conns, Connection{Name: "a.b", Addr: "x:1/0", Health: Health{State: HealthDown, Err: errors.New("x")}})
+	conns.conns = append(conns.conns, connInfo{Name: "a.b", Addr: "x:1/0", Health: conn.Health{State: conn.StateDown, Err: errors.New("x")}})
 	h, _ := newTestServer(t, testOpts{conns: conns})
 	doc := parse(t, do(t, h, request{path: "/"}))
 	seen := map[string]bool{}
@@ -121,7 +123,7 @@ func TestPolledFocusablesHaveIDs(t *testing.T) {
 
 func TestOverviewCards(t *testing.T) {
 	conns := defaultConns()
-	conns.conns = append(conns.conns, Connection{Name: "flaky", Addr: "flaky:6379/2", Health: Health{State: HealthUp}})
+	conns.conns = append(conns.conns, connInfo{Name: "flaky", Addr: "flaky:6379/2", Health: conn.Health{State: conn.StateUp}})
 	conns.errs = map[string]error{"flaky": errors.New("READONLY you can't write against a read only replica")}
 	h, _ := newTestServer(t, testOpts{conns: conns})
 	doc := parse(t, do(t, h, request{path: "/"}))
@@ -232,8 +234,8 @@ func TestOverviewBudget(t *testing.T) {
 
 func TestRecheck(t *testing.T) {
 	h, conns := newTestServer(t, testOpts{})
-	conns.recheck = map[string]Health{"analytics": {State: HealthUp}}
-	conns.summaries["analytics"] = Summary{Queues: 2}
+	conns.recheck = map[string]conn.Health{"analytics": {State: conn.StateUp}}
+	conns.summaries["analytics"] = conn.Summary{Queues: 2}
 
 	rec := do(t, h, request{method: http.MethodPost, path: "/c/analytics/recheck", htmx: true})
 	if rec.Code != http.StatusOK {

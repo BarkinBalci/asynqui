@@ -5,17 +5,19 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/BarkinBalci/asynqui/internal/conn"
+
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// OverviewSource is what the Overview needs from the connection registry.
+// OverviewSource is what the Overview needs from a connection.
 type OverviewSource interface {
-	// Summary returns the Overview numbers of one connection. It may be
-	// served from a short-lived cache.
-	Summary(ctx context.Context, name string) (Summary, error)
-	// Recheck runs a health check now, stores it and returns it.
-	Recheck(ctx context.Context, name string) Health
+	// Summary returns the Overview numbers. It may be served from a
+	// short-lived cache.
+	Summary(ctx context.Context) (conn.Summary, error)
+	// Recheck runs a health check now and stores it.
+	Recheck(ctx context.Context) (conn.Health, error)
 }
 
 // handleOverview serves GET /: one card per visible connection. With
@@ -38,7 +40,7 @@ func handleOverview(d *deps) http.Handler {
 func handleRecheck(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
-		d.conns.Recheck(r.Context(), a.conn.Name)
+		_, _ = a.conn.Recheck(r.Context()) // the cards read the stored health
 		if !isFragment(r) {
 			http.Redirect(w, r, d.url(), http.StatusSeeOther)
 			return
@@ -47,7 +49,7 @@ func handleRecheck(d *deps) http.Handler {
 		// agree. The page has no current connection: it is the Overview.
 		m := d.overview(r, access{id: a.id})
 		for _, c := range m.Cards {
-			if c.Name == a.conn.Name {
+			if c.Name == a.conn.Name() {
 				d.render(w, r, http.StatusOK, pages.RecheckResult(m, c))
 				return
 			}
@@ -82,20 +84,21 @@ func (d *deps) cards(ctx context.Context, conns []visibleConn) []components.Conn
 	out := make([]components.ConnCard, len(conns))
 	var wg sync.WaitGroup
 	for i, c := range conns {
+		name, health := c.Name(), c.Health()
 		out[i] = components.ConnCard{
-			Name:       c.Name,
-			Addr:       c.Addr,
+			Name:       name,
+			Addr:       c.Addr(),
 			Role:       roleView(c.role),
-			Health:     healthView(c.Health.State),
-			OpenURL:    d.url("c", c.Name),
-			RecheckURL: d.url("c", c.Name, "recheck"),
+			Health:     healthView(health.State),
+			OpenURL:    d.url("c", name),
+			RecheckURL: d.url("c", name, "recheck"),
 		}
-		switch c.Health.State {
-		case HealthDown:
-			out[i].Error = errText(c.Health.Err)
-		case HealthUp:
+		switch health.State {
+		case conn.StateDown:
+			out[i].Error = errText(health.Err)
+		case conn.StateUp:
 			wg.Go(func() {
-				s, err := d.conns.Summary(ctx, c.Name)
+				s, err := c.Summary(ctx)
 				card := &out[i]
 				switch {
 				case err != nil && ctx.Err() != nil:

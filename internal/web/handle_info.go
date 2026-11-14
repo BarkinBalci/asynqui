@@ -3,52 +3,21 @@ package web
 import (
 	"context"
 	"net/http"
-	"time"
 
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// InfoSource is what the Redis info page needs from the connection
-// registry.
+// InfoSource is what the Redis info page needs from a connection.
 type InfoSource interface {
-	// Info reads the instance's INFO. It may be served from a
-	// short-lived cache.
-	Info(ctx context.Context, name string) (Info, error)
-}
-
-// Info is a connection's instance information. Everything but the
-// keyspace numbers, TLS and Username describes the whole instance, which
-// other connections (other DBs) may share; the page is about the instance,
-// so it shows them.
-type Info struct {
-	Valkey bool
-	// Version is the Valkey version for Valkey, else the Redis version;
-	// RedisVersion is redis_version.
-	Version      string
-	RedisVersion string
-	Mode         string
-	Uptime       time.Duration
-	// ConnectedClients and the memory figures (bytes) are instance-wide.
-	// MaxMemory 0 means no limit.
-	ConnectedClients int64
-	UsedMemory       int64
-	UsedMemoryPeak   int64
-	MaxMemory        int64
-	MaxMemoryPolicy  string
-	// DB, Keys and Expires are the connection's own DB.
-	DB      int
-	Keys    int64
-	Expires int64
-	// TLS and TLSVerified are the connection's TLS settings; Username its
-	// ACL user (empty for the default user).
-	TLS         bool
-	TLSVerified bool
-	// TLSVersion is the tls.VersionTLS1x of the last handshake; 0 unknown.
-	TLSVersion uint16
-	Username   string
-	// Raw is the INFO reply without other DBs' keyspace lines.
-	Raw string
+	// Info reads the instance's INFO. It may be served from a short-lived
+	// cache.
+	Info(ctx context.Context) (*conn.Info, error)
+	// TLS is the connection's TLS setting and last handshake's version.
+	TLS() conn.TLSInfo
+	// Username is the ACL user; empty is the default user.
+	Username() string
 }
 
 // handleInfo serves GET /c/{conn}/info, the Redis / Valkey info page.
@@ -66,22 +35,25 @@ func handleInfo(d *deps) http.Handler {
 }
 
 func (d *deps) infoModel(r *http.Request, a access, ans answer) pages.Info {
-	name := a.conn.Name
+	name := a.conn.Name()
 	ctx, cancel := d.pageContext(r.Context())
 	defer cancel()
-	info, rd := readLive(ctx, a, func(ctx context.Context) (Info, error) { return d.conns.Info(ctx, name) })
+	info, rd := readLive(ctx, a, a.conn.Info)
 	// The label follows the backend detected so far, and this read when it
 	// has one.
-	valkey := a.conn.Valkey
+	valkey := isValkey(a.conn)
 	if rd.state == pages.DataReady {
-		valkey = info.Valkey
+		valkey = info.Backend == conn.BackendValkey
+	} else {
+		info = &conn.Info{}
 	}
+	tls := a.conn.TLS()
 	crumb := sectionCrumb(d, components.SectionInfo, "c", name, "info")
 	crumb.Valkey = valkey
 	m := pages.Info{
 		Layout: d.liveLayout(r, a, components.SectionInfo, rd, crumb),
 		Live:   d.live(ans, pages.InfoPageID, pages.InfoPollID, rd, rd.state == pages.DataReady, nil, "c", name, "info"),
-		Addr:   a.conn.Addr,
+		Addr:   a.conn.Addr(),
 		Valkey: valkey,
 		Data: pages.InfoData{
 			Version:          info.Version,
@@ -93,13 +65,13 @@ func (d *deps) infoModel(r *http.Request, a access, ans answer) pages.Info {
 			UsedMemoryPeak:   info.UsedMemoryPeak,
 			MaxMemory:        info.MaxMemory,
 			MaxMemoryPolicy:  info.MaxMemoryPolicy,
-			DB:               int64(info.DB),
-			Keys:             info.Keys,
-			Expires:          info.Expires,
-			TLS:              info.TLS,
-			TLSVerified:      info.TLSVerified,
-			TLSVersion:       info.TLSVersion,
-			Username:         info.Username,
+			DB:               int64(info.Keyspace.DB),
+			Keys:             info.Keyspace.Keys,
+			Expires:          info.Keyspace.Expires,
+			TLS:              tls.Enabled,
+			TLSVerified:      tls.Verified,
+			TLSVersion:       tls.Version,
+			Username:         a.conn.Username(),
 			Raw:              info.Raw,
 		},
 	}

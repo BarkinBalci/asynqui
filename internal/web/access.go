@@ -13,7 +13,7 @@ import (
 // and, for /c/{conn} routes, the connection and the user's role on it.
 type access struct {
 	id   auth.Identity
-	conn Connection // zero without {conn}
+	conn Conn       // nil without {conn}
 	role authz.Role // RoleNone without {conn}
 }
 
@@ -67,7 +67,7 @@ func (d *deps) require(need authz.Role, h http.Handler) http.Handler {
 
 // visibleConn is a connection the user can see, with their role on it.
 type visibleConn struct {
-	Connection
+	Conn
 	role authz.Role
 }
 
@@ -76,8 +76,8 @@ func (d *deps) visible(id auth.Identity) []visibleConn {
 	all := d.conns.Connections()
 	out := make([]visibleConn, 0, len(all))
 	for _, c := range all {
-		if role, ok := d.policy.RoleFor(subject(id), c.Name); ok {
-			out = append(out, visibleConn{Connection: c, role: role})
+		if role, ok := d.policy.RoleFor(subject(id), c.Name()); ok {
+			out = append(out, visibleConn{Conn: c, role: role})
 		}
 	}
 	return out

@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/BarkinBalci/asynqui/internal/config"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
 func adminOpts() testOpts { return testOpts{authz: config.Authz{Default: config.RoleAdmin}} }
@@ -223,7 +224,7 @@ func TestQueueSort(t *testing.T) {
 	// size picker keep it, and flipping the order goes back to page 1.
 	conns := defaultConns()
 	for i := range 30 {
-		conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: fmt.Sprintf("s%02d", i+2), Queue: "default", Type: "t", State: TaskScheduled})
+		conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: fmt.Sprintf("s%02d", i+2), Queue: "default", Type: "t", State: conn.TaskScheduled})
 	}
 	h, _ = newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
 	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=scheduled&dir=desc&page=2"}))
@@ -242,7 +243,7 @@ func TestQueueSort(t *testing.T) {
 
 	// The archived column is the archive time, not the last failure.
 	conns = defaultConns()
-	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "x9", Queue: "default", Type: "t", State: TaskArchived,
+	conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: "x9", Queue: "default", Type: "t", State: conn.TaskArchived,
 		ArchivedAt: fixedNow().Add(-2 * time.Hour)})
 	h, _ = newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
 	doc = parse(t, do(t, h, request{path: "/c/main/queues/default?state=archived&dir=asc"}))
@@ -494,8 +495,8 @@ func TestQueueRoles(t *testing.T) {
 
 func TestQueuePathEscaping(t *testing.T) {
 	conns := defaultConns()
-	conns.queues["main"] = append(conns.queues["main"], Queue{Name: "a/b c"})
-	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "x/y?z", Queue: "a/b c", Type: "t", State: TaskPending})
+	conns.queues["main"] = append(conns.queues["main"], conn.Queue{Name: "a/b c"})
+	conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: "x/y?z", Queue: "a/b c", Type: "t", State: conn.TaskPending})
 	h, _ := newTestServer(t, testOpts{conns: conns, basePath: "/asynq", authz: config.Authz{Default: config.RoleAdmin}})
 	rec := do(t, h, request{path: "/asynq/c/main/queues/a%2Fb%20c"})
 	if rec.Code != http.StatusOK {
@@ -580,8 +581,8 @@ func TestQueuePauseFromQueuePage(t *testing.T) {
 func TestQueueGroupNames(t *testing.T) {
 	const name = "a&b #c%/d"
 	conns := defaultConns()
-	conns.tasks.groups["default"] = []Group{{Name: name, Size: 1}}
-	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "odd-0", Queue: "default", Type: "batch", State: TaskAggregating, Group: name})
+	conns.tasks.groups["default"] = []conn.Group{{Name: name, Size: 1}}
+	conns.tasks.tasks = append(conns.tasks.tasks, conn.Task{ID: "odd-0", Queue: "default", Type: "batch", State: conn.TaskAggregating, Group: name})
 	h, _ := newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
 
 	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating"}))

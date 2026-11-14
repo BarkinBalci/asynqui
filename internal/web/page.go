@@ -11,6 +11,7 @@ import (
 
 	"github.com/BarkinBalci/asynqui/internal/auth"
 	"github.com/BarkinBalci/asynqui/internal/authz"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/format"
 	"github.com/BarkinBalci/asynqui/internal/web/views"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
@@ -133,25 +134,26 @@ func (d *deps) layoutWith(r *http.Request, a access, section components.Section,
 	}
 	names := make([]string, 0, len(visible))
 	for _, c := range visible {
-		names = append(names, c.Name)
-		h, ok := health[c.Name]
+		name := c.Name()
+		names = append(names, name)
+		h, ok := health[name]
 		if !ok {
-			h = healthView(c.Health.State)
+			h = healthView(c.Health().State)
 		}
 		sc := components.SidebarConn{
-			Name:   c.Name,
-			Addr:   c.Addr,
-			URL:    d.url("c", c.Name),
+			Name:   name,
+			Addr:   c.Addr(),
+			URL:    d.url("c", name),
 			Health: h,
 		}
-		if c.Name == a.conn.Name {
+		if a.conn != nil && name == a.conn.Name() {
 			sc.Current = true
 			sc.Sub = components.SubNav{
-				QueuesURL:     d.url("c", c.Name),
-				ServersURL:    d.url("c", c.Name, "servers"),
-				SchedulersURL: d.url("c", c.Name, "schedulers"),
-				InfoURL:       d.url("c", c.Name, "info"),
-				Valkey:        c.Valkey,
+				QueuesURL:     d.url("c", name),
+				ServersURL:    d.url("c", name, "servers"),
+				SchedulersURL: d.url("c", name, "schedulers"),
+				InfoURL:       d.url("c", name, "info"),
+				Valkey:        isValkey(c),
 			}
 		}
 		side.Conns = append(side.Conns, sc)
@@ -160,7 +162,7 @@ func (d *deps) layoutWith(r *http.Request, a access, section components.Section,
 	// The account menu shows the role on the current connection, or the
 	// highest role on the Overview and other pages without one.
 	role := a.role
-	if a.conn.Name == "" {
+	if a.conn == nil {
 		role = d.policy.MaxRole(subject(a.id), names)
 	}
 	all := append([]components.Crumb{{Section: components.SectionOverview, URL: d.url()}}, crumbs...)
@@ -210,11 +212,11 @@ func (d *deps) footer() components.Footer {
 	return f
 }
 
-func healthView(s HealthState) components.Health {
+func healthView(s conn.State) components.Health {
 	switch s {
-	case HealthUp:
+	case conn.StateUp:
 		return components.HealthUp
-	case HealthDown:
+	case conn.StateDown:
 		return components.HealthDown
 	}
 	return components.HealthUnknown

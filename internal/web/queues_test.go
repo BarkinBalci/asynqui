@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/BarkinBalci/asynqui/internal/config"
+	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
 // rowNames lists the queue names of the table, in order.
@@ -225,7 +226,7 @@ func TestQueuesFragment(t *testing.T) {
 
 func TestQueuesFocusablesHaveIDs(t *testing.T) {
 	conns := defaultConns()
-	conns.queues["main"] = append(conns.queues["main"], Queue{Name: "a/b c"})
+	conns.queues["main"] = append(conns.queues["main"], conn.Queue{Name: "a/b c"})
 	h, _ := newTestServer(t, testOpts{conns: conns, authz: config.Authz{Default: config.RoleAdmin}})
 	doc := parse(t, do(t, h, request{path: "/c/main"}))
 	seen := map[string]bool{}
@@ -255,7 +256,7 @@ func TestQueuesFocusablesHaveIDs(t *testing.T) {
 
 func TestQueuesPathEscaping(t *testing.T) {
 	conns := defaultConns()
-	conns.queues["main"] = []Queue{{Name: "a/b c"}, {Name: "x?y#z"}}
+	conns.queues["main"] = []conn.Queue{{Name: "a/b c"}, {Name: "x?y#z"}}
 	h, _ := newTestServer(t, testOpts{conns: conns, basePath: "/asynq"})
 	doc := parse(t, do(t, h, request{path: "/asynq/c/main?sort=name"}))
 	var hrefs, ids []string
@@ -426,7 +427,7 @@ func TestQueueActions(t *testing.T) {
 	})
 	t.Run("failures are toasts", func(t *testing.T) {
 		conns := defaultConns()
-		conns.actErrs["default"] = fmt.Errorf("%w: queue=%q", ErrQueueNotEmpty, "default")
+		conns.actErrs["default"] = fmt.Errorf("%w: queue=%q", conn.ErrQueueNotEmpty, "default")
 		conns.actErrs["low"] = errors.New("READONLY You can't write against a read only replica.") //nolint:revive // Redis's own text
 		h, _ := newTestServer(t, testOpts{conns: conns, authz: config.Authz{Default: config.RoleAdmin}})
 		form := "confirm=1&queue=default&queue=low&queue=gone&queue=critical"
@@ -736,7 +737,7 @@ func TestQueuesThroughput(t *testing.T) {
 // every selected row; Size counts completed and aggregating tasks too.
 func TestQueuesEmptyRows(t *testing.T) {
 	conns := defaultConns()
-	conns.queues["main"] = []Queue{{Name: "done", Size: 3}, {Name: "empty"}}
+	conns.queues["main"] = []conn.Queue{{Name: "done", Size: 3}, {Name: "empty"}}
 	h, _ := newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
 	doc := parse(t, do(t, h, request{path: "/c/main"}))
 	var empty []string

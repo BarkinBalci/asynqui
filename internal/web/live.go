@@ -2,12 +2,12 @@ package web
 
 import (
 	"context"
-	"errors"
 	"maps"
 	"net/http"
 	"net/url"
 	"slices"
 
+	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/views"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
@@ -52,15 +52,15 @@ func (d *deps) pageContext(ctx context.Context) (context.Context, context.Cancel
 // goes on in conn's cache, so the next poll usually has it.
 func readLive[T any](ctx context.Context, a access, fetch func(ctx context.Context) (T, error)) (T, liveRead) {
 	var zero T
-	if a.conn.Health.State == HealthDown {
-		return zero, liveRead{state: pages.DataFailed, err: errText(a.conn.Health.Err), unreachable: true}
+	if h := a.conn.Health(); h.State == conn.StateDown {
+		return zero, liveRead{state: pages.DataFailed, err: errText(h.Err), unreachable: true}
 	}
 	v, err := fetch(ctx)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return zero, liveRead{state: pages.DataChecking}
 	case err != nil:
-		down := errors.Is(err, ErrUnreachable)
+		down := conn.Unreachable(err)
 		return zero, liveRead{state: pages.DataFailed, err: errText(err), unreachable: down, down: down}
 	}
 	return v, liveRead{state: pages.DataReady}
@@ -98,9 +98,9 @@ func (d *deps) live(ans answer, pageID, pollID string, rd liveRead, regions bool
 func (d *deps) liveLayout(r *http.Request, a access, section components.Section, rd liveRead, crumbs ...components.Crumb) views.Layout {
 	var health map[string]components.Health
 	if rd.down {
-		health = map[string]components.Health{a.conn.Name: components.HealthDown}
+		health = map[string]components.Health{a.conn.Name(): components.HealthDown}
 	}
-	all := append([]components.Crumb{{Text: a.conn.Name, URL: d.url("c", a.conn.Name)}}, crumbs...)
+	all := append([]components.Crumb{{Text: a.conn.Name(), URL: d.url("c", a.conn.Name())}}, crumbs...)
 	return d.layoutWith(r, a, section, all, d.visible(a.id), health)
 }
 

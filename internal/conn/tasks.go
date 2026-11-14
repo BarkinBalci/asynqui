@@ -126,6 +126,27 @@ type QueueInfo struct {
 	Aggregating int
 }
 
+// Count is the number of the queue's tasks in state s.
+func (q QueueInfo) Count(s TaskState) int {
+	switch s {
+	case TaskActive:
+		return q.Active
+	case TaskPending:
+		return q.Pending
+	case TaskAggregating:
+		return q.Aggregating
+	case TaskScheduled:
+		return q.Scheduled
+	case TaskRetry:
+		return q.Retry
+	case TaskArchived:
+		return q.Archived
+	case TaskCompleted:
+		return q.Completed
+	}
+	return 0
+}
+
 // queueKey, tasksKey, groupsKey and taskKey are the cache keys of one
 // queue's reads (see the key list in cache.go). The queue name, which may
 // hold any character, comes last or is length-prefixed, so two keys never
