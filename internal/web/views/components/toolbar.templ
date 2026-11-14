@@ -81,6 +81,10 @@ func actionAttrs(a Action) templ.Attributes {
 	case EnableState:
 		attrs["data-enable"] = "state"
 		attrs["data-state"] = a.State
+	case EnableEvery:
+		attrs["data-enable"] = "every"
+		attrs["data-flag"] = a.Flag
+		attrs["data-blocked-title"] = a.Blocked
 	default:
 		attrs["data-enable"] = "any"
 	}

@@ -156,6 +156,11 @@ func TestActionButton(t *testing.T) {
 			return a
 		}, map[string]string{"type": "button", "title": "Requires admin on main", "aria-label": "Pause (requires admin on main)", "class": "btn primary"},
 			[]string{"hx-post"}},
+		{"enabled only when every selected row has a flag", func(a Action) Action {
+			a.Allowed, a.Enable, a.Flag, a.Blocked = true, EnableEvery, "empty", "Queue is not empty"
+			return a
+		}, map[string]string{"data-enable": "every", "data-flag": "empty", "data-blocked-title": "Queue is not empty"},
+			[]string{"data-state", "title", "disabled"}},
 		{"select all N confirmation", func(a Action) Action {
 			a.Allowed, a.ConfirmAll = true, "all-dlg"
 			return a

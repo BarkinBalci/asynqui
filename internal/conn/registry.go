@@ -166,6 +166,7 @@ type Conn struct {
 	tasks      taskInspector      // inspector, or a fake in tests
 	servers    serverInspector    // inspector, or a fake in tests
 	schedulers schedulerInspector // inspector, or a fake in tests
+	keys       keyReader          // redis, or a fake in tests: direct reads (keys.go)
 	cache      *cache
 	now        func() time.Time // the clock; dates of History without queues
 
@@ -253,6 +254,7 @@ func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 		tasks:      inspector,
 		servers:    inspector,
 		schedulers: inspector,
+		keys:       redisKeys{rc},
 		cache:      newCache(),
 		now:        time.Now,
 	}, nil

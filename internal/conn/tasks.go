@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -53,6 +54,7 @@ type taskInspector interface {
 	ListRetryTasks(queue string, opts ...asynq.ListOption) ([]*asynq.TaskInfo, error)
 	ListArchivedTasks(queue string, opts ...asynq.ListOption) ([]*asynq.TaskInfo, error)
 	ListCompletedTasks(queue string, opts ...asynq.ListOption) ([]*asynq.TaskInfo, error)
+	ListAggregatingTasks(queue, group string, opts ...asynq.ListOption) ([]*asynq.TaskInfo, error)
 	Groups(queue string) ([]*asynq.GroupInfo, error)
 
 	RunTask(queue, id string) error
@@ -71,6 +73,9 @@ type taskInspector interface {
 	DeleteAllRetryTasks(queue string) (int, error)
 	DeleteAllArchivedTasks(queue string) (int, error)
 	DeleteAllCompletedTasks(queue string) (int, error)
+	RunAllAggregatingTasks(queue, group string) (int, error)
+	ArchiveAllAggregatingTasks(queue, group string) (int, error)
+	DeleteAllAggregatingTasks(queue, group string) (int, error)
 }
 
 // Task is one task, from asynq's TaskInfo.
@@ -101,6 +106,9 @@ type Task struct {
 	// worker lists (ListTasks of active tasks only). Zero when no server
 	// reports the task, as for an orphaned one.
 	Started time.Time
+	// ArchivedAt is when an archived task was archived: its score in the
+	// archived set (ListTasks of archived tasks only; see keys.go).
+	ArchivedAt time.Time
 }
 
 // Group is one aggregation group of a queue.
@@ -125,8 +133,12 @@ func queueKey(queue string) cacheKey[QueueInfo] {
 	return cacheKey[QueueInfo]("queue/" + queue)
 }
 
-func tasksKey(queue string, state TaskState, page, size int) cacheKey[[]Task] {
-	return cacheKey[[]Task]("tasks/" + strconv.Itoa(int(state)) + "/" + strconv.Itoa(page) + "/" + strconv.Itoa(size) + "/" + queue)
+func tasksKey(queue string, state TaskState, page, size int, desc bool) cacheKey[[]Task] {
+	return cacheKey[[]Task]("tasks/" + strconv.Itoa(int(state)) + "/" + strconv.Itoa(page) + "/" + strconv.Itoa(size) + "/" + strconv.FormatBool(desc) + "/" + queue)
+}
+
+func groupTasksKey(queue, group string, page, size int) cacheKey[[]Task] {
+	return cacheKey[[]Task]("group-tasks/" + strconv.Itoa(page) + "/" + strconv.Itoa(size) + "/" + strconv.Itoa(len(queue)) + "/" + queue + group)
 }
 
 func groupsKey(queue string) cacheKey[[]Group] {
@@ -191,64 +203,154 @@ func (c *Conn) checkQueue(queue string) error {
 }
 
 // ListTasks returns one page (1-based, size 1..MaxPageSize) of the queue's
-// tasks in state, in asynq's order, from the 1s cache when fresh:
-// pending and active oldest first, scheduled and retry by next process
-// time, archived newest first, completed by expiry, latest first.
-// Aggregating tasks are listed per group, so that state is ErrUnsupported
-// (see Groups). A queue the connection does not have is ErrQueueNotFound.
+// tasks in state, from the 1s cache when fresh. A queue the connection does
+// not have is ErrQueueNotFound.
 //
-// Active tasks carry Started from the servers' worker lists: the Servers
-// snapshot the Servers page shares.
+// Pending, scheduled, retry, archived and completed tasks come in the
+// order of the state's time: oldest first, or newest first with desc. The
+// Inspector cannot list in reverse, so the page's IDs are read with one
+// range read of asynq's key for the state (see keys.go: the pending list's
+// position, the sorted sets' scores), then each is read with GetTaskInfo,
+// queueConcurrency at a time. A task that left the state between the two
+// reads (run, deleted, moved on) is left out, so a page may come up
+// short. Archived tasks carry ArchivedAt from their score.
+//
+// Active tasks come in asynq's order (desc is ignored) and carry Started
+// from the servers' worker lists: the Servers snapshot the Servers page
+// shares. Aggregating tasks are listed per group (ListGroupTasks), so that
+// state is ErrUnsupported.
+//
+// Cost: an SMEMBERS for the existence check and one range read, then per
+// task GetTaskInfo's SISMEMBER and Lua script; for active tasks one
+// ListActiveTasks.
 //
 // The slice is shared between callers, who must not modify it.
-func (c *Conn) ListTasks(ctx context.Context, queue string, state TaskState, page, size int) ([]Task, error) {
-	list := c.lister(state)
-	if list == nil {
+func (c *Conn) ListTasks(ctx context.Context, queue string, state TaskState, page, size int, desc bool) ([]Task, error) {
+	if state == TaskAggregating || state < TaskActive || state > TaskCompleted {
 		return nil, ErrUnsupported
 	}
+	if state == TaskActive {
+		desc = false
+	}
 	page, size = max(page, 1), min(max(size, 1), MaxPageSize)
-	return cached(ctx, c.cache, tasksKey(queue, state, page, size), cacheTTL, func(ctx context.Context) ([]Task, error) {
-		infos, err := recovered(func() ([]*asynq.TaskInfo, error) {
-			return list(queue, asynq.PageSize(size), asynq.Page(page))
-		})
+	return cached(ctx, c.cache, tasksKey(queue, state, page, size, desc), cacheTTL, func(ctx context.Context) ([]Task, error) {
+		if state == TaskActive {
+			return c.listActive(ctx, queue, page, size)
+		}
+		if err := c.checkQueue(queue); err != nil {
+			return nil, err
+		}
+		entries, err := readStateIDs(ctx, c.keys, queue, state, (page-1)*size, size, desc)
 		if err != nil {
-			return nil, fmt.Errorf("list tasks of %s: %w", queue, taskErr(err))
+			return nil, fmt.Errorf("list tasks of %s: %w", queue, err)
 		}
-		var starts map[string]time.Time
-		if state == TaskActive && len(infos) > 0 {
-			// A failing server read leaves Started out rather than failing
-			// the list.
-			starts, _ = c.workerStarts(ctx)
-		}
-		out := make([]Task, 0, len(infos))
-		for _, ti := range infos {
-			if ti == nil {
-				continue
-			}
-			t := newTask(ti)
-			t.Started = starts[t.ID]
-			out = append(out, t)
-		}
-		return out, nil
+		return c.hydrate(queue, state, entries)
 	})
 }
 
-func (c *Conn) lister(state TaskState) func(string, ...asynq.ListOption) ([]*asynq.TaskInfo, error) {
-	switch state {
-	case TaskActive:
-		return c.tasks.ListActiveTasks
-	case TaskPending:
-		return c.tasks.ListPendingTasks
-	case TaskScheduled:
-		return c.tasks.ListScheduledTasks
-	case TaskRetry:
-		return c.tasks.ListRetryTasks
-	case TaskArchived:
-		return c.tasks.ListArchivedTasks
-	case TaskCompleted:
-		return c.tasks.ListCompletedTasks
+// listActive is one page of the queue's active tasks, from the Inspector.
+func (c *Conn) listActive(ctx context.Context, queue string, page, size int) ([]Task, error) {
+	infos, err := recovered(func() ([]*asynq.TaskInfo, error) {
+		return c.tasks.ListActiveTasks(queue, asynq.PageSize(size), asynq.Page(page))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list tasks of %s: %w", queue, taskErr(err))
 	}
-	return nil
+	var starts map[string]time.Time
+	if len(infos) > 0 {
+		// A failing server read leaves Started out rather than failing
+		// the list.
+		starts, _ = c.workerStarts(ctx)
+	}
+	out := make([]Task, 0, len(infos))
+	for _, ti := range infos {
+		if ti == nil {
+			continue
+		}
+		t := newTask(ti)
+		t.Started = starts[t.ID]
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// hydrate reads each entry's task with GetTaskInfo, at most
+// queueConcurrency at a time, and returns them in the entries' order. A
+// task that is gone, or no longer in state, is left out. Any other
+// failure fails the whole page.
+func (c *Conn) hydrate(queue string, state TaskState, entries []keyEntry) ([]Task, error) {
+	tasks := make([]Task, len(entries))
+	keep := make([]bool, len(entries))
+	errs := make([]error, len(entries))
+	sem := make(chan struct{}, queueConcurrency)
+	var wg sync.WaitGroup
+	for i, e := range entries {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			ti, err := recovered(func() (*asynq.TaskInfo, error) { return c.tasks.GetTaskInfo(queue, e.ID) })
+			switch {
+			case errors.Is(err, asynq.ErrTaskNotFound):
+				return
+			case err != nil:
+				errs[i] = err
+				return
+			case ti == nil:
+				return
+			}
+			t := newTask(ti)
+			if t.State != state {
+				return
+			}
+			if state == TaskArchived {
+				t.ArchivedAt = e.Score
+			}
+			tasks[i], keep[i] = t, true
+		})
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return nil, fmt.Errorf("list tasks of %s: %w", queue, taskErr(err))
+		}
+	}
+	out := make([]Task, 0, len(entries))
+	for i, t := range tasks {
+		if keep[i] {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// ListGroupTasks returns one page (1-based, size 1..MaxPageSize) of the
+// tasks of one aggregation group of the queue, in asynq's order (oldest
+// first), from the 1s cache when fresh. A queue the connection does not
+// have is ErrQueueNotFound; a group without tasks is an empty page.
+//
+// Cost: an SMEMBERS for the existence check, then ListAggregatingTasks.
+//
+// The slice is shared between callers, who must not modify it.
+func (c *Conn) ListGroupTasks(ctx context.Context, queue, group string, page, size int) ([]Task, error) {
+	page, size = max(page, 1), min(max(size, 1), MaxPageSize)
+	return cached(ctx, c.cache, groupTasksKey(queue, group, page, size), cacheTTL, func(context.Context) ([]Task, error) {
+		if err := c.checkQueue(queue); err != nil {
+			return nil, err
+		}
+		infos, err := recovered(func() ([]*asynq.TaskInfo, error) {
+			return c.tasks.ListAggregatingTasks(queue, group, asynq.PageSize(size), asynq.Page(page))
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list tasks of %s group %s: %w", queue, group, taskErr(err))
+		}
+		out := make([]Task, 0, len(infos))
+		for _, ti := range infos {
+			if ti != nil {
+				out = append(out, newTask(ti))
+			}
+		}
+		return out, nil
+	})
 }
 
 // workerStarts maps each in-progress task ID to its start, from every
@@ -421,6 +523,30 @@ func (c *Conn) DeleteAllTasks(ctx context.Context, queue string, state TaskState
 		fn = c.tasks.DeleteAllCompletedTasks
 	}
 	return c.allAction(ctx, queue, fn)
+}
+
+// RunAllGroupTasks moves every task of one aggregation group of the queue
+// to pending (asynq's RunAllAggregatingTasks) and returns how many it
+// moved. ArchiveAllGroupTasks and DeleteAllGroupTasks archive or delete
+// them. A queue the connection does not have is ErrQueueNotFound. On
+// success the cached reads are dropped.
+func (c *Conn) RunAllGroupTasks(ctx context.Context, queue, group string) (int, error) {
+	return c.groupAction(ctx, queue, group, c.tasks.RunAllAggregatingTasks)
+}
+
+// ArchiveAllGroupTasks archives every task of a group; see
+// RunAllGroupTasks.
+func (c *Conn) ArchiveAllGroupTasks(ctx context.Context, queue, group string) (int, error) {
+	return c.groupAction(ctx, queue, group, c.tasks.ArchiveAllAggregatingTasks)
+}
+
+// DeleteAllGroupTasks deletes every task of a group; see RunAllGroupTasks.
+func (c *Conn) DeleteAllGroupTasks(ctx context.Context, queue, group string) (int, error) {
+	return c.groupAction(ctx, queue, group, c.tasks.DeleteAllAggregatingTasks)
+}
+
+func (c *Conn) groupAction(ctx context.Context, queue, group string, fn func(string, string) (int, error)) (int, error) {
+	return c.allAction(ctx, queue, func(q string) (int, error) { return fn(q, group) })
 }
 
 // allAction runs an "all" action after checking that the queue exists.

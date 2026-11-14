@@ -40,12 +40,23 @@ func (s registrySource) QueueInfo(ctx context.Context, name, queue string) (web.
 	}, nil
 }
 
-func (s registrySource) Tasks(ctx context.Context, name, queue string, state web.TaskState, page, size int) ([]web.Task, error) {
+func (s registrySource) Tasks(ctx context.Context, name, queue string, state web.TaskState, page, size int, desc bool) ([]web.Task, error) {
 	c, ok := s.reg.Get(name)
 	if !ok {
 		return nil, conn.ErrNotFound
 	}
-	ts, err := c.ListTasks(ctx, queue, connState(state), page, size)
+	return webTasks(c.ListTasks(ctx, queue, connState(state), page, size, desc))
+}
+
+func (s registrySource) GroupTasks(ctx context.Context, name, queue, group string, page, size int) ([]web.Task, error) {
+	c, ok := s.reg.Get(name)
+	if !ok {
+		return nil, conn.ErrNotFound
+	}
+	return webTasks(c.ListGroupTasks(ctx, queue, group, page, size))
+}
+
+func webTasks(ts []conn.Task, err error) ([]web.Task, error) {
 	if err != nil {
 		return nil, webTaskErr(err)
 	}
@@ -127,6 +138,28 @@ func (s registrySource) TaskActionAll(ctx context.Context, name, queue string, v
 	return n, webTaskErr(err)
 }
 
+func (s registrySource) GroupActionAll(ctx context.Context, name, queue string, verb web.TaskVerb, group string) (int, error) {
+	c, ok := s.reg.Get(name)
+	if !ok {
+		return 0, conn.ErrNotFound
+	}
+	var (
+		n   int
+		err error
+	)
+	switch verb {
+	case web.TaskRun:
+		n, err = c.RunAllGroupTasks(ctx, queue, group)
+	case web.TaskArchive:
+		n, err = c.ArchiveAllGroupTasks(ctx, queue, group)
+	case web.TaskDelete:
+		n, err = c.DeleteAllGroupTasks(ctx, queue, group)
+	default:
+		err = conn.ErrUnsupported
+	}
+	return n, webTaskErr(err)
+}
+
 // webTaskErr adds the web errors a handler tests for to conn's typed
 // errors, and marks a read that could not reach the server.
 func webTaskErr(err error) error {
@@ -197,5 +230,6 @@ func webTask(t conn.Task) web.Task {
 		CompletedAt:   t.CompletedAt,
 		Result:        t.Result,
 		Started:       t.Started,
+		ArchivedAt:    t.ArchivedAt,
 	}
 }

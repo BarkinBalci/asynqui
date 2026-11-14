@@ -14,11 +14,16 @@ type TaskSource interface {
 	// QueueInfo reads one queue's counters. An unknown queue is
 	// ErrQueueNotFound.
 	QueueInfo(ctx context.Context, name, queue string) (QueueInfo, error)
-	// Tasks lists one page (1-based) of the queue's tasks in state, in
-	// asynq's order. Aggregating tasks are listed per group (Groups).
-	Tasks(ctx context.Context, name, queue string, state TaskState, page, size int) ([]Task, error)
+	// Tasks lists one page (1-based) of the queue's tasks in state, by
+	// the state's time: oldest first, newest first with desc (see
+	// sortable). Active tasks come in asynq's order. Aggregating tasks are
+	// listed per group (GroupTasks).
+	Tasks(ctx context.Context, name, queue string, state TaskState, page, size int, desc bool) ([]Task, error)
 	// Groups lists the queue's aggregation groups.
 	Groups(ctx context.Context, name, queue string) ([]Group, error)
+	// GroupTasks lists one page (1-based) of one aggregation group's
+	// tasks, in asynq's order.
+	GroupTasks(ctx context.Context, name, queue, group string, page, size int) ([]Task, error)
 	// Task reads one task: ErrTaskNotFound or ErrQueueNotFound when there
 	// is none.
 	Task(ctx context.Context, name, queue, id string) (Task, error)
@@ -27,6 +32,9 @@ type TaskSource interface {
 	// TaskActionAll applies verb to every task of the queue in state and
 	// returns how many it acted on.
 	TaskActionAll(ctx context.Context, name, queue string, verb TaskVerb, state TaskState) (int, error)
+	// GroupActionAll applies verb (run, archive or delete) to every task
+	// of one aggregation group and returns how many it acted on.
+	GroupActionAll(ctx context.Context, name, queue string, verb TaskVerb, group string) (int, error)
 }
 
 // ErrTaskNotFound is wrapped by a TaskSource for a task that does not
@@ -109,6 +117,8 @@ type Task struct {
 	// Started is when a worker started an active task, when a server
 	// reports it (Tasks only).
 	Started time.Time
+	// ArchivedAt is when an archived task was archived (Tasks only).
+	ArchivedAt time.Time
 }
 
 // Group is one aggregation group.
@@ -122,7 +132,8 @@ type Group struct {
 // scheduled, retry and aggregating ones, Delete for any but active ones,
 // and Cancel (CancelProcessing) only for active ones. asynq has no "all"
 // variant of Cancel, and per the user's decision the Active tab has no
-// "select all N" either.
+// "select all N" either. The "all" variants of aggregating tasks act on
+// one group (asynq's *AllAggregatingTasks).
 
 // tabVerbs are the Queue page toolbar's actions for a state, in button
 // order. Every one of them also has an "all" variant, except on Active.
@@ -132,7 +143,7 @@ func tabVerbs(s TaskState) []TaskVerb {
 		return []TaskVerb{TaskCancel}
 	case TaskPending:
 		return []TaskVerb{TaskArchive, TaskDelete}
-	case TaskScheduled, TaskRetry:
+	case TaskScheduled, TaskRetry, TaskAggregating:
 		return []TaskVerb{TaskRun, TaskArchive, TaskDelete}
 	case TaskArchived:
 		return []TaskVerb{TaskRun, TaskDelete}
@@ -155,14 +166,28 @@ func allowsAll(s TaskState, verb TaskVerb) bool {
 	return false
 }
 
-// taskVerbs are the Task page's actions for a task in state s: the tab's,
-// plus those asynq allows on a single aggregating task.
-func taskVerbs(s TaskState) []TaskVerb {
-	if s == TaskAggregating {
-		return []TaskVerb{TaskRun, TaskArchive, TaskDelete}
+// taskVerbs are the Task page's actions for a task in state s.
+func taskVerbs(s TaskState) []TaskVerb { return tabVerbs(s) }
+
+// sortable reports whether the state's table sorts by its time column:
+// scheduled and retry by the next process time, archived by when it was
+// archived, completed by when its result expires. Pending has no time
+// column (asynq keeps no enqueue time) though its list sorts too.
+func sortable(s TaskState) bool {
+	switch s {
+	case TaskScheduled, TaskRetry, TaskArchived, TaskCompleted:
+		return true
 	}
-	return tabVerbs(s)
+	return false
 }
+
+// sortsByTime reports whether Tasks applies desc for the state.
+func sortsByTime(s TaskState) bool { return s == TaskPending || sortable(s) }
+
+// taskDefaultDesc is the state's default direction: what is next first for
+// pending, scheduled and retry, the most recent first for archived and
+// completed.
+func taskDefaultDesc(s TaskState) bool { return s == TaskArchived || s == TaskCompleted }
 
 func stateParam(s TaskState) string { return pages.StateParam(pageState(s)) }
 

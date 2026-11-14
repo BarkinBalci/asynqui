@@ -21,6 +21,8 @@ const (
 	TaskDetailsID      = "task-details"
 	TaskFormID         = "task-form"
 	TaskDeleteDialogID = "task-delete"
+	// TaskArchiveDialogID confirms archiving the task.
+	TaskArchiveDialogID = "task-archive"
 )
 
 // Task is the Task page.
@@ -69,9 +71,10 @@ type Task struct {
 	Headers       []Param
 	Orphaned      bool
 
-	FormURL      string
-	Actions      []TaskActionButton
-	DeleteDialog components.Dialog
+	FormURL       string
+	Actions       []TaskActionButton
+	DeleteDialog  components.Dialog
+	ArchiveDialog components.Dialog
 	// Hidden are the action form's fields.
 	Hidden  []Param
 	PollURL string

@@ -38,7 +38,7 @@ templ QueuesPage(m Queues) {
 					@components.SelectionToolbar(QueuesFormID, components.FilterInput(QueuesFilterID, QueuesRowsID, "Filter queues")) {
 						@components.ActionButton(m.Pause, components.IconPause("14"), "Pause")
 						@components.ActionButton(m.Resume, components.IconResume("14"), "Resume")
-						@components.ActionButton(m.Delete, components.IconDelete("14"), "Delete")
+						@components.ActionButton(notEmptyBlocked(m.Delete), components.IconDelete("14"), "Delete")
 					}
 				</div>
 				@queuesTable(m, false)
@@ -110,6 +110,13 @@ templ failureText(f ActionFailure) {
 			}
 			<span class="mono toast-detail">{ f.Detail }</span>
 	}
+}
+
+// notEmptyBlocked is the Delete button's title while the selection holds
+// a queue with tasks: only empty queues can be deleted.
+func notEmptyBlocked(a components.Action) components.Action {
+	a.Blocked = "Queue is not empty"
+	return a
 }
 
 templ deleteTitle() {
@@ -209,7 +216,7 @@ templ queuesTable(m Queues, oob bool) {
 							}
 						}
 						for _, r := range m.Rows {
-							<tr data-state={ queueState(r.Paused) } data-filter-text={ r.Name }>
+							<tr data-state={ queueState(r.Paused) } data-empty?={ r.Size == 0 } data-filter-text={ r.Name }>
 								@components.SelectCell(r.Select) {
 									Select queue { r.Name }
 								}

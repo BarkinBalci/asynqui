@@ -137,9 +137,9 @@ authz:
 |---|---|---|---|
 | View every page | ✓ | ✓ | ✓ |
 | Pause / resume queue | | ✓ | ✓ |
-| Run / archive tasks (single, bulk, "all") | | ✓ | ✓ |
+| Run / archive tasks (single, bulk, "all", all of an aggregation group) | | ✓ | ✓ |
 | Cancel active tasks (single, bulk) | | ✓ | ✓ |
-| **Delete tasks** (single, bulk, "all") | | | ✓ |
+| **Delete tasks** (single, bulk, "all", all of an aggregation group) | | | ✓ |
 | **Delete queue** | | | ✓ |
 
 - **Insufficient role:** the button renders **disabled**, with a native `title` tooltip of "Requires admin" ("Requires admin on {conn}" on the Task page). There is no lock icon and no explanatory text.
@@ -205,13 +205,13 @@ authz:
 3. **Gmail-style select all** (task tables): the header checkbox selects the current page and shows a banner, "All N on this page are selected. Select all {total} {state} tasks". Once clicked, the banner reads "All {total} {state} tasks are selected. Clear selection", and actions then apply to the whole state through the `*All*` APIs. Not on the Active tab (no `*All*` cancel in asynq).
 4. **Sorting:**
    - The queues table sorts by any column.
-   - Task tables do not sort: rows come in asynq's order for the state (§6.3), and the Inspector cannot list in reverse.
+   - Task tables sort by their state's time column only, both ways (§6.3). Active and Aggregating tables do not sort.
    - Servers: every column except Queues is sortable.
    - Schedulers: every column except Payload and Options is sortable.
    - Sort state lives in the URL query.
 5. **Totals:** the Total row sits in `<tfoot>`.
 6. **Pagination** (task tables): rows per page 20/50/100, "1–20 of 340", ‹ ›. Page and size live in the URL query.
-7. **Destructive or "all" actions** open a confirmation dialog.
+7. **Destructive or "all" actions** open a confirmation dialog. So does every Archive (§6.3).
 
 ## 6. Pages
 
@@ -238,8 +238,8 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 - **Header:** "Queues", the address (mono, muted) and a Healthy or Unreachable badge.
 - **Toolbar:** a "Filter queues" input (client-side, by name), a "N selected" label (only while rows are selected), and Pause, Resume and Delete.
   - Pause and Resume need operator, Delete needs admin. A role that cannot use one gets it disabled with the native `title` "Requires operator" or "Requires admin".
-  - Pause is enabled only if any selected queue is running, and pauses only those; Resume likewise for paused queues. Delete is enabled when anything is selected.
-  - Delete asks first in a dialog listing the selected queues. Only empty queues can be deleted (asynq's `DeleteQueue` without force); a queue with tasks fails with "Queue {name} is not empty". There is no force delete.
+  - Pause is enabled only if any selected queue is running, and pauses only those; Resume likewise for paused queues. Delete is enabled only when every selected queue is empty (Size 0, which counts completed and aggregating tasks, as asynq reports it); otherwise it is disabled with the native `title` "Queue is not empty".
+  - Delete asks first in a dialog listing the selected queues. Only empty queues can be deleted: the server reads the queue's Size afresh and refuses one above 0, then calls asynq's `DeleteQueue` without force (asynq's own check skips completed and aggregating tasks, whose keys a delete would orphan). A queue with tasks fails with "Queue {name} is not empty". There is no force delete. A queue that gains or loses tasks between the page's last refresh and the click shows that state until the next refresh.
   - Without JS the buttons still post; Delete then answers with a confirmation page. After an action without JS the page redirects back (no re-post on reload), showing any failures as toasts carried in the one-minute `asynqui_flash` cookie.
   - Failures show one toast per queue ("Queue {name} not found", "Queue {name} is not empty", or "Could not pause {name}" with the error in mono). Success just refreshes the table. The selection is kept.
 - **Table:** checkbox, then Queue (link), State (Running/Paused badge), Size, Pending, Active, Scheduled, Retry, Archived, Latency, Memory, Processed today, Failed today.
@@ -264,7 +264,15 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - stat cards: Size, Latency, Memory, Processed today, Failed today
 - **Tabs, each with a count:** Active, Pending (default), Aggregating, Scheduled, Retry, Archived, Completed.
 - **Find task:** a secondary "Find task" button in the header opens a dialog "Find task in {queue}" with one Task ID field. The lookup is `GetTaskInfo(queue, id)`, an exact ID in this queue: a match opens the Task page, a miss shows "Task not found" inline. `/` opens it outside text fields, the field is focused, Enter submits, Escape closes it and focus returns to the button. Without JS the button links to a page with the same form (`/c/{conn}/queues/{queue}/find`).
-- **Table:** checkbox, Task ID (shortened, mono, links to the task), Type, Payload (mono, truncated to one line), then the columns that depend on the tab. Rows come in asynq's order for the state (pending and active oldest first, scheduled and retry by next process time, archived newest first, completed by expiry, latest first); the Inspector has no reverse order, so no column sorts.
+- **Table:** checkbox, Task ID (shortened, mono, links to the task), Type, Payload (mono, truncated to one line), then the columns that depend on the tab.
+- **Sort:** the state's time column sorts both ways, server-side, with the existing sort header (`?dir=asc|desc`, `aria-sort`); the link flips the direction and keeps the page and size; tab links reset it. It works without JS.
+  - Scheduled: Process at (asynq's process time), soonest first by default.
+  - Retry: Next retry, soonest first by default.
+  - Archived: Archived at (when asynq archived it), newest first by default.
+  - Completed: Result kept until (asynq orders completed tasks by when their result expires, `CompletedAt` + retention, not by completion time), latest first by default.
+  - Pending: queue order, oldest (next to run) first by default; `?dir=desc` lists the newest first. There is no time column to carry the sort link (asynq keeps no enqueue time), so the page offers none.
+  - Active: asynq's order, never sorted. Aggregating: asynq's order within a group.
+  - The Inspector cannot list in reverse, so these reads go to Redis directly: one range read of the state's key for the page, then `GetTaskInfo` per row (architecture: "Direct Redis reads"). A task that leaves the state between the two reads is left out, so a page may show fewer rows.
 
 | Tab | Columns | Bulk actions | "All" actions |
 |---|---|---|---|
@@ -272,14 +280,19 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 | Pending | Retried | Archive, Delete | Archive all, Delete all |
 | Scheduled | Process at, In | Run now, Archive, Delete | Run all, Archive all, Delete all |
 | Retry | Next retry, Last error | Run now, Archive, Delete | Run all, Archive all, Delete all |
-| Archived | Last failed, Last error | Run now, Delete | Run all, Delete all |
+| Archived | Archived at, Last error | Run now, Delete | Run all, Delete all |
 | Completed | Completed at, Result kept until | Delete | Delete all |
-| Aggregating | — | — | — |
+| Aggregating, group list | Group (link), Size | Run all, Archive all, Delete all (of the selected groups) | — |
+| Aggregating, one group | — | Run now, Archive, Delete | Run all, Archive all, Delete all (of the group) |
 
-- **asynq limits:** `TaskInfo` has no enqueue time and no archive time, so Pending has no time column and Archived shows Last failed (asynq's `LastFailedAt`).
+- **asynq limits:** `TaskInfo` has no enqueue time, so Pending has no time column. Archived at is the task's score in asynq's archived set, read with the page (a task archived by hand has no Last failed time).
+- **Archive:** every Archive and Archive all button is red (danger) and asks first. Its dialog (and the no-JS confirmation page) says: "asynq keeps at most 10,000 archived tasks for 90 days; older ones are removed." (asynq v0.26.0 trims the archive to 10,000 tasks and 90 days on every archive.)
 - **Active:** no "select all N" and no "Cancel all" (asynq has no `CancelProcessing` for a state); Cancel sends `CancelProcessing` per selected task.
 
-- **Aggregating tab:** lists groups (`Groups(queue)`) with their sizes. Empty state: "No aggregating tasks".
+- **Aggregating tab:** lists groups (`Groups(queue)`) with their sizes, each with a checkbox and a link to the group's tasks (`?state=aggregating&group=`). Empty state: "No aggregating tasks".
+  - The toolbar's Run all, Archive all and Delete all act on the selected groups, one asynq `RunAllAggregatingTasks(queue, group)`, `ArchiveAllAggregatingTasks` or `DeleteAllAggregatingTasks` per group, after a dialog listing them. The notice reports the sum asynq returns; a failing group gets a toast ("Could not run all tasks in {group}").
+  - A group's tasks (`ListAggregatingTasks(queue, group)`) list like any task table, with "Groups / {group}" above the toolbar linking back. Run now, Archive and Delete act on the selection (asynq's `RunTask`, `ArchiveTask`, `DeleteTask`, which accept aggregating tasks though their docs do not say so; kept as in asynqmon), and "select all N" offers the group's Run all, Archive all and Delete all. The pager counts the group's size.
+  - Roles: Delete and Delete all need admin, the others operator. Polling and selection follow the other tabs: a poll swaps the group list (or the group's table, banner and pager), never the toolbar or dialogs.
 - **After an action:** an inline result notice ("Archived 12 tasks"). The table refreshes and the selection clears. Failures show one toast per task ("Task {shortId} not found", "Could not run {shortId}" with asynq's error).
 - **Pagination:** a page past the end (tasks moved on) shows the last page, or the first when the state has no tasks.
 - **"All" actions** run asynq's `*All*` call when the dialog is confirmed: they act on whatever tasks the state holds at that moment (tasks may have arrived or left since the count was shown), and the notice reports the count asynq returns. The "all" selection stays while its dialog is open, whatever a poll changes on the page.
@@ -303,7 +316,7 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - Completed at and Result kept until, when relevant; Orphaned (Yes/No) for an active task; Headers
   - Missing values show "—".
   - `TaskInfo` has no unique key and no enqueue time, so neither is shown.
-- **Actions** follow asynq: Run now for scheduled, retry, archived and aggregating tasks; Archive for pending, scheduled, retry and aggregating ones; Delete for any but active ones; Cancel for active ones. Deleting the task returns to its queue's tab.
+- **Actions** follow asynq: Run now for scheduled, retry, archived and aggregating tasks; Archive for pending, scheduled, retry and aggregating ones; Delete for any but active ones; Cancel for active ones. Archive and Delete ask first in a dialog (Archive with the archive warning, §6.3) and are red. Deleting the task returns to its queue's tab (an aggregating task's group).
 - **Unknown or deleted ID:** shows "Task not found".
 - **IDs "." and "..":** asynq accepts any custom task ID, but a path segment of `.` or `..` is resolved away by browsers and by Go's router, so such a task has no reachable Task page; it still lists and its actions still work from the Queue page.
 - **Last error "attempt N":** asynq counts a failure in Retried when it schedules a retry, not when it archives. So it is Retried for a retry task, Retried + 1 for an archived one, and for a task run back to pending Retried + 1 when its retries were used up, else Retried.

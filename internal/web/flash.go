@@ -60,7 +60,8 @@ func (d *deps) decodeFlash(v string) ([]byte, error) {
 // flashItem is one failure, or the result notice of a task action, with
 // short keys to keep the cookie small. A queue action failure has Q; a
 // task item has A set, and is the notice when N is set, else a failure
-// on task T (or on every task of a state, T empty).
+// on task T (or on every task of a state, T empty; of aggregation group
+// Q when Q is set).
 type flashItem struct {
 	V int    `json:"v"`
 	K int    `json:"k"`
@@ -94,7 +95,7 @@ func (d *deps) setFlashAll(w http.ResponseWriter, conn string, f pages.Flash) {
 		if x.NotFound {
 			k = 1
 		}
-		items = append(items, flashItem{V: int(x.Verb), K: k, A: true, T: x.ID, D: clip(x.Detail)})
+		items = append(items, flashItem{V: int(x.Verb), K: k, A: true, T: x.ID, Q: x.Group, D: clip(x.Detail)})
 	}
 	items = items[:min(len(items), flashMaxItems)]
 	for len(items) > 0 {
@@ -152,7 +153,7 @@ func (d *deps) takeFlash(w http.ResponseWriter, r *http.Request, conn string) (p
 				out.Notice = &pages.TaskNotice{Verb: verb, Count: min(max(*it.N, 0), flashMaxCount)}
 				continue
 			}
-			out.TaskFailures = append(out.TaskFailures, pages.TaskFailure{Verb: verb, ID: it.T, NotFound: it.K == 1, Detail: it.D})
+			out.TaskFailures = append(out.TaskFailures, pages.TaskFailure{Verb: verb, ID: it.T, Group: it.Q, NotFound: it.K == 1, Detail: it.D})
 			continue
 		}
 		verb, kind := pages.QueueVerb(it.V), pages.FailureKind(it.K)

@@ -327,6 +327,12 @@ func TestQueuesToolbarRoles(t *testing.T) {
 				if a, _ := d.Attr("formaction"); a != "/c/main/queues/delete" {
 					t.Errorf("delete formaction = %q", a)
 				}
+				// Only empty queues: every selected row must be data-empty.
+				for attr, want := range map[string]string{"data-enable": "every", "data-flag": "empty", "data-blocked-title": "Queue is not empty"} {
+					if got, _ := d.Attr(attr); got != want {
+						t.Errorf("delete %s = %q, want %q", attr, got, want)
+					}
+				}
 				confirm := doc.Find("dialog#queues-delete #queues-delete-confirm")
 				for attr, want := range map[string]string{"hx-post": "/c/main/queues/delete", "name": "confirm", "value": "1", "form": "queues-form"} {
 					if got, _ := confirm.Attr(attr); got != want {
@@ -720,5 +726,23 @@ func TestQueuesThroughput(t *testing.T) {
 				t.Errorf("%d data rows, want %d", n, tt.days)
 			}
 		})
+	}
+}
+
+// Rows of empty queues carry data-empty, which the Delete button needs on
+// every selected row; Size counts completed and aggregating tasks too.
+func TestQueuesEmptyRows(t *testing.T) {
+	conns := defaultConns()
+	conns.queues["main"] = []Queue{{Name: "done", Size: 3}, {Name: "empty"}}
+	h, _ := newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
+	doc := parse(t, do(t, h, request{path: "/c/main"}))
+	var empty []string
+	doc.Find("#queues-rows tr").Each(func(_ int, s *goquery.Selection) {
+		if _, ok := s.Attr("data-empty"); ok {
+			empty = append(empty, s.AttrOr("data-filter-text", ""))
+		}
+	})
+	if diff := cmp.Diff([]string{"empty"}, empty); diff != "" {
+		t.Errorf("empty rows (-want +got):\n%s", diff)
 	}
 }

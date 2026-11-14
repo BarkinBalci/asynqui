@@ -53,8 +53,13 @@ func TestTaskPage(t *testing.T) {
 	if diff := cmp.Diff([]string{"task-act-run", "task-act-archive", "task-act-delete"}, acts); diff != "" {
 		t.Errorf("actions (-want +got):\n%s", diff)
 	}
-	if doc.Find("#task-act-run.btn.primary:not(.sm)").Length() != 1 || doc.Find("#task-act-delete[data-confirm=task-delete]").Length() != 1 {
+	if doc.Find("#task-act-run.btn.primary:not(.sm)").Length() != 1 || doc.Find("#task-act-delete[data-confirm=task-delete]").Length() != 1 ||
+		doc.Find("#task-act-archive.danger[data-confirm=task-archive]").Length() != 1 {
 		t.Error("action styles")
+	}
+	if dlg := doc.Find("dialog#task-archive"); text(dlg.Find("h2")) != "Archive task" || text(dlg.Find(".dlg-id")) != uuidTask ||
+		!strings.Contains(text(dlg.Find(".dlg-warn")), "10,000 archived tasks for 90 days") {
+		t.Errorf("archive dialog = %q", text(dlg))
 	}
 	form := doc.Find("#task-actions form#task-form[hidden]")
 	if form.Find(`input[name=id][value="`+uuidTask+`"]`).Length() != 1 || form.Find(`input[name=from][value=task]`).Length() != 1 ||
@@ -422,7 +427,16 @@ func TestTaskActions(t *testing.T) {
 		acted    []string
 		check    func(t *testing.T, rec *httptest.ResponseRecorder)
 	}{
-		{name: "archive selected, no JS", rq: post(base+"archive", "id=p00&id=p01&id=p00&id=&state=pending&next=%2Fc%2Fmain%2Fqueues%2Fdefault%3Fpage%3D2", false),
+		{name: "archive needs confirm with htmx", rq: post(base+"archive", "id=p00", true), status: http.StatusBadRequest},
+		{name: "archive without JS asks on a page", rq: post(base+"archive", "id=p00&state=pending", false), status: http.StatusOK,
+			check: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				doc := parse(t, rec)
+				if text(doc.Find("h1")) != "Archive tasks" || !strings.Contains(text(doc.Find(".dlg-warn")), "older ones are removed") ||
+					doc.Find(`form button.btn.danger`).Length() != 1 || doc.Find(`input[name=confirm][value="1"]`).Length() != 1 {
+					t.Error("archive confirmation page")
+				}
+			}},
+		{name: "archive selected, no JS", rq: post(base+"archive", "id=p00&id=p01&id=p00&id=&state=pending&confirm=1&next=%2Fc%2Fmain%2Fqueues%2Fdefault%3Fpage%3D2", false),
 			status: http.StatusSeeOther, location: "/c/main/queues/default?page=2", acted: []string{"archive default/p00", "archive default/p01"},
 			check: func(t *testing.T, rec *httptest.ResponseRecorder) {
 				f := flashOf(t, rec)
@@ -512,7 +526,29 @@ func TestTaskActions(t *testing.T) {
 			}},
 		{name: "task page delete failure stays", rq: post(base+"delete", "id=a0&from=task&state=active&confirm=1", false),
 			status: http.StatusSeeOther, location: "/c/main/queues/default/tasks/a0", acted: []string{"delete default/a0"}},
-		{name: "next cannot leave the queue", rq: post(base+"archive", "id=p00&next="+url.QueryEscape("https://evil.example/x?state=retry"), false),
+		{name: "group run all, htmx", rq: post(base+"run", "all=1&state=aggregating&group=g1&group=g9&confirm=1&next="+url.QueryEscape("/c/main/queues/default?state=aggregating"), true),
+			status: http.StatusOK, acted: []string{"run-all default/group:g1", "run-all default/group:g9"},
+			check: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				doc := parse(t, rec)
+				if got := text(doc.Find(".notice")); got != "Moved 4 tasks to pending" {
+					t.Errorf("notice = %q", got)
+				}
+				if doc.Find("#tab-aggregating.on").Length() != 1 || doc.Find("#groups tbody input[hx-preserve]").Length() != 0 {
+					t.Error("the answer must show the group list with the selection cleared")
+				}
+			}},
+		{name: "group all needs a group", rq: post(base+"delete", "all=1&state=aggregating&confirm=1", true), status: http.StatusBadRequest},
+		{name: "group all without JS asks on a page", rq: post(base+"archive", "all=1&state=aggregating&group=g1", false), status: http.StatusOK,
+			check: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				doc := parse(t, rec)
+				if text(doc.Find("h1")) != "Archive all tasks in groups" || text(doc.Find(".dlg-list li")) != "g1" ||
+					doc.Find(`input[name=group][value=g1]`).Length() != 1 || doc.Find(".dlg-warn").Length() != 1 {
+					t.Errorf("group confirmation page = %q", text(doc.Find("main")))
+				}
+			}},
+		{name: "group task archive", rq: post(base+"archive", "id=g1-0&state=aggregating&confirm=1&next="+url.QueryEscape("/c/main/queues/default?state=aggregating&group=g1"), false),
+			status: http.StatusSeeOther, location: "/c/main/queues/default?group=g1&state=aggregating", acted: []string{"archive default/g1-0"}},
+		{name: "next cannot leave the queue", rq: post(base+"archive", "confirm=1&id=p00&next="+url.QueryEscape("https://evil.example/x?state=retry"), false),
 			status: http.StatusSeeOther, location: "/c/main/queues/default?state=retry", acted: []string{"archive default/p00"}},
 	}
 	for _, tt := range tests {
@@ -540,7 +576,7 @@ func TestTaskActions(t *testing.T) {
 func TestTaskActionFlash(t *testing.T) {
 	h, conns := newTestServer(t, adminOpts())
 	conns.tasks.actErr["p01"] = errors.New("boom")
-	rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/archive", form: "id=p00&id=p01&id=zz"})
+	rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/archive", form: "id=p00&id=p01&id=zz&confirm=1"})
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Path != "/c/main" {
 		t.Fatalf("cookies = %v", cookies)
@@ -553,6 +589,23 @@ func TestTaskActionFlash(t *testing.T) {
 	doc.Find("#toasts .toast-body").Each(func(_ int, s *goquery.Selection) { toasts = append(toasts, text(s)) })
 	if diff := cmp.Diff([]string{"Could not archive p01 boom", "Task zz not found"}, toasts); diff != "" {
 		t.Errorf("toasts (-want +got):\n%s", diff)
+	}
+}
+
+// A failing group "all" action toasts the group, with htmx and through
+// the flash cookie without JS.
+func TestGroupActionFailure(t *testing.T) {
+	h, conns := newTestServer(t, adminOpts())
+	conns.tasks.actErr["group:g1"] = errors.New("boom")
+	form := "all=1&state=aggregating&group=g1&confirm=1"
+	frag := parse(t, do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/archive", form: form, htmx: true}))
+	if got := text(frag.Find(".toast-body")); got != "Could not archive all tasks in g1 boom" {
+		t.Errorf("toast = %q", got)
+	}
+	rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/archive", form: form})
+	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating", cookies: rec.Result().Cookies()}))
+	if got := text(doc.Find("#toasts .toast-body")); got != "Could not archive all tasks in g1 boom" {
+		t.Errorf("flash toast = %q", got)
 	}
 }
 

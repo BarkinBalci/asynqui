@@ -63,7 +63,7 @@ type RowSelect struct {
 }
 
 // Enable is when a selection toolbar button is enabled, given the
-// selected rows' data-state values. app.js applies it.
+// selected rows' data-state values or flags. app.js applies it.
 type Enable int
 
 // Enable rules.
@@ -73,6 +73,10 @@ const (
 	// EnableState enables it when any selected row has data-state equal
 	// to Action.State.
 	EnableState
+	// EnableEvery enables it when every selected row carries the
+	// data-{Action.Flag} attribute. While a selected row lacks it the
+	// button is disabled with the native title Action.Blocked.
+	EnableEvery
 )
 
 // Action is a selection toolbar button that posts the selected rows.
@@ -88,8 +92,13 @@ type Action struct {
 	Need    Role
 	Enable  Enable
 	// State is the data-state a selected row needs for EnableState.
-	State  string
-	Danger bool
+	State string
+	// Flag is the attribute (data-{Flag}) every selected row needs for
+	// EnableEvery, and Blocked the title while one lacks it. Blocked is
+	// copy: set it in templ.
+	Flag    string
+	Blocked string
+	Danger  bool
 	// Primary is the accent button; Large the 38px one (header actions)
 	// instead of the 32px toolbar size.
 	Primary bool

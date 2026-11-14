@@ -53,6 +53,8 @@ const (
 	TasksRowsID    = "tasks-rows"
 	TasksFormID    = "tasks-form"
 	TasksSelectAll = "tsel-all"
+	// GroupsSelectAll selects every group of the Aggregating tab.
+	GroupsSelectAll = "gsel-all"
 	// TasksAllID is the hidden all=1 field of "select all N".
 	TasksAllID    = "tasks-all"
 	TasksBannerID = "tasks-banner"
@@ -64,9 +66,24 @@ const (
 	FindBodyID    = "find-body"
 	FindInputID   = "find-id"
 	FindOpenID    = "find-open"
-	// TasksDeleteDialogID confirms deleting the selected tasks.
-	TasksDeleteDialogID = "tasks-delete"
+	// TasksDeleteDialogID confirms deleting the selected tasks,
+	// TasksArchiveDialogID archiving them.
+	TasksDeleteDialogID  = "tasks-delete"
+	TasksArchiveDialogID = "tasks-archive"
+	// TasksSortID is the time column's sort link.
+	TasksSortID = "sort-time"
 )
+
+// asynq trims the archive (asynq v0.26.0 internal/rdb: maxArchiveSize,
+// archivedExpirationInDays): every Archive confirmation says so.
+const (
+	ArchiveCap  = 10000
+	ArchiveDays = 90
+)
+
+// GroupDialogID is the id of the dialog confirming verb on every task of
+// the selected aggregation groups.
+func GroupDialogID(v TaskVerb) string { return "groups-" + verbParam(v) }
 
 // TabCountID is the id of a tab's count, which polls replace.
 func TabCountID(s TaskState) string { return "tab-count-" + StateParam(s) }
@@ -135,18 +152,26 @@ type Queue struct {
 	// Total is the number of tasks in the tab's state.
 	Total int64
 	Rows  []TaskRow
-	// Groups are the Aggregating tab's rows.
+	// Groups are the Aggregating tab's rows, when it lists the groups.
 	Groups []GroupRow
+	// Group is the aggregation group whose tasks the Aggregating tab
+	// lists; empty when it lists the groups. GroupsURL lists them.
+	Group     string
+	GroupsURL string
+	// Sort is the time column's sort link; its ID is empty for a table
+	// that does not sort.
+	Sort components.SortHead
 	// Actions are the toolbar's buttons, in order.
 	Actions []TaskActionButton
 	// AllowAll offers "select all N" for this state.
 	AllowAll bool
 	// FormURL is the selection form's default action.
-	FormURL      string
-	DeleteDialog components.Dialog
-	AllDialogs   []AllDialog
-	Pager        Pager
-	Sizes        SizePicker
+	FormURL       string
+	DeleteDialog  components.Dialog
+	ArchiveDialog components.Dialog
+	AllDialogs    []AllDialog
+	Pager         Pager
+	Sizes         SizePicker
 	// Next is the page's own URL, posted with actions.
 	Next    string
 	PollURL string
@@ -200,22 +225,29 @@ type TaskRow struct {
 	NextProcessAt time.Time
 	CompletedAt   time.Time
 	KeptUntil     time.Time
+	ArchivedAt    time.Time
 	// Started is when the worker started an active task; zero when no
 	// server reports it. RunningFor is the time since.
 	Started    time.Time
 	RunningFor time.Duration
 }
 
-// GroupRow is one aggregation group.
+// GroupRow is one aggregation group: a link to its tasks and a
+// selection checkbox for the "all" actions.
 type GroupRow struct {
-	Name string
-	Size int64
+	Name   string
+	Size   int64
+	URL    string
+	LinkID string
+	Select components.RowSelect
 }
 
-// TaskActionButton is a toolbar button for verb.
+// TaskActionButton is a toolbar button for verb; All labels it as the
+// "all" variant (the aggregation groups' toolbar).
 type TaskActionButton struct {
 	Verb   TaskVerb
 	Action components.Action
+	All    bool
 }
 
 // AllDialog confirms verb on every task of the state.
@@ -272,6 +304,8 @@ type TaskNotice struct {
 type TaskFailure struct {
 	Verb TaskVerb
 	ID   string
+	// Group is the aggregation group of a failed "all" action, if any.
+	Group string
 	// NotFound marks a task (or queue) that does not exist; otherwise
 	// Detail is the error text.
 	NotFound bool
@@ -290,13 +324,19 @@ type Flash struct {
 type ConfirmTasks struct {
 	Layout views.Layout
 	Verb   TaskVerb
-	// IDs are the selected tasks; empty with All.
-	IDs   []string
-	All   bool
-	State TaskState
-	Total int64
+	// IDs are the selected tasks; empty with All. Groups are the
+	// selected aggregation groups of an "all" action on them.
+	IDs    []string
+	Groups []string
+	All    bool
+	State  TaskState
+	Total  int64
 	// Action, Next and Hidden are what the confirm button posts.
 	Action    string
 	Hidden    []Param
 	CancelURL string
 }
+
+// groupList reports whether the page lists the Aggregating tab's groups
+// rather than tasks.
+func (m Queue) groupList() bool { return m.Tab == StateAggregating && m.Group == "" }

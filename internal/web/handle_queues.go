@@ -392,7 +392,7 @@ func (d *deps) queueActions(m *pages.Queues, a access) {
 	m.Resume = components.Action{ID: "act-resume", URL: resume, Form: pages.QueuesFormID, Allowed: op, Need: components.RoleOperator,
 		Enable: components.EnableState, State: "paused"}
 	m.Delete = components.Action{ID: "act-delete", URL: del, Form: pages.QueuesFormID, Allowed: admin, Need: components.RoleAdmin,
-		Enable: components.EnableAny, Danger: true, Confirm: pages.DeleteDialogID}
+		Enable: components.EnableEvery, Flag: "empty", Danger: true, Confirm: pages.DeleteDialogID}
 	m.DeleteDialog = components.Dialog{ID: pages.DeleteDialogID, ConfirmURL: del, Form: pages.QueuesFormID, Danger: true}
 }
 

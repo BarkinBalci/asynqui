@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 // fakeTasks is a hand-written taskInspector. Tasks live in one map by
@@ -129,6 +131,50 @@ func (f *fakeTasks) ListCompletedTasks(q string, o ...asynq.ListOption) ([]*asyn
 	return f.list("ListCompletedTasks", q, asynq.TaskStateCompleted, o)
 }
 
+func (f *fakeTasks) ListAggregatingTasks(q, g string, o ...asynq.ListOption) ([]*asynq.TaskInfo, error) {
+	all, err := f.list("ListAggregatingTasks", q, asynq.TaskStateAggregating, o)
+	var out []*asynq.TaskInfo
+	for _, t := range all {
+		if t.Group == g {
+			out = append(out, t)
+		}
+	}
+	return out, err
+}
+
+func (f *fakeTasks) groupAll(name, queue, group string, to asynq.TaskState, del bool) (int, error) {
+	if err := f.call(name); err != nil {
+		return 0, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for k, t := range f.tasks {
+		if t.Queue != queue || t.State != asynq.TaskStateAggregating || t.Group != group {
+			continue
+		}
+		n++
+		if del {
+			delete(f.tasks, k)
+		} else {
+			t.State = to
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeTasks) RunAllAggregatingTasks(q, g string) (int, error) {
+	return f.groupAll("RunAllAggregatingTasks", q, g, asynq.TaskStatePending, false)
+}
+
+func (f *fakeTasks) ArchiveAllAggregatingTasks(q, g string) (int, error) {
+	return f.groupAll("ArchiveAllAggregatingTasks", q, g, asynq.TaskStateArchived, false)
+}
+
+func (f *fakeTasks) DeleteAllAggregatingTasks(q, g string) (int, error) {
+	return f.groupAll("DeleteAllAggregatingTasks", q, g, 0, true)
+}
+
 func (f *fakeTasks) Groups(q string) ([]*asynq.GroupInfo, error) {
 	if err := f.call("Groups"); err != nil {
 		return nil, err
@@ -238,12 +284,32 @@ func taskConn(t *testing.T, f *fakeTasks, queues ...string) *Conn {
 	t.Helper()
 	c := testConn(t, "main", nil)
 	c.tasks = f
+	c.keys = keysOf(f)
 	infos := map[string]*asynq.QueueInfo{}
 	for _, q := range queues {
 		infos[q] = &asynq.QueueInfo{Queue: q, Pending: 2, Completed: 4, Aggregating: 5}
 	}
 	c.queues = &fakeQueues{names: queues, infos: infos}
 	return c
+}
+
+// keysOf lays out the fake's tasks as asynq would: each pending task
+// LPUSHed in order, the others in their state's sorted set scored by
+// their position.
+func keysOf(f *fakeTasks) *fakeKeys {
+	k := newFakeKeys()
+	for i, key := range f.order {
+		t := f.tasks[key]
+		name, zset, ok := stateKey(t.Queue, taskState(t.State))
+		switch {
+		case !ok:
+		case zset:
+			k.zsets[name] = append(k.zsets[name], redis.Z{Score: float64(i), Member: t.ID})
+		default:
+			k.lists[name] = append([]string{t.ID}, k.lists[name]...)
+		}
+	}
+	return k
 }
 
 func ti(queue, id string, state asynq.TaskState) *asynq.TaskInfo {
@@ -272,11 +338,8 @@ func TestListTasks(t *testing.T) {
 	tasks = append(tasks, ti("emails", "s0", asynq.TaskStateScheduled), ti("other", "p9", asynq.TaskStatePending))
 	f := newFakeTasks(tasks...)
 	c := taskConn(t, f, "emails", "other")
+	keys := c.keys.(*fakeKeys)
 
-	got, err := c.ListTasks(t.Context(), "emails", TaskPending, 2, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ids := func(ts []Task) []string {
 		var out []string
 		for _, t := range ts {
@@ -284,37 +347,92 @@ func TestListTasks(t *testing.T) {
 		}
 		return out
 	}
+	got, err := c.ListTasks(t.Context(), "emails", TaskPending, 2, 2, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if diff := cmp.Diff([]string{"p2", "p3"}, ids(got)); diff != "" {
 		t.Errorf("page 2 (-want +got):\n%s", diff)
-	}
-	if f.page != [2]int{2, 2} {
-		t.Errorf("asked page/size %v, want [2 2]", f.page)
 	}
 	if got[0].State != TaskPending || got[0].Type != "email:welcome" || string(got[0].Payload) != `{"a":1}` {
 		t.Errorf("task = %+v", got[0])
 	}
-
-	// Cached: the same page within a second is one call.
-	if _, err := c.ListTasks(t.Context(), "emails", TaskPending, 2, 2); err != nil {
+	got, err = c.ListTasks(t.Context(), "emails", TaskPending, 1, 2, true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if n := f.count("ListPendingTasks"); n != 1 {
-		t.Errorf("%d list calls, want 1", n)
+	if diff := cmp.Diff([]string{"p4", "p3"}, ids(got)); diff != "" {
+		t.Errorf("newest first (-want +got):\n%s", diff)
+	}
+
+	// Cached: the same page within a second is one read.
+	reads, infos := keys.reads, f.count("GetTaskInfo")
+	if _, err := c.ListTasks(t.Context(), "emails", TaskPending, 2, 2, false); err != nil {
+		t.Fatal(err)
+	}
+	if keys.reads != reads || f.count("GetTaskInfo") != infos {
+		t.Errorf("a cached page read Redis again")
 	}
 
 	// Page size is bounded.
-	if _, err := c.ListTasks(t.Context(), "emails", TaskScheduled, 0, 1000); err != nil {
+	if _, err := c.ListTasks(t.Context(), "emails", TaskScheduled, 0, 1000, false); err != nil {
 		t.Fatal(err)
 	}
-	if f.page != [2]int{1, MaxPageSize} {
-		t.Errorf("asked page/size %v, want [1 %d]", f.page, MaxPageSize)
+	if keys.last.key != "asynq:{emails}:scheduled" || keys.last.start != 0 || keys.last.stop != MaxPageSize-1 {
+		t.Errorf("read %+v, want ranks 0..%d of the scheduled set", keys.last, MaxPageSize-1)
 	}
 
-	if _, err := c.ListTasks(t.Context(), "emails", TaskAggregating, 1, 20); !errors.Is(err, ErrUnsupported) {
+	if _, err := c.ListTasks(t.Context(), "emails", TaskAggregating, 1, 20, false); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("aggregating: err = %v, want ErrUnsupported", err)
 	}
-	if _, err := c.ListTasks(t.Context(), "gone", TaskPending, 1, 20); !errors.Is(err, ErrQueueNotFound) || !errors.Is(err, asynq.ErrQueueNotFound) {
+	if _, err := c.ListTasks(t.Context(), "gone", TaskPending, 1, 20, false); !errors.Is(err, ErrQueueNotFound) {
 		t.Errorf("missing queue: err = %v, want ErrQueueNotFound", err)
+	}
+	if _, err := c.ListTasks(t.Context(), "gone", TaskActive, 1, 20, false); !errors.Is(err, ErrQueueNotFound) || !errors.Is(err, asynq.ErrQueueNotFound) {
+		t.Errorf("missing queue, active: err = %v, want ErrQueueNotFound", err)
+	}
+}
+
+// The sorted states read a page of IDs with their scores in either
+// direction, hydrate each, and leave out the IDs that vanished or moved
+// on between the two reads.
+func TestListTasksSorted(t *testing.T) {
+	f := newFakeTasks(
+		ti("emails", "x0", asynq.TaskStateArchived), ti("emails", "x1", asynq.TaskStateArchived),
+		ti("emails", "x2", asynq.TaskStatePending), ti("emails", "x3", asynq.TaskStateArchived),
+	)
+	c := taskConn(t, f, "emails")
+	keys := newFakeKeys()
+	keys.zsets["asynq:{emails}:archived"] = []redis.Z{
+		{Score: 100, Member: "x0"}, {Score: 200, Member: "ghost"}, {Score: 300, Member: "x1"},
+		{Score: 400, Member: "x2"}, {Score: 500, Member: "x3"},
+	}
+	c.keys = keys
+
+	got, err := c.ListTasks(t.Context(), "emails", TaskArchived, 1, 20, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, task := range got {
+		ids = append(ids, task.ID+"@"+strconv.FormatInt(task.ArchivedAt.Unix(), 10))
+	}
+	if diff := cmp.Diff([]string{"x3@500", "x1@300", "x0@100"}, ids); diff != "" {
+		t.Errorf("archived newest first (-want +got):\n%s", diff)
+	}
+	if !keys.last.rev {
+		t.Error("newest first read without REV")
+	}
+
+	// Any other hydrate failure fails the page.
+	f.err = errors.New("NOPERM")
+	if _, err := c.ListTasks(t.Context(), "emails", TaskArchived, 1, 20, false); err == nil {
+		t.Error("a failing GetTaskInfo did not fail the page")
+	}
+	f.err = nil
+	keys.err = errors.New("LOADING")
+	if _, err := c.ListTasks(t.Context(), "emails", TaskArchived, 2, 20, false); !errors.Is(err, keys.err) {
+		t.Errorf("a failing range read: err = %v", err)
 	}
 }
 
@@ -323,7 +441,7 @@ func TestListActiveTasksStarted(t *testing.T) {
 	f := newFakeTasks(ti("emails", "a1", asynq.TaskStateActive), ti("emails", "a2", asynq.TaskStateActive))
 	c := taskConn(t, f, "emails")
 	c.servers = &fakeServers{infos: []*asynq.ServerInfo{{ActiveWorkers: []*asynq.WorkerInfo{{TaskID: "a1", Started: started}}}, nil}}
-	got, err := c.ListTasks(t.Context(), "emails", TaskActive, 1, 20)
+	got, err := c.ListTasks(t.Context(), "emails", TaskActive, 1, 20, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,8 +589,10 @@ func TestGroups(t *testing.T) {
 // Keys of different queues and pages never collide, whatever the names.
 func TestTaskCacheKeys(t *testing.T) {
 	keys := []string{
-		string(tasksKey("a/1", TaskPending, 1, 20)), string(tasksKey("a", TaskPending, 1, 20)),
-		string(tasksKey("a", TaskPending, 12, 0)), string(tasksKey("a", TaskPending, 1, 2)),
+		string(tasksKey("a/1", TaskPending, 1, 20, false)), string(tasksKey("a", TaskPending, 1, 20, false)),
+		string(tasksKey("a", TaskPending, 12, 0, false)), string(tasksKey("a", TaskPending, 1, 2, false)),
+		string(tasksKey("a", TaskPending, 1, 20, true)),
+		string(groupTasksKey("ab", "c", 1, 20)), string(groupTasksKey("a", "bc", 1, 20)),
 		string(taskKey("ab", "c")), string(taskKey("a", "bc")),
 		string(queueKey("a")), string(groupsKey("a")),
 	}
@@ -485,5 +605,50 @@ func TestTaskCacheKeys(t *testing.T) {
 	}
 	if !slices.Contains(keys, "queue/a") {
 		t.Errorf("queueKey = %q", queueKey("a"))
+	}
+}
+
+func TestGroupTasks(t *testing.T) {
+	agg := func(id, group string) *asynq.TaskInfo {
+		info := ti("emails", id, asynq.TaskStateAggregating)
+		info.Group = group
+		return info
+	}
+	f := newFakeTasks(agg("g1", "a"), agg("g2", "b"), agg("g3", "a"), agg("g4", "a"))
+	c := taskConn(t, f, "emails")
+
+	got, err := c.ListGroupTasks(t.Context(), "emails", "a", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].ID != "g1" || got[0].State != TaskAggregating {
+		t.Errorf("group a = %+v", got)
+	}
+	if _, err := c.ListGroupTasks(t.Context(), "nope", "a", 1, 20); !errors.Is(err, ErrQueueNotFound) {
+		t.Errorf("unknown queue: err = %v", err)
+	}
+
+	n, err := c.ArchiveAllGroupTasks(t.Context(), "emails", "b")
+	if err != nil || n != 1 {
+		t.Errorf("ArchiveAllGroupTasks = %d, %v; want 1", n, err)
+	}
+	if got, err := c.ListGroupTasks(t.Context(), "emails", "a", 1, 20); err != nil || len(got) != 3 {
+		t.Errorf("after archiving b, group a = %+v, %v", got, err)
+	}
+	n, err = c.RunAllGroupTasks(t.Context(), "emails", "a")
+	if err != nil || n != 3 {
+		t.Errorf("RunAllGroupTasks = %d, %v; want 3", n, err)
+	}
+	if got, err := c.ListGroupTasks(t.Context(), "emails", "a", 1, 20); err != nil || len(got) != 0 {
+		t.Errorf("after run all, group a = %+v, %v; want empty (cache dropped)", got, err)
+	}
+	if n, err := c.DeleteAllGroupTasks(t.Context(), "emails", "a"); err != nil || n != 0 {
+		t.Errorf("DeleteAllGroupTasks = %d, %v; want 0", n, err)
+	}
+	if _, err := c.DeleteAllGroupTasks(t.Context(), "nope", "a"); !errors.Is(err, ErrQueueNotFound) {
+		t.Errorf("unknown queue: err = %v", err)
+	}
+	if f.count("DeleteAllAggregatingTasks") != 1 {
+		t.Error("an all action ran on an unknown queue")
 	}
 }

@@ -167,7 +167,11 @@ func TestQueueActions(t *testing.T) {
 	notEmpty := fmt.Errorf("%w: queue=%q", asynq.ErrQueueNotEmpty, "full")
 	notFound := fmt.Errorf("%w: queue=%q", asynq.ErrQueueNotFound, "gone")
 	fake := func() *fakeQueues {
-		return &fakeQueues{names: []string{"ok", "full", "bad"}, actErr: map[string]error{"full": notEmpty, "gone": notFound, "bad": errBoom}}
+		return &fakeQueues{
+			names:  []string{"ok", "full", "bad", "done"},
+			infos:  map[string]*asynq.QueueInfo{"ok": {}, "full": {}, "bad": {}, "done": {Size: 3, Completed: 3}},
+			actErr: map[string]error{"full": notEmpty, "gone": notFound, "bad": errBoom},
+		}
 	}
 	type action func(*Conn, context.Context, string) error
 	pause, unpause, del := (*Conn).PauseQueue, (*Conn).UnpauseQueue, (*Conn).DeleteQueue
@@ -185,7 +189,8 @@ func TestQueueActions(t *testing.T) {
 		{"pause fails", pause, "bad", []error{errBoom}, "pause bad"},
 		{"delete", del, "ok", nil, "delete ok"},
 		{"delete not empty", del, "full", []error{ErrQueueNotEmpty, asynq.ErrQueueNotEmpty}, "delete full"},
-		{"delete not found", del, "gone", []error{ErrQueueNotFound, asynq.ErrQueueNotFound}, "delete gone"},
+		{"delete with completed tasks is never sent", del, "done", []error{ErrQueueNotEmpty}, ""},
+		{"delete not found is never sent", del, "gone", []error{ErrQueueNotFound}, ""},
 		{"delete fails", del, "bad", []error{errBoom}, "delete bad"},
 	}
 	for _, tt := range tests {
@@ -275,7 +280,11 @@ func TestActionInvalidatesCache(t *testing.T) {
 			t.Fatal(err)
 		}
 		read()
-		if n, want := calls(), 2+2*(i+1); n != want {
+		want := 2 + 2*(i+1)
+		if i == 2 {
+			want++ // the delete's fresh emptiness check
+		}
+		if n := calls(); n != want {
 			t.Errorf("action %d: %d calls, want %d (refetched)", i, n, want)
 		}
 	}

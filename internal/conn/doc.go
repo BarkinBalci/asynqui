@@ -10,4 +10,8 @@
 // concurrent fetches of the same key are shared, and errors are not cached.
 // PauseQueue, UnpauseQueue and DeleteQueue drop the connection's cached
 // values when they succeed.
+//
+// Everything goes through asynq's public Inspector, except the task
+// tables' time sort: keys.go is the one place that reads asynq's own
+// Redis keys (plain range reads, pinned by TestIntegrationKeys).
 package conn

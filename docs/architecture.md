@@ -138,7 +138,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 	// pages (viewer)
 	mux.Handle("GET /{$}", view(d, handleOverview(d)))
 	mux.Handle("GET /c/{conn}", view(d, handleQueues(d)))                        // ?sort=size&dir=desc&range=14d&queue=
-	mux.Handle("GET /c/{conn}/queues/{queue}", view(d, handleQueue(d)))           // ?state=pending&page=2&size=20
+	mux.Handle("GET /c/{conn}/queues/{queue}", view(d, handleQueue(d)))           // ?state=pending&dir=desc&page=2&size=20, ?state=aggregating&group=
 	mux.Handle("GET /c/{conn}/queues/{queue}/find", view(d, handleFindTask(d)))    // ?id=; Find task lookup, a page without JS
 	mux.Handle("GET /c/{conn}/queues/{queue}/tasks/{id}", view(d, handleTask(d))) // ?payload=raw
 	mux.Handle("GET /c/{conn}/servers", view(d, handleServers(d)))
@@ -152,7 +152,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 	mux.Handle("POST /c/{conn}/queues/pause", op(d, handleQueueAction(d, pages.VerbPause)))  // form: queue=a&queue=b&next=
 	mux.Handle("POST /c/{conn}/queues/resume", op(d, handleQueueAction(d, pages.VerbResume)))
 	mux.Handle("POST /c/{conn}/queues/pause", …)                                             // + from=queue: the Queue page's Pause/Resume
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, TaskRun)))  // id=a&id=b or all=1&state=; next=, from=task
+	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, TaskRun)))  // id=a&id=b or all=1&state= (+ group=g&group=h for aggregating); next=, from=task; archive also needs confirm=1
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTaskAction(d, TaskArchive)))
 	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTaskAction(d, TaskCancel))) // ids only
 
@@ -191,7 +191,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 | Need | Library |
 |---|---|
 | Queue data and actions | `github.com/hibiken/asynq`: Inspector for reads and actions |
-| PING, INFO | `github.com/redis/go-redis/v9` (already a dependency of asynq) |
+| PING, INFO, the direct reads of `conn/keys.go` | `github.com/redis/go-redis/v9` (already a dependency of asynq) |
 | HTML components | `github.com/a-h/templ`; codegen runs through `go tool -modfile=tools/go.mod templ` |
 | Config | `go.yaml.in/yaml/v3`, the maintained successor to the archived `gopkg.in/yaml.v3` |
 | OIDC | `github.com/coreos/go-oidc/v3` + `golang.org/x/oauth2` |
@@ -208,7 +208,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **Fonts:** Inter and JetBrains Mono, self-hosted (OFL).
 - **`app.js`:** one small file for:
   - copy to clipboard
-  - row selection: the "N selected" toolbar, enabling its buttons, select-all (and Gmail-style "select all N" for tasks)
+  - row selection: the "N selected" toolbar, enabling its buttons (on any selection, on a selected row's `data-state`, or only when every selected row has a flag such as `data-empty`, with a `data-blocked-title` otherwise), select-all (and Gmail-style "select all N" for tasks)
   - confirmation dialogs (`<dialog>`)
   - the theme toggle
   - polling timers, paused while the tab is hidden
@@ -235,7 +235,8 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **Concurrency:** connections are fetched in parallel. A failing connection renders "Connection failed" and does not block the page.
 - **Page budget:** the Overview waits at most 1.5s for summaries (`context.WithTimeout`). A card that misses it renders as "Checking"; the fetch goes on in conn's cache, so the next poll has it. If a reachable connection's Summary fails, the card and the sidebar both show it down.
 - **Overview cost:** `GetQueueInfo` per queue (one snapshot, shared with the Connection page's table), plus `Servers()` per connection. Instance-wide INFO is fetched only by the Info page.
-- **Queue and Task page cost:** one queue's `GetQueueInfo` (a 1s snapshot per queue, after an SMEMBERS existence check) plus one page of `List*Tasks` (a snapshot per state, page and size); the Active tab takes each task's start time from the Servers page's `Servers()` snapshot; the Aggregating tab reads `Groups`. The Task page reads `GetTaskInfo` (a snapshot per task). Every task action drops the connection's cached snapshots.
+- **Queue and Task page cost:** one queue's `GetQueueInfo` (a 1s snapshot per queue, after an SMEMBERS existence check) plus one page of the tab's tasks (a snapshot per state, direction, page and size). The pending, scheduled, retry, archived and completed tabs cost an SMEMBERS, one range read of the state's key (see "Direct Redis reads") and a `GetTaskInfo` per row (at most 100, 8 at a time); the Active tab is one `ListActiveTasks` and takes each task's start time from the Servers page's `Servers()` snapshot; the Aggregating tab reads `Groups`, and a group's page adds `ListAggregatingTasks` (a snapshot per group, page and size). The Task page reads `GetTaskInfo` (a snapshot per task). Every task action drops the connection's cached snapshots. A queue delete reads the queue's `GetQueueInfo` afresh first (Size must be 0).
+- **Direct Redis reads:** the Inspector cannot list a state in reverse, so the task tables' time sort reads asynq's keys directly. This happens in one place, `internal/conn/keys.go`, which documents every key it touches and its score, and the asynq version it was checked against (v0.26.0): `asynq:{q}:pending` (LIST, LRANGE from either end; the tail is the oldest), and the sorted sets `asynq:{q}:scheduled` and `asynq:{q}:retry` (score: process time), `asynq:{q}:archived` (score: when archived) and `asynq:{q}:completed` (score: completion + retention). The key format is copied from asynq's `internal/base`, never imported. Only plain range reads are allowed: one ZRANGE/ZREVRANGE WITHSCORES or LRANGE per page, then each ID is hydrated with the public `GetTaskInfo`; no writes, scripts, scans or client-side sorting. `TestIntegrationKeys` (in `internal/conn`) pins the layout against the asynq in go.mod: it enqueues, schedules, fails, archives and completes real tasks and checks the raw keys' order and scores, so an asynq layout change fails CI. Re-check both when bumping asynq.
 - **Connection page cost:** the same queue snapshot, plus `History` per queue for the chart (one snapshot per queue and range). The two are read in parallel and the page waits at most 5s for them; a miss renders "Checking" (in the chart body for the history). A successful pause, resume or delete drops the connection's cached snapshots, so the next read shows it.
 - **Servers, Schedulers and Info pages cost:** one snapshot each of `Inspector.Servers` (shared by the list and the detail page), `Inspector.SchedulerEntries` (shared likewise), and `INFO`. The Scheduler entry page adds one snapshot per entry and history page: `ListSchedulerEnqueueEvents` for the page, a one-event read past it to know whether an older page exists (asynq gives no count), and `GetTaskInfo` per event in the entry's queue (each result reused for 10s), so a task ID links only while the task exists; an entry without a `Queue` option has no known queue and costs no lookups. Each page waits at most 5s (both reads of the entry page share it); a miss renders "Checking". Only a network error or timeout (`conn.Unreachable`) marks the connection down; an error reply is shown inline.
 - **Backend label:** "Redis info" or "Valkey info" comes from a per-connection value that costs no INFO per page: the health loop reads `INFO server` each time a connection becomes reachable, while the backend is still unknown, and every 6th check (once a minute), and every `INFO` read for the Info page refreshes it. Before the first detection the label is "Redis info".
@@ -252,7 +253,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
 - **Polled regions keep focus:** a poll never replaces a whole region. The Overview grid has `hx-swap="none"`, and the response replaces each card, the heading badge, the Updated time and the sidebar list out of band by id (`hx-swap-oob`). htmx refocuses the element with the same id after a swap, so every focusable element in a polled region has a stable id; ids use one prefix per element kind (`card-`, `open-`, `retry-`, `nav-`), so connection names cannot make them collide.
 - **Connection page requests:** `#queues-page` wraps the page and is the single `hx-sync` scope of its requests. The poll (`hx-sync="#queues-page:abort"`) is dropped while another request is in flight and aborted when a user request starts; sorts, range and picker changes inherit `this:queue last`; actions use `queue all`, so none is cut off.
 - **Connection page polling:** a hidden `#queues-poll` element polls the page URL with `hx-swap="none"`; the server recognises it by `HX-Trigger`. Every answer replaces, out of band, the poll element itself (so its URL follows the sort and chart state), the health badge, the state banner, the Updated time and the sidebar list. A poll then replaces the table region and only the chart body (`#tp-chart`), never the chart controls, so an open select stays open. When a poll finds no data while the page shows a table, the table and its selection stay and the banner says why. A page rendered without data polls with `?poll=init`, which gets every region. Sort links, the range buttons and the queue picker (user requests) get every region, controls included, and push their URL, so all state is in the query (`?sort=&dir=&range=&queue=`) and bookmarkable. The toolbar, filter input and dialog sit outside the swapped regions.
-- **Queue page requests:** `#queue-page` is the `hx-sync` scope, as on the Connection page. The hidden `#queue-poll` replaces, out of band, the badge, the Pause/Resume button, the stats, each tab's count, the table, the "select all" banner and the pager; never the tabs, the toolbar, the rows-per-page select or the dialogs. Tab, page and size changes and actions are user requests: their answer replaces the whole `#task-card`. An action's answer renders the row checkboxes without `hx-preserve`, so the selection clears.
+- **Queue page requests:** `#queue-page` is the `hx-sync` scope, as on the Connection page. The hidden `#queue-poll` replaces, out of band, the badge, the Pause/Resume button, the stats, each tab's count, the table, the "select all" banner and the pager (on the Aggregating tab's group list: the group table only); never the tabs, the toolbar, the rows-per-page select or the dialogs. Tab, sort, group, page and size changes and actions are user requests: their answer replaces the whole `#task-card`. An action's answer renders the row checkboxes without `hx-preserve`, so the selection clears.
 - **"Select all N":** the header checkbox selects the page; once every row is selected `app.js` shows the banner, whose button sets the form's hidden `all=1`. The toolbar then counts the state's total, and each button opens its "all" confirmation dialog (`data-confirm-all`) instead of acting on the rows. Not offered on Active.
 - **Task page polling:** `#task-poll` carries the shown state (`?seen=`); its answer replaces the badge and the last error, result and details cards, and the actions only when the state changed. The payload card is never replaced. A deleted task replaces the page body with "Task not found" and stops polling.
 - **Selection survives polls without server state:** row checkboxes (and select-all) carry `hx-preserve` and a stable id (`qsel-` plus the hex of the queue name), so htmx keeps the very same elements, checked state included, when it swaps in a new table; `app.js` recomputes the toolbar right after each swap, re-applies the filter at once, and gives focus back to the element that had it (htmx briefly takes preserved elements out of the document, which drops their focus). The checkboxes belong to an empty action form through their `form` attribute, so the table need not sit inside a form.
@@ -264,12 +265,13 @@ func addRoutes(mux *http.ServeMux, d deps) {
 ## Testing
 
 1. **Component tests:** render templ components with fixture view models and assert on HTML with goquery (columns, badges, empty states, disabled buttons per role).
-2. **Handler tests:** `httptest` through the full stack against a real Redis from testcontainers. They cover:
+2. **Integration tests** (`internal/conn`, testcontainers, skipped without Docker): the conn reads and actions against real Redis, Valkey and asynq. `TestIntegrationKeys` is the one test of asynq's key layout (see "Direct Redis reads").
+3. **Handler tests:** `httptest` through the full stack against a real Redis from testcontainers. They cover:
    - full page vs `HX-Request` fragment
    - role enforcement (403/404)
    - actions mutating Redis
    - "not found" and "Connection failed" states
-3. **Browser smoke tests** (about 10, a separate CI job, milestone M7): playwright-go for the behaviour that lives in `app.js` and htmx and that Go tests cannot run (selection across polls, focus, dialogs, `hx-sync`); handler and component tests only check the markup that drives it:
+4. **Browser smoke tests** (about 10, a separate CI job, milestone M7): playwright-go for the behaviour that lives in `app.js` and htmx and that Go tests cannot run (selection across polls, focus, dialogs, `hx-sync`); handler and component tests only check the markup that drives it:
    - select-all then bulk action
    - copy
    - theme without a flash

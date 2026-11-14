@@ -51,6 +51,9 @@ func defaultTasks() *fakeTasks {
 			Retention: 24 * time.Hour, Result: []byte(`{"sent":true}`)},
 		Task{ID: "low-1", Queue: "low", Type: "cleanup", State: TaskPending},
 	)
+	for i := range 4 {
+		ts = append(ts, Task{ID: fmt.Sprintf("g1-%d", i), Queue: "default", Type: "batch", State: TaskAggregating, Group: "g1"})
+	}
 	return &fakeTasks{tasks: ts, groups: map[string][]Group{"default": {{Name: "g1", Size: 4}}}, actErr: map[string]error{}}
 }
 
@@ -119,7 +122,17 @@ func (f *fakeConns) QueueInfo(ctx context.Context, name, queue string) (QueueInf
 	return qi, nil
 }
 
-func (f *fakeConns) Tasks(ctx context.Context, name, queue string, state TaskState, page, size int) ([]Task, error) {
+// Tasks pages over the state's tasks in list order (oldest first), or
+// reversed with desc.
+func (f *fakeConns) Tasks(ctx context.Context, name, queue string, state TaskState, page, size int, desc bool) ([]Task, error) {
+	return f.page(ctx, name, queue, page, size, desc, func(t Task) bool { return t.State == state })
+}
+
+func (f *fakeConns) GroupTasks(ctx context.Context, name, queue, group string, page, size int) ([]Task, error) {
+	return f.page(ctx, name, queue, page, size, false, func(t Task) bool { return t.State == TaskAggregating && t.Group == group })
+}
+
+func (f *fakeConns) page(ctx context.Context, name, queue string, page, size int, desc bool, keep func(Task) bool) ([]Task, error) {
 	if err := f.read(ctx, name, queue); err != nil {
 		return nil, err
 	}
@@ -128,9 +141,12 @@ func (f *fakeConns) Tasks(ctx context.Context, name, queue string, state TaskSta
 	defer t.mu.Unlock()
 	var all []Task
 	for _, task := range t.tasks {
-		if task.Queue == queue && task.State == state {
+		if task.Queue == queue && keep(task) {
 			all = append(all, task)
 		}
+	}
+	if desc {
+		slices.Reverse(all)
 	}
 	start := (page - 1) * size
 	if start >= len(all) {
@@ -219,6 +235,40 @@ func (f *fakeConns) TaskActionAll(_ context.Context, _, queue string, verb TaskV
 		kept = append(kept, task)
 	}
 	t.tasks = kept
+	return n, nil
+}
+
+func (f *fakeConns) GroupActionAll(_ context.Context, _, queue string, verb TaskVerb, group string) (int, error) {
+	t := f.tasks
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.acted = append(t.acted, verbParam(verb)+"-all "+queue+"/group:"+group)
+	if err := t.actErr["group:"+group]; err != nil {
+		return 0, err
+	}
+	n := 0
+	kept := t.tasks[:0]
+	for _, task := range t.tasks {
+		if task.Queue == queue && task.State == TaskAggregating && task.Group == group {
+			n++
+			switch verb {
+			case TaskRun:
+				task.State = TaskPending
+			case TaskArchive:
+				task.State = TaskArchived
+			case TaskDelete:
+				continue
+			}
+		}
+		kept = append(kept, task)
+	}
+	t.tasks = kept
+	gs := t.groups[queue]
+	for i := range gs {
+		if gs[i].Name == group {
+			gs[i].Size = 0
+		}
+	}
 	return n, nil
 }
 

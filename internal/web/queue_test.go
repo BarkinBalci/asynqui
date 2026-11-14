@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/go-cmp/cmp"
@@ -104,7 +105,9 @@ func TestQueuePage(t *testing.T) {
 	if doc.Find(`#tasks-all[name=all][form=tasks-form][data-everything=tasks-form]`).Length() != 1 {
 		t.Error("no all field")
 	}
-	if doc.Find("#act-archive[data-confirm-all=tasks-all-archive]").Length() != 1 ||
+	if doc.Find("#act-archive.danger[data-confirm=tasks-archive][data-confirm-all=tasks-all-archive]").Length() != 1 ||
+		!strings.Contains(text(doc.Find("dialog#tasks-archive .dlg-warn")), "asynq keeps at most 10,000 archived tasks for 90 days") ||
+		!strings.Contains(text(doc.Find("dialog#tasks-all-archive .dlg-warn")), "10,000") || doc.Find("dialog#tasks-delete .dlg-warn").Length() != 0 ||
 		doc.Find("#act-delete[data-confirm=tasks-delete][data-confirm-all=tasks-all-delete]").Length() != 1 {
 		t.Error("toolbar buttons")
 	}
@@ -139,7 +142,7 @@ func TestQueueTabs(t *testing.T) {
 		{"active", []string{"Started", "Running for"}, []string{"act-cancel"}, false, "a0|email:digest|�bin�|Nov 8, 00:41:48|4s"},
 		{"scheduled", []string{"Process at", "In"}, []string{"act-run", "act-archive", "act-delete"}, false, "s0|report||Nov 8, 01:26:52|Nov 8, 01:26:52"},
 		{"retry", []string{"Next retry", "Last error"}, []string{"act-run", "act-archive", "act-delete"}, false, ""},
-		{"archived", []string{"Last failed", "Last error"}, []string{"act-run", "act-delete"}, false, ""},
+		{"archived", []string{"Archived at", "Last error"}, []string{"act-run", "act-delete"}, false, ""},
 		{"completed", []string{"Completed at", "Result kept until"}, []string{"act-delete"}, false, "c0|email:welcome||Nov 8, 00:40:52|Nov 9, 00:40:52"},
 	}
 	for _, tt := range tests {
@@ -173,15 +176,133 @@ func TestQueueTabs(t *testing.T) {
 	}
 }
 
+// The scheduled, retry, archived and completed tables sort by their time
+// column; the link flips the direction and keeps the page and size.
+func TestQueueSort(t *testing.T) {
+	tests := []struct {
+		path, head, aria, link string
+		ids                    []string
+	}{
+		{"/c/main/queues/default?state=scheduled", "Process at", "ascending", "/c/main/queues/default?dir=desc&state=scheduled", []string{"s0", "s1"}},
+		{"/c/main/queues/default?state=scheduled&dir=desc&page=1&size=50", "Process at", "descending", "/c/main/queues/default?size=50&state=scheduled", []string{"s1", "s0"}},
+		{"/c/main/queues/default?state=archived", "Archived at", "descending", "/c/main/queues/default?dir=asc&state=archived", []string{"x0"}},
+		{"/c/main/queues/default?state=completed", "Result kept until", "descending", "/c/main/queues/default?dir=asc&state=completed", []string{"c0"}},
+		{"/c/main/queues/default?state=retry&dir=desc", "Next retry", "descending", "/c/main/queues/default?state=retry", []string{uuidTask}},
+	}
+	for _, tt := range tests {
+		h, _ := newTestServer(t, adminOpts())
+		doc := parse(t, do(t, h, request{path: tt.path}))
+		th := doc.Find("#tasks thead th[aria-sort]")
+		a := th.Find("a#sort-time.sort")
+		if th.Length() != 1 || text(th) != tt.head || th.AttrOr("aria-sort", "") != tt.aria || a.AttrOr("href", "") != tt.link ||
+			a.AttrOr("hx-get", "") != tt.link || a.AttrOr("hx-push-url", "") != "true" {
+			t.Errorf("%s: sort header %q %q -> %q", tt.path, text(th), th.AttrOr("aria-sort", ""), a.AttrOr("href", ""))
+		}
+		var ids []string
+		doc.Find("#tasks-rows tr a.row-link").Each(func(_ int, s *goquery.Selection) { ids = append(ids, s.AttrOr("title", "")) })
+		if diff := cmp.Diff(tt.ids, ids); diff != "" {
+			t.Errorf("%s: rows (-want +got):\n%s", tt.path, diff)
+		}
+	}
+
+	// Pending sorts with ?dir= but has no time column to put the link on;
+	// active never sorts.
+	h, _ := newTestServer(t, adminOpts())
+	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?dir=desc&size=50"}))
+	if first := doc.Find("#tasks-rows a.row-link").First().AttrOr("title", ""); first != "p24" || doc.Find("[aria-sort]").Length() != 0 {
+		t.Errorf("pending newest first starts with %q", first)
+	}
+	if href := doc.Find("#page-next").AttrOr("href", ""); href != "" {
+		t.Errorf("one page has a next link %q", href)
+	}
+	if doc.Find("#tasks-size-form input[name=dir][value=desc]").Length() != 1 {
+		t.Error("the size picker must keep the direction")
+	}
+	doc = parse(t, do(t, h, request{path: "/c/main/queues/default?state=active&dir=desc"}))
+	if doc.Find("[aria-sort]").Length() != 0 || doc.Find("#tasks-rows a.row-link").First().AttrOr("title", "") != "a0" {
+		t.Error("active sorts")
+	}
+	// Tabs reset the direction; pager links keep it.
+	doc = parse(t, do(t, h, request{path: "/c/main/queues/default?dir=desc"}))
+	if href := doc.Find("#tab-archived").AttrOr("href", ""); href != "/c/main/queues/default?state=archived" {
+		t.Errorf("archived tab = %q", href)
+	}
+	if href := doc.Find("#page-next").AttrOr("href", ""); href != "/c/main/queues/default?dir=desc&page=2" {
+		t.Errorf("next page = %q", href)
+	}
+
+	// The archived column is the archive time, not the last failure.
+	conns := defaultConns()
+	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "x9", Queue: "default", Type: "t", State: TaskArchived,
+		ArchivedAt: fixedNow().Add(-2 * time.Hour)})
+	h, _ = newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
+	doc = parse(t, do(t, h, request{path: "/c/main/queues/default?state=archived&dir=asc"}))
+	if got := text(doc.Find("#tasks-rows tr").Last().Find("td").Eq(4)); got != "Nov 7, 22:41:52" {
+		t.Errorf("archived at = %q", got)
+	}
+}
+
 func TestQueueAggregating(t *testing.T) {
 	h, _ := newTestServer(t, adminOpts())
 	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating"}))
-	if got := text(doc.Find("#groups tbody td").First()) + "|" + text(doc.Find("#groups tbody td").Last()); got != "g1|4" {
+	if got := text(doc.Find("#groups tbody td").Eq(1)) + "|" + text(doc.Find("#groups tbody td").Last()); got != "g1|4" {
 		t.Errorf("groups = %q", got)
 	}
-	if doc.Find("#task-card input[type=checkbox], #task-card .tbar, #task-card button").Length() != 0 {
-		t.Error("aggregating tab is not read-only")
+	link := doc.Find("#groups tbody a.row-link")
+	if href, _ := link.Attr("href"); href != "/c/main/queues/default?group=g1&state=aggregating" {
+		t.Errorf("group link = %q", href)
 	}
+	box := doc.Find("#groups tbody input.cb")
+	if n, _ := box.Attr("name"); n != "group" || box.AttrOr("value", "") != "g1" || box.AttrOr("form", "") != "tasks-form" {
+		t.Errorf("group checkbox = %v", box.Nodes)
+	}
+	if doc.Find(`input[form=tasks-form][name=all][value="1"]`).Length() != 1 || doc.Find(`input[form=tasks-form][name=state][value=aggregating]`).Length() != 1 {
+		t.Error("the group form must post all=1&state=aggregating")
+	}
+	var buttons []string
+	doc.Find("#task-card .tbar button").Each(func(_ int, s *goquery.Selection) {
+		buttons = append(buttons, text(s)+"/"+s.AttrOr("data-confirm", "")+"/"+s.AttrOr("class", ""))
+	})
+	want := []string{"Run all/groups-run/btn sm primary", "Archive all/groups-archive/btn sm danger", "Delete all/groups-delete/btn sm danger"}
+	if diff := cmp.Diff(want, buttons); diff != "" {
+		t.Errorf("group buttons (-want +got):\n%s", diff)
+	}
+	if !strings.Contains(text(doc.Find("dialog#groups-archive .dlg-warn")), "10,000 archived tasks for 90 days") ||
+		doc.Find("dialog#groups-run .dlg-warn, dialog#groups-delete .dlg-warn").Length() != 0 {
+		t.Error("only the archive dialog warns")
+	}
+
+	// A poll swaps the group list, not a task table.
+	frag := parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating", htmx: true, header: map[string]string{"HX-Trigger": "queue-poll"}}))
+	if frag.Find("#tasks-table[hx-swap-oob] #groups").Length() != 1 || frag.Find("#tasks-pager").Length() != 0 {
+		t.Errorf("group list poll = %s", frag.Text())
+	}
+
+	// A group's tasks: selection, single actions and "select all N".
+	doc = parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating&group=g1"}))
+	var ids []string
+	doc.Find("#tasks-rows tr a.row-link").Each(func(_ int, s *goquery.Selection) { ids = append(ids, text(s)) })
+	if diff := cmp.Diff([]string{"g1-0", "g1-1", "g1-2", "g1-3"}, ids); diff != "" {
+		t.Errorf("group tasks (-want +got):\n%s", diff)
+	}
+	if doc.Find(`input[form=tasks-form][name=group][value=g1]`).Length() != 1 || text(doc.Find(".group-nav .mono")) != "g1" {
+		t.Error("the group view must post its group and name it")
+	}
+	if href, _ := doc.Find("#group-back").Attr("href"); href != "/c/main/queues/default?state=aggregating" {
+		t.Errorf("back to groups = %q", href)
+	}
+	buttons = nil
+	doc.Find("#task-card .tbar button").Each(func(_ int, s *goquery.Selection) { buttons = append(buttons, s.AttrOr("id", "")) })
+	if diff := cmp.Diff([]string{"act-run", "act-archive", "act-delete"}, buttons); diff != "" {
+		t.Errorf("group task buttons (-want +got):\n%s", diff)
+	}
+	if text(doc.Find("#tasks-pager .num")) != "1–4 of 4" {
+		t.Errorf("pager = %q", text(doc.Find("#tasks-pager .num")))
+	}
+	if doc.Find("#tasks-size-form input[name=group][value=g1]").Length() != 1 {
+		t.Error("the size picker must keep the group")
+	}
+
 	doc = parse(t, do(t, h, request{path: "/c/main/queues/low?state=aggregating"}))
 	if got := text(doc.Find("#tasks-table .empty-state")); got != "No aggregating tasks" || doc.Find("#tasks-table .empty-state svg").Length() != 1 {
 		t.Errorf("empty = %q", got)
@@ -282,7 +403,7 @@ func TestQueueUnavailable(t *testing.T) {
 			t.Errorf("fragment = %d %q", rec.Code, rec.Body)
 		}
 		// So does an action on it, which shows its toasts too.
-		rec = do(t, h, request{method: http.MethodPost, path: "/c/main/queues/nope/tasks/archive", form: "id=p00", htmx: true})
+		rec = do(t, h, request{method: http.MethodPost, path: "/c/main/queues/nope/tasks/archive", form: "id=p00&confirm=1", htmx: true})
 		frag = parse(t, rec)
 		if !strings.Contains(text(frag.Find("#queue-page")), "Queue not found") || frag.Find("[hx-get='']").Length() != 0 ||
 			!strings.Contains(text(frag.Find(".toast-body")), "not found") {

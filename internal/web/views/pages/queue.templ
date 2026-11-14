@@ -86,9 +86,13 @@ templ queueLive(m Queue) {
 		for _, t := range m.Tabs {
 			@tabCount(t, true)
 		}
-		@tasksBanner(m, true)
-		@tasksTable(m, true)
-		@tasksPager(m.Pager, true)
+		if m.groupList() {
+			@groupsTable(m, true)
+		} else {
+			@tasksBanner(m, true)
+			@tasksTable(m, true)
+			@tasksPager(m.Pager, true)
+		}
 	}
 }
 
@@ -226,10 +230,34 @@ templ taskCard(m Queue, oob bool) {
 						@noticeText(*m.Notice)
 					</div>
 				}
-				if m.Tab == StateAggregating {
-					@groupsTable(m)
+				<form id={ TasksFormID } method="post" action={ templ.SafeURL(m.FormURL) }></form>
+				if m.groupList() {
+					<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+						@components.SelectionToolbar(TasksFormID, nil) {
+							for _, b := range m.Actions {
+								@verbButton(b)
+							}
+						}
+					</div>
+					@groupsTable(m, false)
+					<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+						for _, d := range m.AllDialogs {
+							@components.ConfirmDialog(d.Dialog, groupsTitle(d.Verb), allLabel(d.Verb)) {
+								<ul class="dlg-list mono" data-sel-names></ul>
+								if d.Verb == TaskArchive {
+									@archiveWarning()
+								}
+							}
+						}
+					</div>
 				} else {
-					<form id={ TasksFormID } method="post" action={ templ.SafeURL(m.FormURL) }></form>
+					if m.Group != "" {
+						<div class="group-nav">
+							<a id="group-back" href={ templ.SafeURL(m.GroupsURL) } hx-get={ m.GroupsURL } hx-swap="none" hx-push-url="true">Groups</a>
+							<span class="muted" aria-hidden="true">/</span>
+							<span class="mono"><bdi>{ format.VisibleID(m.Group) }</bdi></span>
+						</div>
+					}
 					<div hx-sync={ "#" + QueuePageID + ":queue all" }>
 						@components.SelectionToolbar(TasksFormID, nil) {
 							<input id={ TasksAllID } type="hidden" form={ TasksFormID } name="all" value="" data-everything={ TasksFormID }/>
@@ -245,6 +273,12 @@ templ taskCard(m Queue, oob bool) {
 						@tasksPager(m.Pager, false)
 					</div>
 					<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+						if m.ArchiveDialog.ID != "" {
+							@components.ConfirmDialog(m.ArchiveDialog, archiveTasksTitle(), verbLabel(TaskArchive)) {
+								<ul class="dlg-list mono" data-sel-names></ul>
+								@archiveWarning()
+							}
+						}
 						if m.DeleteDialog.ID != "" {
 							@components.ConfirmDialog(m.DeleteDialog, deleteTasksTitle(), verbLabel(TaskDelete)) {
 								<ul class="dlg-list mono" data-sel-names></ul>
@@ -252,6 +286,9 @@ templ taskCard(m Queue, oob bool) {
 						}
 						for _, d := range m.AllDialogs {
 							@components.ConfirmDialog(d.Dialog, allTitle(d.Verb, m.Tab, m.Total), allLabel(d.Verb)) {
+								if d.Verb == TaskArchive {
+									@archiveWarning()
+								}
 							}
 						}
 					</div>
@@ -272,6 +309,19 @@ templ tabCount(t Tab, oob bool) {
 }
 
 templ verbButton(b TaskActionButton) {
+	switch {
+		case b.All && b.Verb == TaskRun:
+			@components.ActionButton(b.Action, components.IconRun("14"), allLabelText(b.Verb))
+		case b.All && b.Verb == TaskArchive:
+			@components.ActionButton(b.Action, components.IconArchive("14"), allLabelText(b.Verb))
+		case b.All:
+			@components.ActionButton(b.Action, components.IconDelete("14"), allLabelText(b.Verb))
+		default:
+			@taskVerbButton(b)
+	}
+}
+
+templ taskVerbButton(b TaskActionButton) {
 	switch b.Verb {
 		case TaskRun:
 			@components.ActionButton(b.Action, components.IconRun("14"), "Run now")
@@ -304,6 +354,9 @@ templ tasksTable(m Queue, oob bool) {
 	<div id={ TasksTableID } { components.OOB(oob)... }>
 		<input type="hidden" form={ TasksFormID } name="next" value={ m.Next }/>
 		<input type="hidden" form={ TasksFormID } name="state" value={ StateParam(m.Tab) }/>
+		if m.Group != "" {
+			<input type="hidden" form={ TasksFormID } name="group" value={ m.Group }/>
+		}
 		@components.Table("tasks") {
 			<thead>
 				<tr>
@@ -319,7 +372,7 @@ templ tasksTable(m Queue, oob bool) {
 					@components.PlainHeader(false) {
 						Payload
 					}
-					@stateHeaders(m.Tab)
+					@stateHeaders(m.Tab, m.Sort)
 				</tr>
 			</thead>
 			<tbody id={ TasksRowsID }>
@@ -347,15 +400,32 @@ templ tasksTable(m Queue, oob bool) {
 // columns counts the table's columns for the empty row: the checkbox,
 // Task ID, Type, Payload and the state's own.
 func columns(s TaskState) int {
-	if s == StatePending {
+	switch s {
+	case StatePending:
 		return 5
+	case StateAggregating:
+		return 4
 	}
 	return 6
 }
 
-// stateHeaders are the columns that depend on the tab. asynq returns each
-// state in a fixed order, so none of them sorts; see docs.
-templ stateHeaders(s TaskState) {
+// timeHeader is a state's time column: sortable when the table sorts
+// (sort.ID set), plain otherwise.
+templ timeHeader(sort components.SortHead) {
+	if sort.ID != "" {
+		@components.SortHeader(sort) {
+			{ children... }
+		}
+	} else {
+		@components.PlainHeader(false) {
+			{ children... }
+		}
+	}
+}
+
+// stateHeaders are the columns that depend on the tab. The time column
+// the state's order follows sorts (sort); see docs.
+templ stateHeaders(s TaskState, sort components.SortHead) {
 	switch s {
 		case StateActive:
 			@components.PlainHeader(false) {
@@ -369,22 +439,22 @@ templ stateHeaders(s TaskState) {
 				Retried
 			}
 		case StateScheduled:
-			@components.PlainHeader(false) {
+			@timeHeader(sort) {
 				Process at
 			}
 			@components.PlainHeader(false) {
 				In
 			}
 		case StateRetry:
-			@components.PlainHeader(false) {
+			@timeHeader(sort) {
 				Next retry
 			}
 			@components.PlainHeader(false) {
 				Last error
 			}
 		case StateArchived:
-			@components.PlainHeader(false) {
-				Last failed
+			@timeHeader(sort) {
+				Archived at
 			}
 			@components.PlainHeader(false) {
 				Last error
@@ -393,7 +463,7 @@ templ stateHeaders(s TaskState) {
 			@components.PlainHeader(false) {
 				Completed at
 			}
-			@components.PlainHeader(false) {
+			@timeHeader(sort) {
 				Result kept until
 			}
 	}
@@ -431,7 +501,7 @@ templ stateCells(s TaskState, r TaskRow) {
 			<td class="mono err-cell c-retry" title={ r.LastErr }><bdi>{ format.PreviewBytes([]byte(r.LastErr), 120) }</bdi></td>
 		case StateArchived:
 			<td class="num">
-				@optTimeAbs(r.LastFailedAt)
+				@optTimeAbs(r.ArchivedAt)
 			</td>
 			<td class="mono err-cell c-retry" title={ r.LastErr }><bdi>{ format.PreviewBytes([]byte(r.LastErr), 120) }</bdi></td>
 		case StateCompleted:
@@ -444,8 +514,13 @@ templ stateCells(s TaskState, r TaskRow) {
 	}
 }
 
-templ groupsTable(m Queue) {
-	<div id={ TasksTableID }>
+// groupsTable lists the Aggregating tab's groups: each links to its
+// tasks, and the selection feeds the groups' "all" actions.
+templ groupsTable(m Queue, oob bool) {
+	<div id={ TasksTableID } { components.OOB(oob)... }>
+		<input type="hidden" form={ TasksFormID } name="next" value={ m.Next }/>
+		<input type="hidden" form={ TasksFormID } name="state" value={ StateParam(StateAggregating) }/>
+		<input type="hidden" form={ TasksFormID } name="all" value="1"/>
 		if len(m.Groups) == 0 {
 			<div class="empty-state">
 				@components.IconQueues("32")
@@ -455,6 +530,9 @@ templ groupsTable(m Queue) {
 			@components.Table("groups") {
 				<thead>
 					<tr>
+						@components.SelectAllHeader(GroupsSelectAll, TasksFormID) {
+							Select all groups
+						}
 						@components.PlainHeader(false) {
 							Group
 						}
@@ -466,7 +544,10 @@ templ groupsTable(m Queue) {
 				<tbody id={ TasksRowsID }>
 					for _, g := range m.Groups {
 						<tr>
-							<td class="mono"><bdi>{ format.VisibleID(g.Name) }</bdi></td>
+							@components.SelectCell(g.Select) {
+								Select group { g.Name }
+							}
+							<td><a id={ g.LinkID } class="row-link mono" href={ templ.SafeURL(g.URL) } hx-get={ g.URL } hx-swap="none" hx-push-url="true"><bdi>{ format.VisibleID(g.Name) }</bdi></a></td>
 							<td class="num">{ format.Number(g.Size) }</td>
 						</tr>
 					}
@@ -519,6 +600,21 @@ templ optTimeAbs(t time.Time) {
 
 templ deleteTasksTitle() {
 	Delete tasks
+}
+
+templ archiveTasksTitle() {
+	Archive tasks
+}
+
+// archiveWarning is every Archive confirmation's note on asynq trimming
+// the archive.
+templ archiveWarning() {
+	<p class="dlg-warn">asynq keeps at most { format.Number(ArchiveCap) } archived tasks for { format.Number(ArchiveDays) } days; older ones are removed.</p>
+}
+
+// groupsTitle is the title of an "all" dialog of the selected groups.
+templ groupsTitle(v TaskVerb) {
+	{ allLabelText(v) + " tasks in groups" }
 }
 
 // allTitle is the "all" dialog's title; app.js updates the count when
@@ -705,7 +801,9 @@ templ taskFailureText(f TaskFailure) {
 				Could not delete
 		}
 		{ " " }
-		if f.ID == "" {
+		if f.ID == "" && f.Group != "" {
+			all tasks in <span class="mono"><bdi>{ format.VisibleID(f.Group) }</bdi></span>
+		} else if f.ID == "" {
 			all tasks
 		} else {
 			<span class="mono" title={ f.ID }><bdi>{ format.ShortID(format.VisibleID(f.ID)) }</bdi></span>
@@ -834,13 +932,23 @@ templ ConfirmTasksPage(m ConfirmTasks) {
 					}
 				</ul>
 			}
+			if len(m.Groups) > 0 {
+				<ul class="dlg-list mono">
+					for _, g := range m.Groups {
+						<li><bdi>{ format.VisibleID(g) }</bdi></li>
+					}
+				</ul>
+			}
+			if m.Verb == TaskArchive {
+				@archiveWarning()
+			}
 			<form class="dlgacts" method="post" action={ templ.SafeURL(m.Action) }>
 				for _, h := range m.Hidden {
 					<input type="hidden" name={ h.Name } value={ h.Value }/>
 				}
 				<input type="hidden" name="confirm" value="1"/>
 				<a class="btn" href={ templ.SafeURL(m.CancelURL) }>Cancel</a>
-				<button type="submit" class={ "btn", templ.KV("danger", m.Verb == TaskDelete), templ.KV("primary", m.Verb != TaskDelete) }>
+				<button type="submit" class={ "btn", templ.KV("danger", dangerVerb(m.Verb)), templ.KV("primary", !dangerVerb(m.Verb)) }>
 					if m.All {
 						@allLabel(m.Verb)
 					} else {
@@ -854,12 +962,21 @@ templ ConfirmTasksPage(m ConfirmTasks) {
 
 // ConfirmTitle is the confirmation page's title and last breadcrumb.
 templ confirmTitle(m ConfirmTasks) {
-	if m.All {
-		{ allTitleText(m.Verb, m.State, m.Total) }
-	} else {
-		@deleteTasksTitle()
+	switch {
+		case len(m.Groups) > 0:
+			@groupsTitle(m.Verb)
+		case m.All:
+			{ allTitleText(m.Verb, m.State, m.Total) }
+		case m.Verb == TaskArchive:
+			@archiveTasksTitle()
+		default:
+			@deleteTasksTitle()
 	}
 }
+
+// dangerVerb is a verb whose buttons are red: Delete, and Archive, since
+// asynq trims the archive.
+func dangerVerb(v TaskVerb) bool { return v == TaskDelete || v == TaskArchive }
 
 // ConfirmCrumb is confirmTitle for the breadcrumb.
 func ConfirmCrumb(m ConfirmTasks) templ.Component { return confirmTitle(m) }

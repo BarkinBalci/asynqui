@@ -227,7 +227,9 @@
 	// <tr data-state>. A [data-toolbar=form-id] bar shows "N selected"
 	// ([data-sel-label], count in [data-sel-count]) and enables its
 	// buttons: data-enable="any" when a row is selected, "state" when a
-	// selected row's data-state equals the button's data-state. Buttons
+	// selected row's data-state equals the button's data-state, "every"
+	// when every selected row has the attribute data-{data-flag} (else
+	// the button's title is its data-blocked-title). Buttons
 	// rendered disabled for the viewer's role have no data-enable and stay
 	// disabled. The header [data-select-all=form-id] checkbox selects the
 	// visible rows.
@@ -254,7 +256,7 @@
 	function updateSelection(bar) {
 		var formId = bar.getAttribute("data-toolbar");
 		var boxes = rowBoxes(formId);
-		var n = 0, states = {}, shown = 0, shownChecked = 0;
+		var n = 0, states = {}, shown = 0, shownChecked = 0, rows = [];
 		for (var i = 0; i < boxes.length; i++) {
 			var b = boxes[i], tr = b.closest("tr");
 			if (visible(b)) {
@@ -270,6 +272,7 @@
 			if (tr && tr.getAttribute("data-state")) {
 				states[tr.getAttribute("data-state")] = true;
 			}
+			rows.push(tr);
 		}
 		var everything = syncEverything(formId, shown, shownChecked);
 		var label = bar.querySelector("[data-sel-label]");
@@ -284,7 +287,15 @@
 		var buttons = bar.querySelectorAll("button[data-enable]");
 		for (var j = 0; j < buttons.length; j++) {
 			var btn = buttons[j], rule = btn.getAttribute("data-enable");
-			btn.disabled = n === 0 || (rule === "state" && !states[btn.getAttribute("data-state")]);
+			var blocked = rule === "every" && !everyFlag(rows, btn.getAttribute("data-flag"));
+			btn.disabled = n === 0 || blocked || (rule === "state" && !states[btn.getAttribute("data-state")]);
+			if (rule === "every") {
+				if (blocked) {
+					btn.title = btn.getAttribute("data-blocked-title") || "";
+				} else {
+					btn.removeAttribute("title");
+				}
+			}
 		}
 		var all = document.querySelectorAll("input[data-select-all]");
 		for (var k = 0; k < all.length; k++) {
@@ -293,6 +304,16 @@
 				all[k].indeterminate = shownChecked > 0 && shownChecked < shown;
 			}
 		}
+	}
+
+	// everyFlag reports whether every row has the attribute data-{flag}.
+	function everyFlag(rows, flag) {
+		for (var i = 0; i < rows.length; i++) {
+			if (!rows[i] || !rows[i].hasAttribute("data-" + flag)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	function updateSelections() {

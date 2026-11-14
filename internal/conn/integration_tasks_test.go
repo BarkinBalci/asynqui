@@ -30,7 +30,7 @@ func TestIntegrationTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page, err := c.ListTasks(t.Context(), "q", conn.TaskPending, 1, 2)
+	page, err := c.ListTasks(t.Context(), "q", conn.TaskPending, 1, 2, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,5 +84,59 @@ func TestIntegrationTasks(t *testing.T) {
 	}
 	if qi, err := c.QueueInfo(t.Context(), "q"); err != nil || qi.Size != 0 {
 		t.Errorf("after all = %+v, %v; want empty", qi, err)
+	}
+}
+
+// Aggregating tasks: listed and acted on per group, and they keep their
+// queue from being deleted although asynq's own empty check skips them.
+func TestIntegrationGroups(t *testing.T) {
+	_, addr := runRedis(t, redisImage)
+	cc := connection("main", addr, 0)
+	reg := newRegistry(t, cc)
+	c := mustGet(t, reg, "main")
+	client := newClient(t, cc)
+
+	for _, g := range []string{"a", "a", "a", "b"} {
+		if _, err := client.Enqueue(asynq.NewTask("batch", nil), asynq.Queue("agg"), asynq.Group(g)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	single, err := client.Enqueue(asynq.NewTask("batch", nil), asynq.Queue("agg"), asynq.Group("c"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gs, err := c.Groups(t.Context(), "agg")
+	if err != nil || len(gs) != 3 || gs[0] != (conn.Group{Name: "a", Size: 3}) {
+		t.Fatalf("Groups = %+v, %v", gs, err)
+	}
+	page, err := c.ListGroupTasks(t.Context(), "agg", "a", 1, 2)
+	if err != nil || len(page) != 2 || page[0].State != conn.TaskAggregating || page[0].Group != "a" {
+		t.Errorf("ListGroupTasks = %+v, %v", page, err)
+	}
+
+	if err := c.DeleteQueue(t.Context(), "agg"); !errors.Is(err, conn.ErrQueueNotEmpty) {
+		t.Errorf("delete a queue of aggregating tasks: %v, want ErrQueueNotEmpty", err)
+	}
+
+	if err := c.ArchiveTask(t.Context(), "agg", single.ID); err != nil {
+		t.Errorf("archive an aggregating task: %v", err)
+	}
+	n, err := c.RunAllGroupTasks(t.Context(), "agg", "a")
+	if err != nil || n != 3 {
+		t.Errorf("RunAllGroupTasks = %d, %v; want 3", n, err)
+	}
+	n, err = c.ArchiveAllGroupTasks(t.Context(), "agg", "b")
+	if err != nil || n != 1 {
+		t.Errorf("ArchiveAllGroupTasks = %d, %v; want 1", n, err)
+	}
+	qi, err := c.QueueInfo(t.Context(), "agg")
+	if err != nil || qi.Aggregating != 0 || qi.Pending != 3 || qi.Archived != 2 {
+		t.Errorf("after the group actions = %+v, %v", qi, err)
+	}
+	if n, err := c.DeleteAllGroupTasks(t.Context(), "agg", "a"); err != nil || n != 0 {
+		t.Errorf("DeleteAllGroupTasks of an empty group = %d, %v", n, err)
+	}
+	if _, err := c.RunAllGroupTasks(t.Context(), "nope", "a"); !errors.Is(err, conn.ErrQueueNotFound) {
+		t.Errorf("group action on an unknown queue: %v", err)
 	}
 }

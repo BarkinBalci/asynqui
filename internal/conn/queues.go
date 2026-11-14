@@ -266,13 +266,36 @@ func (c *Conn) UnpauseQueue(ctx context.Context, queue string) error {
 
 // DeleteQueue deletes an empty queue (asynq's DeleteQueue without force).
 // It returns ErrQueueNotFound or ErrQueueNotEmpty, each also wrapping
-// asynq's error. On success the cached reads are dropped.
+// asynq's error when asynq reported it. On success the cached reads are
+// dropped.
+//
+// Empty means a QueueInfo.Size of 0, read fresh (not from the cache) just
+// before the delete. asynq's own check leaves out completed and
+// aggregating tasks, whose keys a delete would orphan; the Size counts
+// them. A task enqueued between the read and the delete is still caught
+// by asynq's check unless it is completed or aggregating.
 func (c *Conn) DeleteQueue(ctx context.Context, queue string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	_, err := recovered(func() (struct{}, error) { return struct{}{}, c.queues.DeleteQueue(queue, false) })
+	_, err := recovered(func() (struct{}, error) {
+		// GetQueueInfo does not report a missing queue with asynq's
+		// exported error.
+		if err := c.checkQueue(queue); err != nil {
+			return struct{}{}, err
+		}
+		qi, err := c.queues.GetQueueInfo(queue)
+		if err != nil {
+			return struct{}{}, err
+		}
+		if qi.Size > 0 {
+			return struct{}{}, fmt.Errorf("%w: %q has %d tasks", ErrQueueNotEmpty, queue, qi.Size)
+		}
+		return struct{}{}, c.queues.DeleteQueue(queue, false)
+	})
 	switch {
+	case errors.Is(err, ErrQueueNotEmpty), errors.Is(err, ErrQueueNotFound):
+		return err
 	case errors.Is(err, asynq.ErrQueueNotFound):
 		return fmt.Errorf("%w: %w", ErrQueueNotFound, err)
 	case errors.Is(err, asynq.ErrQueueNotEmpty):

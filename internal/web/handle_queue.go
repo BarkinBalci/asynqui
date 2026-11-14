@@ -22,15 +22,27 @@ func pageSizes() []int { return []int{20, 50, 100} }
 const maxPage = 1 << 20
 
 // queueView is the Queue page's state, all of it in the URL query:
-// ?state=&page=&size=. Defaults are left out of generated URLs.
+// ?state=&group=&dir=&page=&size=. Defaults are left out of generated
+// URLs.
 type queueView struct {
 	state TaskState
-	page  int
-	size  int
+	// group is the aggregation group whose tasks the Aggregating tab
+	// lists; empty lists the groups.
+	group string
+	// desc lists newest first (see sortsByTime); its default depends on
+	// the state (taskDefaultDesc).
+	desc bool
+	page int
+	size int
 }
 
 func defaultQueueView() queueView {
 	return queueView{state: TaskPending, page: 1, size: pageSizes()[0]}
+}
+
+// tabView is the first page of state s, in its default order.
+func tabView(s TaskState, size int) queueView {
+	return queueView{state: s, desc: taskDefaultDesc(s), page: 1, size: size}
 }
 
 // parseQueueView reads the state from a query; unknown values fall back
@@ -39,6 +51,18 @@ func parseQueueView(q url.Values) queueView {
 	v := defaultQueueView()
 	if s, ok := parseState(q.Get("state")); ok {
 		v.state = s
+	}
+	v.desc = taskDefaultDesc(v.state)
+	if sortsByTime(v.state) {
+		switch q.Get("dir") {
+		case "asc":
+			v.desc = false
+		case "desc":
+			v.desc = true
+		}
+	}
+	if v.state == TaskAggregating {
+		v.group = q.Get("group")
 	}
 	if n, err := strconv.Atoi(q.Get("page")); err == nil && n > 1 {
 		v.page = min(n, maxPage)
@@ -54,6 +78,16 @@ func (v queueView) values() url.Values {
 	if v.state != TaskPending {
 		q.Set("state", stateParam(v.state))
 	}
+	if v.state == TaskAggregating && v.group != "" {
+		q.Set("group", v.group)
+	}
+	if sortsByTime(v.state) && v.desc != taskDefaultDesc(v.state) {
+		dir := "asc"
+		if v.desc {
+			dir = "desc"
+		}
+		q.Set("dir", dir)
+	}
 	if v.page > 1 {
 		q.Set("page", strconv.Itoa(v.page))
 	}
@@ -62,6 +96,9 @@ func (v queueView) values() url.Values {
 	}
 	return q
 }
+
+// groupList reports whether the view lists the Aggregating tab's groups.
+func (v queueView) groupList() bool { return v.state == TaskAggregating && v.group == "" }
 
 // queueURL is the Queue page URL showing state v.
 func (d *deps) queueURL(conn, queue string, v queueView) string {
@@ -121,6 +158,9 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 		qi     QueueInfo
 		tasks  []Task
 		groups []Group
+		// total is the number of tasks the view pages over: the state's,
+		// or the group's.
+		total int
 	)
 	health := map[string]components.Health(nil)
 	switch a.conn.Health.State {
@@ -130,31 +170,46 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 		ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
 		defer cancel()
 		var (
-			listErr error
-			wg      sync.WaitGroup
+			listErr, groupsErr error
+			wg                 sync.WaitGroup
 		)
 		list := func(page int) {
-			if v.state == TaskAggregating {
-				groups, listErr = d.conns.Groups(ctx, name, queue)
-				return
+			switch {
+			case v.groupList():
+			case v.state == TaskAggregating:
+				tasks, listErr = d.conns.GroupTasks(ctx, name, queue, v.group, page, v.size)
+			default:
+				tasks, listErr = d.conns.Tasks(ctx, name, queue, v.state, page, v.size, v.desc)
 			}
-			tasks, listErr = d.conns.Tasks(ctx, name, queue, v.state, page, v.size)
 		}
 		wg.Go(func() { list(v.page) })
+		if v.state == TaskAggregating {
+			// The group list, or the group's size for the pager.
+			wg.Go(func() { groups, groupsErr = d.conns.Groups(ctx, name, queue) })
+		}
 		var err error
 		qi, err = d.conns.QueueInfo(ctx, name, queue)
 		wg.Wait()
-		if err == nil && listErr == nil && v.state != TaskAggregating && len(tasks) == 0 && v.page > 1 {
+		total = qi.Count(v.state)
+		if v.state == TaskAggregating && !v.groupList() {
+			total = 0
+			for _, g := range groups {
+				if g.Name == v.group {
+					total = g.Size
+				}
+			}
+		}
+		if err == nil && listErr == nil && groupsErr == nil && !v.groupList() && len(tasks) == 0 && v.page > 1 {
 			// Past the end (tasks moved on since the link was made, or a
 			// made-up page): the last page, or the first when there are
 			// none.
 			v.page = 1
-			if total := qi.Count(v.state); total > 0 {
+			if total > 0 {
 				v.page = (total + v.size - 1) / v.size
 				list(v.page)
 			}
 		}
-		err = firstErr(err, listErr)
+		err = firstErr(err, listErr, groupsErr)
 		switch {
 		case errors.Is(err, ErrQueueNotFound):
 			m.NotFound = true
@@ -178,6 +233,8 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 	}
 
 	m.Tab = pageState(v.state)
+	m.Group = v.group
+	m.GroupsURL = d.queueURL(name, queue, tabView(TaskAggregating, v.size))
 	m.Next = d.queueURL(name, queue, v)
 	m.FormURL = d.url("c", name, "queues", queue, "tasks", "archive")
 	m.FindURL = d.url("c", name, "queues", queue, "find")
@@ -205,15 +262,35 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 		URL: d.url("c", name, "queues", toggle), Allowed: a.role >= authz.RoleOperator, Queue: queue, Next: m.Next,
 	}
 	for _, s := range []TaskState{TaskActive, TaskPending, TaskAggregating, TaskScheduled, TaskRetry, TaskArchived, TaskCompleted} {
-		tv := queueView{state: s, page: 1, size: v.size}
-		m.Tabs = append(m.Tabs, pages.Tab{State: pageState(s), Count: int64(qi.Count(s)), URL: d.queueURL(name, queue, tv), On: s == v.state})
+		m.Tabs = append(m.Tabs, pages.Tab{State: pageState(s), Count: int64(qi.Count(s)), URL: d.queueURL(name, queue, tabView(s, v.size)), On: s == v.state})
 	}
-	m.Total = int64(qi.Count(v.state))
-	for _, g := range groups {
-		m.Groups = append(m.Groups, pages.GroupRow{Name: g.Name, Size: int64(g.Size)})
+	m.Total = int64(total)
+	if v.groupList() {
+		for _, g := range groups {
+			gv := tabView(TaskAggregating, v.size)
+			gv.group = g.Name
+			m.Groups = append(m.Groups, pages.GroupRow{
+				Name:   g.Name,
+				Size:   int64(g.Size),
+				URL:    d.queueURL(name, queue, gv),
+				LinkID: components.HexID("glink-", g.Name),
+				Select: components.RowSelect{
+					ID: components.HexID("gsel-", g.Name), Form: pages.TasksFormID, Name: "group", Value: g.Name, Fresh: ans.fresh,
+				},
+			})
+		}
+	}
+	if sortable(v.state) {
+		flip := v
+		flip.desc = !v.desc
+		dir := components.SortAsc
+		if v.desc {
+			dir = components.SortDesc
+		}
+		m.Sort = components.SortHead{ID: pages.TasksSortID, URL: d.queueURL(name, queue, flip), Dir: dir, Num: true}
 	}
 	d.taskRows(&m, name, queue, tasks, ans.fresh)
-	d.taskActions(&m, a, queue, v.state)
+	d.taskActions(&m, a, queue, v)
 	d.pager(&m, name, queue, v, len(tasks))
 	return m
 }
@@ -245,6 +322,7 @@ func (d *deps) taskRows(m *pages.Queue, conn, queue string, tasks []Task, fresh 
 			LastFailedAt:  t.LastFailedAt,
 			NextProcessAt: t.NextProcessAt,
 			CompletedAt:   t.CompletedAt,
+			ArchivedAt:    t.ArchivedAt,
 			Started:       t.Started,
 		}
 		if !t.CompletedAt.IsZero() {
@@ -257,20 +335,30 @@ func (d *deps) taskRows(m *pages.Queue, conn, queue string, tasks []Task, fresh 
 	}
 }
 
-// taskActions fills the toolbar buttons and their dialogs for the state
-// and the viewer's role.
-func (d *deps) taskActions(m *pages.Queue, a access, queue string, s TaskState) {
+// taskActions fills the toolbar buttons and their dialogs for the view
+// and the viewer's role. Delete and Archive confirm first; Archive is
+// red like Delete, since asynq trims the archive.
+func (d *deps) taskActions(m *pages.Queue, a access, queue string, v queueView) {
+	if v.groupList() {
+		d.groupActions(m, a, queue)
+		return
+	}
+	s := v.state
 	for _, verb := range tabVerbs(s) {
 		act := d.verbAction(a, queue, verb, pages.TasksFormID)
 		act.ID = "act-" + verbParam(verb)
-		if verb == TaskDelete {
+		switch verb {
+		case TaskDelete:
 			act.Confirm = pages.TasksDeleteDialogID
 			m.DeleteDialog = components.Dialog{ID: pages.TasksDeleteDialogID, ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: true}
+		case TaskArchive:
+			act.Confirm = pages.TasksArchiveDialogID
+			m.ArchiveDialog = components.Dialog{ID: pages.TasksArchiveDialogID, ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: true}
 		}
 		if allowsAll(s, verb) {
 			act.ConfirmAll = pages.AllDialogID(pageVerb(verb))
 			m.AllDialogs = append(m.AllDialogs, pages.AllDialog{Verb: pageVerb(verb), Dialog: components.Dialog{
-				ID: pages.AllDialogID(pageVerb(verb)), ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: verb == TaskDelete,
+				ID: pages.AllDialogID(pageVerb(verb)), ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: act.Danger,
 			}})
 			m.AllowAll = true
 		}
@@ -278,8 +366,24 @@ func (d *deps) taskActions(m *pages.Queue, a access, queue string, s TaskState) 
 	}
 }
 
+// groupActions fills the Aggregating tab's group list toolbar: Run all,
+// Archive all and Delete all of the selected groups (asynq's
+// *AllAggregatingTasks per group), each confirmed in a dialog.
+func (d *deps) groupActions(m *pages.Queue, a access, queue string) {
+	for _, verb := range tabVerbs(TaskAggregating) {
+		act := d.verbAction(a, queue, verb, pages.TasksFormID)
+		act.ID = "act-all-" + verbParam(verb)
+		act.Confirm = pages.GroupDialogID(pageVerb(verb))
+		m.AllDialogs = append(m.AllDialogs, pages.AllDialog{Verb: pageVerb(verb), Dialog: components.Dialog{
+			ID: act.Confirm, ConfirmURL: act.URL, Form: pages.TasksFormID, Danger: act.Danger,
+		}})
+		m.Actions = append(m.Actions, pages.TaskActionButton{Verb: pageVerb(verb), Action: act, All: true})
+	}
+}
+
 // verbAction is the button posting verb to the task action route, for
-// the viewer's role: Delete needs admin, the others operator.
+// the viewer's role: Delete needs admin, the others operator. Delete and
+// Archive are red.
 func (d *deps) verbAction(a access, queue string, verb TaskVerb, form string) components.Action {
 	need, role := components.RoleOperator, authz.RoleOperator
 	if verb == TaskDelete {
@@ -291,7 +395,7 @@ func (d *deps) verbAction(a access, queue string, verb TaskVerb, form string) co
 		Allowed: a.role >= role,
 		Need:    need,
 		Enable:  components.EnableAny,
-		Danger:  verb == TaskDelete,
+		Danger:  verb == TaskDelete || verb == TaskArchive,
 		Primary: verb == TaskRun,
 	}
 }
@@ -316,8 +420,11 @@ func (d *deps) pager(m *pages.Queue, conn, queue string, v queueView, rows int) 
 	}
 	m.Pager = p
 	s := pages.SizePicker{FormURL: d.url("c", conn, "queues", queue), Size: v.size, Choices: pageSizes()}
-	if v.state != TaskPending {
-		s.Hidden = []pages.Param{{Name: "state", Value: stateParam(v.state)}}
+	q := v.values()
+	for _, k := range []string{"state", "group", "dir"} {
+		if q.Has(k) {
+			s.Hidden = append(s.Hidden, pages.Param{Name: k, Value: q.Get(k)})
+		}
 	}
 	m.Sizes = s
 }
