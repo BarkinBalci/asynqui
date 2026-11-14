@@ -8,6 +8,7 @@ Behaviour is specified in [requirements.md](requirements.md) (ยง7 Operational, ย
 
 - Runs as UID/GID 65532 and listens on 8080.
 - Reads its config from `/etc/asynqui/config.yaml` (set through `ASYNQUI_CONFIG`; `-config` overrides it). Mount the file read-only.
+- UID 65532 must be able to read it: mode `0644`, or `0640` with group 65532. On SELinux hosts add `:z` to the bind mount (`-v "$PWD/asynqui.yaml:/etc/asynqui/config.yaml:ro,z"`). On Kubernetes, ConfigMap volumes are world-readable by default; for a Secret with a restrictive `defaultMode`, set `fsGroup: 65532` in the pod's `securityContext`.
 - Flags go after the image name, e.g. `docker run ... ghcr.io/barkinbalci/asynqui:0.1.0 -log-level debug`.
 - There is no shell, so there is no Docker `HEALTHCHECK`. Use the HTTP probes below; Docker Compose users can probe from another container or rely on the orchestrator.
 
@@ -180,8 +181,8 @@ Everyone gets `authz.default` (viewer unless set). asynqui logs a WARN at startu
 With `update_check: true` (the default), a release build asks `https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h. A newer release puts a dot next to the version in the sidebar, linking to its release notes.
 
 - The request is made by the server, not the browser, so the CSP does not change. It needs egress to `api.github.com:443` and honours `HTTPS_PROXY`.
-- It sends only `User-Agent: asynqui/<version>`: no config, connection names or user data.
+- It sends no credentials, config, connection names or user data. GitHub sees the server's IP address (or its egress proxy's) and the asynqui version, from `User-Agent: asynqui/<version>`.
 - Failures (no egress, rate limits, the 5s timeout) are logged at debug level and change nothing. Drafts, prereleases and non-semver tags are ignored.
-- Builds without a release version never check: `dev` from `go build`, release candidates, and `make build` output from an untagged or dirty tree.
+- Builds without a release version never check: `dev` and pseudo-versions from `go run` or `go build`, release candidates, and `make build` output from an untagged or dirty tree.
 
 Set `update_check: false` to disable it, e.g. in air-gapped clusters or where egress is restricted.

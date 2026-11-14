@@ -21,7 +21,7 @@ asynqui/
 │   ├── conn/                  # Registry: name → inspector/redis; health loop; per-connection cache
 │   ├── auth/                  # none | basic | proxy | oidc; session cookie
 │   ├── authz/                 # roles and per-connection policy: Role(user, conn), Can(...)
-│   ├── update/                # GitHub release check: startup + every 24h, Latest()
+│   ├── update/                # GitHub release check: startup + every 24h, Latest() tag
 │   └── web/
 │       ├── server.go          # NewServer(deps...) http.Handler
 │       ├── routes.go          # every URL, in one file, with its required role
@@ -39,7 +39,7 @@ asynqui/
 ├── .goreleaser.yaml           # release builds, archives, checksums, changelog, images
 ├── Dockerfile                 # release image: GoReleaser's prebuilt binary on distroless
 ├── Dockerfile.dev             # local image built from source (make docker)
-└── .github/workflows/         # ci.yml; release.yml on v* tags
+└── .github/workflows/         # ci.yml; release.yml on vX.Y.Z* tags
 ```
 
 ### Dependency direction (one way, no cycles)
@@ -51,7 +51,7 @@ cmd/asynqui → web → conn, auth, authz → config
 ```
 
 - Nothing imports `web`.
-- `update` imports no other internal package; `web` sees it only through its `UpdateSource` interface (`Latest() (version, url, ok)`), and `cmd/asynqui` passes nil when the check is off or the build is not a release.
+- `update` imports no other internal package; `web` sees it only through its `UpdateSource` interface (`Latest() (version string, ok bool)`, the newer release's tag) and builds the release-notes link itself from its `releasesURL`, `/tag/` and the escaped tag. `cmd/asynqui` passes a nil interface (never a nil `*update.Checker`) when the check is off or the build is not a release.
 - `views` imports only its own components and `web/format`.
 - `format`, `chart` and `config` import no other internal package.
 
@@ -84,11 +84,14 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	opts, err := parseFlags(args, lookupEnv, stderr) // flag > env; -h → opts.help, -version → print; return nil
+	ver := buildVersion(version, debug.ReadBuildInfo) // -ldflags, else the go command's module version, else "dev"
 	// --- fail fast: everything below can fail and runs before Listen ---
 	cfg, err := config.Load(opts.configPath, lookupEnv, overrides) // file > default; flags/env override
 	authn, err := auth.New(ctx, …)                               // OIDC discovery happens here
 	reg, err := conn.NewRegistry(cfg.Connections, logger)          // no Redis I/O; fails only on unreadable TLS files
-	updates := newUpdateChecker(cfg.UpdateCheck, version, logger)  // nil when off or not a release; Run starts after Listen
+	checker := newUpdateChecker(cfg.UpdateCheck, ver, logger)      // *update.Checker; nil when off or not a release
+	var updates web.UpdateSource                                  // stays a nil interface without a checker
+	if checker != nil { updates = checker }
 	defer reg.Close()                                             // stops the health loops, then closes the clients
 	srv := &http.Server{
 		Handler:     handler, // web.NewServer(web.Deps{Logger, Config, Auth, Policy, Conns: reg, Ready, Version, Updates}); fails on a bad trusted origin
@@ -96,7 +99,8 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		// ReadHeaderTimeout 10s, ReadTimeout 30s, WriteTimeout 60s, IdleTimeout 120s
 	}
 	ln, err := lc.Listen(ctx, "tcp", cfg.Server.Addr)
-	go srv.Serve(ln); reg.Start(ctx); go updates.Run(ctx)    // health loops and the update check in the background
+	go srv.Serve(ln); reg.Start(ctx)                         // health loops in the background
+	if checker != nil { go checker.Run(checkCtx) }          // checkCtx derives from ctx; a defer cancels and joins it
 
 	<-ctx.Done() // or a Serve error
 	stop()                           // a second signal now force-quits

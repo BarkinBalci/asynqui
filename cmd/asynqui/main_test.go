@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -132,8 +133,41 @@ func TestRunVersion(t *testing.T) {
 	if err := run(t.Context(), []string{"asynqui", "-version", "-config", "/does/not/exist"}, env(nil), &stdout, io.Discard); err != nil {
 		t.Fatalf("run -version = %v, want nil", err)
 	}
-	if got := stdout.String(); got != "asynqui "+version+"\n" {
+	if got := stdout.String(); got != "asynqui "+buildVersion(version, debug.ReadBuildInfo)+"\n" {
 		t.Errorf("stdout = %q", got)
+	}
+}
+
+func TestBuildVersion(t *testing.T) {
+	info := func(v string) func() (*debug.BuildInfo, bool) {
+		return func() (*debug.BuildInfo, bool) {
+			return &debug.BuildInfo{Main: debug.Module{Path: "github.com/BarkinBalci/asynqui", Version: v}}, true
+		}
+	}
+	none := func() (*debug.BuildInfo, bool) { return nil, false }
+	tests := []struct {
+		name    string
+		stamped string
+		read    func() (*debug.BuildInfo, bool)
+		want    string
+	}{
+		{"ldflags win", "0.2.0", info("v0.1.0"), "0.2.0"},
+		{"go install @tag", "dev", info("v0.1.0"), "v0.1.0"},
+		{"build in a checkout", "dev", info("v0.1.1-0.20261114015959-c1a81a5e0d4f+dirty"), "v0.1.1-0.20261114015959-c1a81a5e0d4f+dirty"},
+		{"devel", "dev", info("(devel)"), "dev"},
+		{"empty", "dev", info(""), "dev"},
+		{"no build info", "dev", none, "dev"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildVersion(tt.stamped, tt.read); got != tt.want {
+				t.Errorf("buildVersion = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	// A pseudo-version is a prerelease, so such builds never check.
+	if c := newUpdateChecker(true, "v0.1.1-0.20261114015959-c1a81a5e0d4f+dirty", slog.New(slog.DiscardHandler)); c != nil {
+		t.Error("checker for a pseudo-version build")
 	}
 }
 

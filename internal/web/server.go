@@ -30,10 +30,11 @@ const (
 // in conn's cache, so the next poll usually has them.
 const defaultSummaryBudget = 1500 * time.Millisecond
 
-// UpdateSource reports a release newer than the running version: its
-// version and the URL of its release notes, with ok true when one is known.
+// UpdateSource reports a release newer than the running version: its tag,
+// with ok true when one is known. The footer links to that tag's release
+// notes under releasesURL.
 type UpdateSource interface {
-	Latest() (version, url string, ok bool)
+	Latest() (version string, ok bool)
 }
 
 // Deps are the dependencies of NewServer. Every field is required except

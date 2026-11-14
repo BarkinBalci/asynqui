@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/a-h/templ"
@@ -199,8 +200,8 @@ func (d *deps) footer() components.Footer {
 	}
 	f := components.Footer{Version: v, ReleaseURL: release, SourceURL: sourceURL}
 	if d.updates != nil {
-		if _, u, ok := d.updates.Latest(); ok {
-			f.UpdateAvailable, f.ReleaseURL = true, u
+		if tag, ok := d.updates.Latest(); ok {
+			f.UpdateAvailable, f.ReleaseURL = true, releasesURL+"/tag/"+url.PathEscape(tag)
 		}
 	}
 	return f

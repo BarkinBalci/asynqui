@@ -4,14 +4,13 @@ import "testing"
 
 // fakeUpdates is a fixed update check result.
 type fakeUpdates struct {
-	version, url string
-	ok           bool
+	version string
+	ok      bool
 }
 
-func (f fakeUpdates) Latest() (string, string, bool) { return f.version, f.url, f.ok }
+func (f fakeUpdates) Latest() (string, bool) { return f.version, f.ok }
 
 func TestFooterUpdate(t *testing.T) {
-	const notes = "https://github.com/BarkinBalci/asynqui/releases/tag/v0.2.0"
 	tests := []struct {
 		name    string
 		updates UpdateSource
@@ -20,7 +19,9 @@ func TestFooterUpdate(t *testing.T) {
 	}{
 		{"no check", nil, false, releasesURL + "/tag/v0.1.0"},
 		{"up to date", fakeUpdates{}, false, releasesURL + "/tag/v0.1.0"},
-		{"newer release", fakeUpdates{version: "v0.2.0", url: notes, ok: true}, true, notes},
+		{"newer release", fakeUpdates{version: "v0.2.0", ok: true}, true, "https://github.com/BarkinBalci/asynqui/releases/tag/v0.2.0"},
+		// update only reports semantic versions; the footer escapes anyway.
+		{"tag is escaped", fakeUpdates{version: "../x?y#z", ok: true}, true, releasesURL + "/tag/..%2Fx%3Fy%23z"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

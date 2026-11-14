@@ -51,20 +51,20 @@ func TestCheck(t *testing.T) {
 		{"malformed JSON", "0.1.0", 200, `{"tag_name":`, ""},
 		{"not found", "0.1.0", 404, `{"message":"Not Found"}`, ""},
 		{"rate limited", "0.1.0", 403, `{"message":"API rate limit exceeded"}`, ""},
+		// Hostile tags never reach Latest: only a plain semantic version does.
+		{"tag with a path", "0.1.0", 200, `{"tag_name":"v9.9.9/../../evil"}`, ""},
+		{"tag with a scheme", "0.1.0", 200, `{"tag_name":"javascript:alert(1)//9.9.9"}`, ""},
+		{"tag with markup in build metadata", "0.1.0", 200, `{"tag_name":"v9.9.9+\"><script>"}`, ""},
+		{"tag with an escaped slash", "0.1.0", 200, `{"tag_name":"v9.9.9%2F.."}`, ""},
+		{"tag with a newline", "0.1.0", 200, `{"tag_name":"v9.9.9\n"}`, ""},
+		{"tag with spaces", "0.1.0", 200, `{"tag_name":" v9.9.9 "}`, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newChecker(t, tt.version, server(t, tt.status, tt.body))
 			c.check(t.Context())
-			v, u, ok := c.Latest()
-			if v != tt.want || ok != (tt.want != "") {
-				t.Fatalf("Latest() = %q, %q, %v; want %q", v, u, ok, tt.want)
-			}
-			if ok && u != "https://github.com/BarkinBalci/asynqui/releases/tag/"+tt.want {
-				t.Errorf("url = %q", u)
-			}
-			if !ok && u != "" {
-				t.Errorf("url = %q without an update", u)
+			if v, ok := c.Latest(); v != tt.want || ok != (tt.want != "") {
+				t.Fatalf("Latest() = %q, %v; want %q", v, ok, tt.want)
 			}
 		})
 	}
@@ -121,8 +121,74 @@ func TestCheckFailureKeepsResult(t *testing.T) {
 	c.check(t.Context())
 	fail.Store(true)
 	c.check(t.Context())
-	if v, _, ok := c.Latest(); !ok || v != "v0.2.0" {
+	if v, ok := c.Latest(); !ok || v != "v0.2.0" {
 		t.Errorf("Latest() = %q, %v after a failed check", v, ok)
+	}
+}
+
+// TestCheckClears checks that a newer release seen earlier is forgotten
+// once the latest release is no longer newer (it was withdrawn, or the
+// instance runs it now).
+func TestCheckClears(t *testing.T) {
+	var tag atomic.Value
+	tag.Store("v0.2.0")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"` + tag.Load().(string) + `"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := newChecker(t, "0.1.0", srv)
+	c.check(t.Context())
+	if _, ok := c.Latest(); !ok {
+		t.Fatal("no update after the first check")
+	}
+	tag.Store("v0.1.0")
+	c.check(t.Context())
+	if v, ok := c.Latest(); ok || v != "" {
+		t.Errorf("Latest() = %q, %v after the release went away", v, ok)
+	}
+}
+
+// TestRunCancelMidFetch cancels Run while a request hangs: Run returns at
+// once, well before the check's own timeout, and nothing is recorded.
+func TestRunCancelMidFetch(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	c, err := New(Options{
+		Version: "0.1.0",
+		Client:  srv.Client(),
+		URL:     srv.URL,
+		Timeout: time.Minute,
+		After: func(time.Duration) <-chan time.Time {
+			t.Error("Run waited for the next check after being canceled")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.Run(ctx)
+	}()
+	<-started
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+	if _, ok := c.Latest(); ok {
+		t.Error("update recorded from a canceled check")
 	}
 }
 
@@ -144,7 +210,7 @@ func TestCheckTimeout(t *testing.T) {
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("check took %s", d)
 	}
-	if _, _, ok := c.Latest(); ok {
+	if _, ok := c.Latest(); ok {
 		t.Error("update after a timeout")
 	}
 }
@@ -211,7 +277,7 @@ func TestRun(t *testing.T) {
 	if hits.Load() != 1 {
 		t.Fatalf("hits = %d before the first tick", hits.Load())
 	}
-	if _, _, ok := c.Latest(); ok {
+	if _, ok := c.Latest(); ok {
 		t.Fatal("update after the first check")
 	}
 	tick <- time.Now()
@@ -219,7 +285,7 @@ func TestRun(t *testing.T) {
 	if hits.Load() != 2 {
 		t.Fatalf("hits = %d after one tick", hits.Load())
 	}
-	if v, _, ok := c.Latest(); !ok || v != "v0.2.0" {
+	if v, ok := c.Latest(); !ok || v != "v0.2.0" {
 		t.Fatalf("Latest() = %q, %v after the second check", v, ok)
 	}
 

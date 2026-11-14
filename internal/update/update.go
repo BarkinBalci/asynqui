@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sync"
 	"time"
 )
@@ -16,8 +15,6 @@ import (
 const (
 	// DefaultURL is the GitHub API endpoint for the latest release.
 	DefaultURL = "https://api.github.com/repos/BarkinBalci/asynqui/releases/latest"
-	// releasePage is where a release's notes live, followed by its tag.
-	releasePage = "https://github.com/BarkinBalci/asynqui/releases/tag/"
 	// interval is the time between two checks.
 	interval = 24 * time.Hour
 	// defaultTimeout bounds one check.
@@ -61,9 +58,8 @@ type Checker struct {
 	url     string
 	timeout time.Duration
 
-	mu        sync.RWMutex
-	latest    string // tag of the newer release; "" when none is known
-	latestURL string
+	mu     sync.RWMutex
+	latest string // tag of the newer release; "" when none is known
 }
 
 // New returns a Checker for o.Version, or ErrNotRelease when that is not a
@@ -100,18 +96,22 @@ func New(o Options) (*Checker, error) {
 	return c, nil
 }
 
-// Latest returns the newest release's tag and the URL of its release notes,
-// with ok true, when a release newer than the running version is known.
-func (c *Checker) Latest() (version, url string, ok bool) {
+// Latest returns the newest release's tag, such as "v0.2.0", with ok true,
+// when a release newer than the running version is known. The tag is a
+// semantic version, so it is safe in a URL path segment once escaped.
+func (c *Checker) Latest() (version string, ok bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.latest, c.latestURL, c.latest != ""
+	return c.latest, c.latest != ""
 }
 
 // Run checks now and then every 24h until ctx ends.
 func (c *Checker) Run(ctx context.Context) {
 	for {
 		c.check(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -146,9 +146,9 @@ func (c *Checker) check(ctx context.Context) {
 	c.mu.Lock()
 	changed := newer && c.latest != rel.TagName
 	if newer {
-		c.latest, c.latestURL = rel.TagName, releasePage+url.PathEscape(rel.TagName)
+		c.latest = rel.TagName
 	} else {
-		c.latest, c.latestURL = "", ""
+		c.latest = ""
 	}
 	c.mu.Unlock()
 

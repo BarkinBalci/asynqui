@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -26,7 +27,8 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web"
 )
 
-// version is set at build time with -ldflags "-X main.version=...".
+// version is set at build time with -ldflags "-X main.version=...". run
+// reads it through buildVersion.
 var version = "dev"
 
 // shutdownTimeout bounds http.Server.Shutdown. server.shutdown_delay plus
@@ -62,8 +64,9 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	if opts.help {
 		return nil
 	}
+	ver := buildVersion(version, debug.ReadBuildInfo)
 	if opts.version {
-		_, err := fmt.Fprintf(stdout, "asynqui %s\n", version)
+		_, err := fmt.Fprintf(stdout, "asynqui %s\n", ver)
 		return err
 	}
 
@@ -93,7 +96,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	if err != nil {
 		return err
 	}
-	checker := newUpdateChecker(cfg.UpdateCheck, version, logger)
+	checker := newUpdateChecker(cfg.UpdateCheck, ver, logger)
 	var updates web.UpdateSource // a nil *update.Checker must stay a nil interface
 	if checker != nil {
 		updates = checker
@@ -118,7 +121,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		Policy:  policy,
 		Conns:   registrySource{reg: reg},
 		Ready:   &ready,
-		Version: version,
+		Version: ver,
 		Updates: updates,
 	})
 	if err != nil {
@@ -148,12 +151,22 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 			errc <- err
 		}
 	}()
-	logger.Info("listening", slog.String("addr", ln.Addr().String()), slog.String("version", version))
+	logger.Info("listening", slog.String("addr", ln.Addr().String()), slog.String("version", ver))
 	// Health loops keep running while the instance drains; Close stops them.
 	reg.Start(context.WithoutCancel(ctx))
-	// The update check stops with ctx: a draining instance does not need it.
+	// The update check stops with ctx, since a draining instance does not
+	// need it, and run waits for it on every return path.
 	if checker != nil {
-		go checker.Run(ctx)
+		checkCtx, cancelCheck := context.WithCancel(ctx)
+		checkDone := make(chan struct{})
+		go func() {
+			defer close(checkDone)
+			checker.Run(checkCtx)
+		}()
+		defer func() {
+			cancelCheck()
+			<-checkDone
+		}()
 	}
 
 	select {
@@ -181,6 +194,21 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	}
 	logger.Info("stopped")
 	return nil
+}
+
+// buildVersion returns the version stamped with -ldflags or, for a "dev"
+// build, the main module version the go command recorded: the tag for
+// `go install …/cmd/asynqui@v0.1.0`, a pseudo-version (a prerelease, so
+// never update-checked) for a build in a git checkout. "(devel)" or no build
+// info keeps "dev".
+func buildVersion(stamped string, read func() (*debug.BuildInfo, bool)) string {
+	if stamped != "dev" {
+		return stamped
+	}
+	if bi, ok := read(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return stamped
 }
 
 // newUpdateChecker returns the GitHub release check, or nil when

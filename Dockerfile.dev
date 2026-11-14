@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 # gcr.io/distroless/static-debian12:nonroot, multi-arch index.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
-COPY --from=build /out/asynqui /usr/bin/asynqui
+COPY --from=build --chmod=0555 /out/asynqui /usr/bin/asynqui
 USER 65532:65532
 ENV ASYNQUI_CONFIG=/etc/asynqui/config.yaml
 EXPOSE 8080

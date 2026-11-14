@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 #
-# Release configuration, run by .github/workflows/release.yml on v* tags.
+# Release configuration, run by .github/workflows/release.yml on vX.Y.Z* tags.
 # Validate locally with:
 #   go run github.com/goreleaser/goreleaser/v2@v2.19.0 check
 # Keep the version in sync with the workflow's goreleaser-action `version`.
@@ -31,10 +31,23 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    # Reproducible archives: fixed owner, mode and the tagged commit's time.
+    builds_info:
+      owner: root
+      group: root
+      mode: 0755
+      mtime: "{{ .CommitDate }}"
     files:
-      - LICENSE
-      - README.md
-      - config.example.yaml
+      - src: LICENSE
+        info: &fileinfo
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info: *fileinfo
+      - src: config.example.yaml
+        info: *fileinfo
 
 checksum:
   name_template: checksums.txt
@@ -43,27 +56,28 @@ checksum:
 changelog:
   use: git
   sort: asc
-  # Grouped by conventional-commit prefix; anything else lands in "Other".
-  # With `use: git` each entry starts with the commit hash, hence `^.*?`.
+  # Grouped by conventional-commit prefix (docs/contributing.md); anything
+  # else lands in "Other". Groups and filters match the commit subject alone
+  # (the hash is added only when formatting), so they anchor at its start.
   groups:
     - title: Features
-      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      regexp: '^feat(\([^)]+\))?!?: '
       order: 0
     - title: Bug fixes
-      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      regexp: '^fix(\([^)]+\))?!?: '
       order: 1
     - title: Performance
-      regexp: '^.*?perf(\(.+\))??!?:.+$'
+      regexp: '^perf(\([^)]+\))?!?: '
       order: 2
     - title: Documentation
-      regexp: '^.*?docs(\(.+\))??!?:.+$'
+      regexp: '^docs(\([^)]+\))?!?: '
       order: 3
     - title: Other
       order: 999
   filters:
     exclude:
-      - '^.*?(test|ci|chore|build)(\(.+\))??!?:.+$'
-      - '^.*?Merge (pull request|branch) '
+      - '^(test|ci|chore|build)(\([^)]+\))?!?: '
+      - '^Merge (pull request|branch) '
 
 dockers_v2:
   - id: asynqui
@@ -86,7 +100,7 @@ dockers_v2:
       org.opencontainers.image.licenses: MIT
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
-      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
     # GHCR reads the package description and repository link from the index.
     annotations:
       org.opencontainers.image.description: Web dashboard for asynq across multiple Redis instances

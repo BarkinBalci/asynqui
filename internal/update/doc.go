@@ -8,6 +8,9 @@
 // ends. Latest reports the newest release seen,
 // when it is newer than the running version.
 //
+// The request sends no credentials, config or user data; GitHub sees the
+// server's IP address and, from the User-Agent, the running version.
+//
 // The check is best effort: a failed request, an unexpected answer or a
 // release that is a draft, a prerelease or not a semantic version is logged
 // at debug level and leaves the last result in place.

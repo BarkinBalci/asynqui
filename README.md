@@ -62,8 +62,8 @@ Precedence is flag > env > file > default. Any other value can come from the
 environment through `${NAME}` or `${NAME:-default}` in the YAML. Every key is
 listed in [requirements §8](docs/requirements.md#8-configuration).
 
-asynqui checks GitHub for a newer release once a day and shows a dot next to the
-version in the sidebar. Set `update_check: false` to turn it off.
+asynqui checks GitHub for a newer release at startup and then daily, and shows a
+dot next to the version in the sidebar. Set `update_check: false` to turn it off.
 
 ## Health probes
 
