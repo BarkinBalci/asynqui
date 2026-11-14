@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -110,44 +111,26 @@ func TestConfigRedaction(t *testing.T) {
 	})
 }
 
-func TestErrorsNeverContainSecrets(t *testing.T) {
-	// Secrets that fail validation, or land in fields of the wrong type,
-	// are reported by location only.
+func TestValidationErrorsNeverContainSecrets(t *testing.T) {
 	vars := env(map[string]string{"PW": pwValue, "SECRET": clientValue, "HASH": "not-a-bcrypt-" + pwValue})
 	src := `connections:
-  - name: a
-    addr: h:1
-    db: ${PW}
-    tls: {enabled: "${SECRET}"}
+  - {name: a, addr: "h:${PW}"}
 auth:
   provider: basic
-  session:
-    hash_key: ${SECRET}
-    block_key: ${PW}
-    ttl: ${PW}
+  session: {hash_key: "${SECRET}", block_key: "${PW}"}
   basic:
-    users:
-      - {username: u, password_hash: "${HASH}"}
+    users: [{username: u, password_hash: "${HASH}"}]
 `
 	_, err := parse([]byte(src), vars, Overrides{})
-	if err == nil {
-		t.Fatal("want errors")
-	}
-	assertNoSecrets(t, "error", err.Error())
-
-	src = strings.Replace(src, "db: ${PW}", "db: 0", 1)
-	src = strings.Replace(src, `"${SECRET}"}`, "true}", 1)
-	src = strings.Replace(src, "ttl: ${PW}", "ttl: 1h", 1)
-	_, err = parse([]byte(src), vars, Overrides{})
 	want := []string{
-		"line 9: auth.session.hash_key: must be hex-encoded (32 or 64 bytes)",
-		"line 10: auth.session.block_key: must be hex-encoded (32 bytes)",
-		"line 14: auth.basic.users[0].password_hash: must be a bcrypt hash such as htpasswd -nbBC 12 prints",
+		"connections[0].addr: must have a port from 1 to 65535",
+		"auth.session.hash_key: must be hex-encoded (32 or 64 bytes)",
+		"auth.session.block_key: must be hex-encoded (32 bytes)",
+		"auth.basic.users[0].password_hash: must be a bcrypt hash such as htpasswd -nbBC 12 prints",
 	}
-	if got := errLines(err); strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Errorf("errors = %q, want %q", got, want)
+	if diff := cmp.Diff(want, errLines(err)); diff != "" {
+		t.Errorf("(-want +got):\n%s", diff)
 	}
-	assertNoSecrets(t, "error", err.Error())
 }
 
 // TestSecretInContainers covers secrets reached through slices, maps (as

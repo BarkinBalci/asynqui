@@ -3,90 +3,95 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+
+	"go.yaml.in/yaml/v3"
 )
 
-// expand interpolates environment variables into one scalar value:
-//
-//   - ${NAME} is replaced by the variable's value. An unset variable is an
-//     error; a variable set to "" expands to "".
-//   - ${NAME:-default} uses default when NAME is unset; a variable set to ""
-//     still expands to "". The default is itself expanded, so ${A:-${B}}
-//     works; braces inside it must be balanced.
-//   - $$ produces a literal $, so $${NAME} is the literal text ${NAME}.
-//   - Any other $ is kept as is, so bcrypt hashes need no escaping.
-//
-// Values read from the environment are never expanded again.
-func expand(s string, lookupEnv func(string) (string, bool)) (string, error) {
-	var b strings.Builder
-	for i := 0; i < len(s); {
-		switch {
-		case strings.HasPrefix(s[i:], "$$"):
-			b.WriteByte('$')
-			i += 2
-		case strings.HasPrefix(s[i:], "${"):
-			end := closingBrace(s, i+2)
-			if end < 0 {
-				return "", errors.New("unterminated ${ in value")
+// interpolate expands environment variables in the scalar values (never the
+// keys) of the tree at n. An expanded value is read as if written unquoted,
+// so ${DB} fills an int and ${TLS} a bool; an empty one is null and keeps the
+// field's default. Aliases are skipped: their anchors are expanded in place.
+// Null list entries are rejected, since decoding would silently drop them.
+func interpolate(n *yaml.Node, lookupEnv func(string) (string, bool)) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if !strings.Contains(n.Value, "$") {
+			return nil
+		}
+		v, err := expand(n.Value, lookupEnv)
+		if err != nil {
+			return fmt.Errorf("line %d: %w", n.Line, err)
+		}
+		if v != n.Value {
+			n.Value, n.Tag, n.Style = v, "", 0
+			if v != "" && n.ShortTag() == "!!null" {
+				n.Tag = "!!str" // "null" from the environment is a string
 			}
-			v, err := lookup(s[i+2:end], lookupEnv)
-			if err != nil {
-				return "", err
+		}
+	case yaml.MappingNode:
+		for i := 1; i < len(n.Content); i += 2 {
+			if err := interpolate(n.Content[i], lookupEnv); err != nil {
+				return err
+			}
+		}
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			if err := interpolate(c, lookupEnv); err != nil {
+				return err
+			}
+			if c.Kind == yaml.ScalarNode && c.ShortTag() == "!!null" {
+				return fmt.Errorf("line %d: list entry must not be empty", c.Line)
+			}
+		}
+	}
+	return nil
+}
+
+// expand replaces ${NAME} by the variable's value and ${NAME:-default} by
+// default when NAME is unset, and turns $$ into $. Any other $ is kept, so
+// bcrypt hashes need no escaping. An unset NAME without a default is an
+// error; one set to "" expands to "".
+func expand(s string, lookupEnv func(string) (string, bool)) (string, error) {
+	validName := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	var b strings.Builder
+	for {
+		i := strings.IndexByte(s, '$')
+		if i < 0 || i == len(s)-1 {
+			b.WriteString(s)
+			return b.String(), nil
+		}
+		b.WriteString(s[:i])
+		switch s[i+1] {
+		case '$':
+			b.WriteByte('$')
+			s = s[i+2:]
+		case '{':
+			body, rest, ok := strings.Cut(s[i+2:], "}")
+			switch {
+			case !ok:
+				return "", errors.New("unterminated ${")
+			case strings.Contains(body, "${"):
+				return "", errors.New("nested ${ is not supported")
+			}
+			name, def, hasDefault := strings.Cut(body, ":-")
+			if !validName.MatchString(name) {
+				return "", fmt.Errorf("invalid variable name %q in ${...}", name)
+			}
+			v, set := lookupEnv(name)
+			switch {
+			case set:
+			case hasDefault:
+				v = def
+			default:
+				return "", fmt.Errorf("environment variable %s is not set", name)
 			}
 			b.WriteString(v)
-			i = end + 1
+			s = rest
 		default:
-			b.WriteByte(s[i])
-			i++
+			b.WriteByte('$')
+			s = s[i+1:]
 		}
 	}
-	return b.String(), nil
-}
-
-// closingBrace returns the index of the "}" that closes a "${" whose body
-// starts at from, or -1. Nested braces in a default are balanced.
-func closingBrace(s string, from int) int {
-	depth := 1
-	for i := from; i < len(s); i++ {
-		switch s[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-// lookup resolves the body of one ${...} reference.
-func lookup(expr string, lookupEnv func(string) (string, bool)) (string, error) {
-	name, def, hasDefault := strings.Cut(expr, ":-")
-	if !validVarName(name) {
-		return "", fmt.Errorf("invalid variable name %q in ${...}", name)
-	}
-	v, ok := lookupEnv(name)
-	switch {
-	case ok:
-		return v, nil
-	case hasDefault:
-		return expand(def, lookupEnv)
-	}
-	return "", fmt.Errorf("environment variable %s is not set", name)
-}
-
-// validVarName reports whether name matches [A-Za-z_][A-Za-z0-9_]*.
-func validVarName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i, c := range name {
-		letter := c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
-		if !letter && (i == 0 || c < '0' || c > '9') {
-			return false
-		}
-	}
-	return true
 }

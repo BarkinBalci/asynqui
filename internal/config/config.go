@@ -1,10 +1,6 @@
 package config
 
-import (
-	"time"
-
-	"go.yaml.in/yaml/v3"
-)
+import "time"
 
 // Config is the whole asynqui configuration file.
 type Config struct {
@@ -213,16 +209,17 @@ func defaults() *Config {
 	}
 }
 
-// UnmarshalYAML decodes a connection on top of its default timeouts.
-func (c *Connection) UnmarshalYAML(n *yaml.Node) error {
-	type plain Connection // no methods, so no recursion
-	p := plain{
+// UnmarshalYAML decodes a connection on top of its default timeouts. It
+// uses the old-style callback so the Decoder's KnownFields still applies.
+func (c *Connection) UnmarshalYAML(unmarshal func(any) error) error {
+	type connection Connection // no methods, so no recursion
+	p := connection{
 		DialTimeout:  DefaultDialTimeout,
 		ReadTimeout:  DefaultReadTimeout,
 		WriteTimeout: DefaultWriteTimeout,
 	}
-	if err := n.Decode(&p); err != nil {
-		return err // unwrapped: yaml collects a *yaml.TypeError with the others
+	if err := unmarshal(&p); err != nil {
+		return err
 	}
 	*c = Connection(p)
 	return nil

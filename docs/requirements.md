@@ -475,16 +475,16 @@ YAML, path from §7 "Precedence". [config.example.yaml](../config.example.yaml) 
 
 ### Interpolation
 - Applied to each **parsed scalar value** after YAML parsing and before decoding, so an interpolated value can never change the document's structure. `db: ${REDIS_DB:-0}` works.
-- `${NAME}` is replaced by the variable's value. An unset variable is an error naming the variable and its location (`connections[1].password`, line 12). A variable set to an empty string is used as is.
+- `${NAME}` is replaced by the variable's value. An unset variable is an error naming the variable and its line. A variable set to an empty string is used as is.
 - `${NAME:-default}` uses `default` when `NAME` is unset (an empty value is still used as is).
 - `$$` produces a literal `$`.
 - Any other `$` is left alone, so bcrypt hashes like `$2y$12$…` need no escaping.
-- An interpolated value is read as its field's type, whatever its quoting: verbatim for strings, decimal for integers (`010` is 10), as if unquoted otherwise. An empty value in a non-string field keeps the default. Keys are never interpolated.
+- An interpolated value is read as if written unquoted, whatever its quoting, so it fills integer, boolean and duration fields; string fields take it verbatim. An empty value is null and keeps the field's default. Keys are never interpolated.
 
 ### Errors
-- Every problem is reported at once, ordered by line, as `line N: location: problem`.
-- Messages name the location, never the value, so secrets cannot leak through them.
-- Also rejected: null list entries, values of the wrong type, and an alias (`*name`) of an interpolated value used for a field of another type.
+- A YAML syntax, type or unknown-key error, or an interpolation error, is reported on its own, with yaml's message and line. Type errors may quote the offending value.
+- Otherwise every validation problem is reported at once, as `location: problem` (e.g. `connections[2].name: duplicate of connections[0]`). Validation messages never contain a value.
+- Also rejected: null list entries and values of the wrong type.
 - Warnings (logged, not fatal): a binding glob that matches no connection, TLS options set while `tls.enabled` is false, an OIDC `redirect_url` whose path is not `<base_path>/auth/callback`.
 
 ### Keys and defaults
