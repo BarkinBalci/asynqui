@@ -53,43 +53,19 @@ const defaultRange = 14
 // rangeChoices are the chart's ranges in days, in control order.
 func rangeChoices() []int { return []int{7, 14, 30, 90} }
 
-// sortParam is a column's ?sort= value.
-func sortParam(c pages.QueueColumn) string {
-	switch c {
-	case pages.ColName:
-		return "name"
-	case pages.ColState:
-		return "state"
-	case pages.ColPending:
-		return "pending"
-	case pages.ColActive:
-		return "active"
-	case pages.ColScheduled:
-		return "scheduled"
-	case pages.ColRetry:
-		return "retry"
-	case pages.ColArchived:
-		return "archived"
-	case pages.ColLatency:
-		return "latency"
-	case pages.ColMemory:
-		return "memory"
-	case pages.ColProcessed:
-		return "processed"
-	case pages.ColFailed:
-		return "failed"
+// queuesSort is the queues table's sort: every column, by Size
+// descending by default; names and states sort ascending first, numbers
+// descending.
+func queuesSort() sortSpec {
+	return sortSpec{
+		cols: []string{"name", "state", "size", "pending", "active", "scheduled", "retry", "archived",
+			"latency", "memory", "processed", "failed"},
+		def:     int(pages.ColSize),
+		defDesc: true,
+		firstDesc: func(c int) bool {
+			return c != int(pages.ColName) && c != int(pages.ColState)
+		},
 	}
-	return "size"
-}
-
-// parseSort is the column whose ?sort= value is s.
-func parseSort(s string) (pages.QueueColumn, bool) {
-	for c := range pages.NumQueueColumns {
-		if sortParam(c) == s {
-			return c, true
-		}
-	}
-	return 0, false
 }
 
 func dirParam(desc bool) string {
@@ -110,35 +86,15 @@ func sortDir(desc bool) components.SortDir {
 // ?sort=&dir= for the table, ?range=&queue= for the chart. Defaults are
 // left out of generated URLs.
 type queuesView struct {
-	sort  pages.QueueColumn
-	desc  bool
+	sort  sortState
 	days  int
 	queue string // chart queue; empty is all queues
-}
-
-func defaultQueuesView() queuesView {
-	return queuesView{sort: pages.ColSize, desc: true, days: defaultRange}
-}
-
-// defaultDesc is the direction a column sorts in when first picked:
-// ascending for names and states, descending for numbers.
-func defaultDesc(c pages.QueueColumn) bool {
-	return c != pages.ColName && c != pages.ColState
 }
 
 // parseQueuesView reads the state from a query; unknown values fall back
 // to the defaults.
 func parseQueuesView(q url.Values) queuesView {
-	v := defaultQueuesView()
-	if c, ok := parseSort(q.Get("sort")); ok {
-		v.sort, v.desc = c, defaultDesc(c)
-	}
-	switch q.Get("dir") {
-	case "asc":
-		v.desc = false
-	case "desc":
-		v.desc = true
-	}
+	v := queuesView{sort: queuesSort().parse(q), days: defaultRange}
 	if n, ok := strings.CutSuffix(q.Get("range"), "d"); ok {
 		if days, err := strconv.Atoi(n); err == nil && slices.Contains(rangeChoices(), days) {
 			v.days = days
@@ -151,10 +107,7 @@ func parseQueuesView(q url.Values) queuesView {
 // values is the query of v, without defaults.
 func (v queuesView) values() url.Values {
 	q := url.Values{}
-	if v.sort != pages.ColSize || !v.desc {
-		q.Set("sort", sortParam(v.sort))
-		q.Set("dir", dirParam(v.desc))
-	}
+	queuesSort().set(q, v.sort)
 	if v.days != defaultRange {
 		q.Set("range", rangeParam(v.days))
 	}
@@ -235,7 +188,7 @@ func (d *deps) queuesModel(r *http.Request, a access, v queuesView, ans answer) 
 // headers.
 func (d *deps) queueRows(m *pages.Queues, name string, v queuesView, rows []conn.Queue) {
 	sorted := slices.Clone(rows)
-	slices.SortStableFunc(sorted, func(x, y conn.Queue) int { return compareQueues(x, y, v.sort, v.desc) })
+	slices.SortStableFunc(sorted, func(x, y conn.Queue) int { return compareQueues(x, y, pages.QueueColumn(v.sort.col), v.sort.desc) })
 	for _, q := range sorted {
 		row := pages.QueueRow{
 			Name:   q.Name,
@@ -269,18 +222,12 @@ func (d *deps) queueRows(m *pages.Queues, name string, v queuesView, rows []conn
 		t.Failed += row.Failed
 		t.Memory += row.Memory
 	}
-	for c := range pages.NumQueueColumns {
-		next := v
-		h := components.SortHead{ID: "sort-" + sortParam(c), Num: c >= pages.ColSize}
-		if c == v.sort {
-			h.Dir = sortDir(v.desc)
-			next.desc = !v.desc
-		} else {
-			next.sort, next.desc = c, defaultDesc(c)
-		}
-		h.URL = d.queuesURL(name, next)
-		m.Heads[c] = h
-	}
+	// Every sort link keeps the chart's state.
+	chart := v
+	chart.sort = queuesSort().parse(nil)
+	heads := queuesSort().heads(v.sort, chart.values(), func(c int) bool { return c >= int(pages.ColSize) },
+		func(q url.Values) string { return d.urlQuery(q, "c", name) })
+	copy(m.Heads[:], heads)
 }
 
 // compareQueues orders two queues by column c, ties by name. A paused
@@ -372,7 +319,7 @@ func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 		names := uniqueValues(r.PostForm["queue"])
 		// Only the state of next is used; the path is always this
 		// connection's page, so it cannot redirect elsewhere.
-		v := defaultQueuesView()
+		v := parseQueuesView(nil)
 		next, nextErr := url.Parse(r.PostForm.Get("next"))
 		if nextErr == nil {
 			v = parseQueuesView(next.Query())
