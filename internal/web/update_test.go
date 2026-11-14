@@ -42,3 +42,31 @@ func TestFooterUpdate(t *testing.T) {
 		})
 	}
 }
+
+func TestFooterDevVersion(t *testing.T) {
+	tests := []struct {
+		version, text, title, href string
+	}{
+		{"0.1.0", "v0.1.0", "Release notes", releasesURL + "/tag/v0.1.0"},
+		{"v0.0.0-20261114015842-f9b5ecf3013c+dirty", "dev f9b5ecf", "v0.0.0-20261114015842-f9b5ecf3013c+dirty", releasesURL},
+		{"v0.1.0-3-gf9b5ecf-dirty", "dev f9b5ecf", "v0.1.0-3-gf9b5ecf-dirty", releasesURL},
+		{"0.2.0-rc.1", "v0.2.0-rc.1", "Release notes", releasesURL},
+		{"dev", "dev", "Release notes", releasesURL},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			d, h, _ := newTestDeps(t, testOpts{})
+			d.version = tt.version
+			v := parse(t, do(t, h, request{path: "/"})).Find(".side-foot .version")
+			if got := text(v); got != tt.text {
+				t.Errorf("text = %q, want %q", got, tt.text)
+			}
+			if got, _ := v.Attr("title"); got != tt.title {
+				t.Errorf("title = %q, want %q", got, tt.title)
+			}
+			if got, _ := v.Attr("href"); got != tt.href {
+				t.Errorf("href = %q, want %q", got, tt.href)
+			}
+		})
+	}
+}

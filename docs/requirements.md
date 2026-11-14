@@ -163,7 +163,7 @@ authz:
 - **Current connection:** expanded inside a tinted container with its sub-nav: Queues, Servers, Schedulers, and "Redis info" or "Valkey info".
 - **Active item:** tinted background, semibold, no accent bar. Hover and active backgrounds are inset on both sides.
 - **Pinned footer:**
-  - `v{version}` on the left, followed by an accent dot when a newer GitHub release exists. Both link to the release notes.
+  - `v{version}` on the left, followed by an accent dot when a newer GitHub release exists. Both link to the release notes. A development build whose version names a commit (Go pseudo-version, `git describe`, GoReleaser snapshot) shows `dev {shortsha}` (at most 7 hex digits) with the full version in the title; other prereleases and `dev` are shown as is.
   - A muted "Source ↗" link on the right.
   - There is no GitHub logo, Docs link or Report-issue link.
   - The update check (§7 "Update check") is cached for 24h, fails silently, and can be disabled with `update_check: false`. With an update, the version and dot link to the newer release's notes; otherwise to the running release's notes.

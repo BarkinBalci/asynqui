@@ -98,6 +98,8 @@ templ footer(f Footer) {
 	<div class="side-foot">
 		if f.UpdateAvailable {
 			<a class="version" href={ templ.SafeURL(f.ReleaseURL) } title="Release notes, update available">{ f.Version }<span class="dot dot-update"></span></a>
+		} else if f.FullVersion != "" {
+			<a class="version" href={ templ.SafeURL(f.ReleaseURL) } title={ f.FullVersion }>{ f.Version }</a>
 		} else {
 			<a class="version" href={ templ.SafeURL(f.ReleaseURL) } title="Release notes">{ f.Version }</a>
 		}

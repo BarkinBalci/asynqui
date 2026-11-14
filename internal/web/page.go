@@ -199,6 +199,9 @@ func (d *deps) footer() components.Footer {
 		release = releasesURL + "/tag/" + v
 	}
 	f := components.Footer{Version: v, ReleaseURL: release, SourceURL: sourceURL}
+	if format.IsShortVersion(d.version) {
+		f.FullVersion = d.version
+	}
 	if d.updates != nil {
 		if tag, ok := d.updates.Latest(); ok {
 			f.UpdateAvailable, f.ReleaseURL = true, releasesURL+"/tag/"+url.PathEscape(tag)

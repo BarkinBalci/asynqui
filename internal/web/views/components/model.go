@@ -130,9 +130,12 @@ type SubNav struct {
 
 // Footer is the sidebar's pinned footer.
 type Footer struct {
-	Version    string // already formatted, e.g. "v0.1.0" or "dev"
-	ReleaseURL string
-	SourceURL  string
+	Version string // already formatted, e.g. "v0.1.0", "dev" or "dev f9b5ecf"
+	// FullVersion is the unshortened build version for the title when
+	// Version is the short "dev <commit>" form; "" otherwise.
+	FullVersion string
+	ReleaseURL  string
+	SourceURL   string
 	// UpdateAvailable shows the accent dot after the version.
 	UpdateAvailable bool
 }

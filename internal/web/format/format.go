@@ -193,13 +193,89 @@ func isHex(c byte) bool {
 	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
 }
 
-// Version formats a build version for the sidebar footer and login page:
-// release versions read "v0.1.0" whether or not the build string carries
-// the "v"; anything else (such as "dev") is shown as is.
+// Version formats a build version for the sidebar footer and login page.
+// Release versions read "v0.1.0" whether or not the build string carries
+// the "v". A development build whose prerelease part names a commit reads
+// "dev" plus the commit's first 7 hex digits: a Go pseudo-version
+// ("v0.0.0-20261114015842-f9b5ecf3013c+dirty"), git describe output
+// ("v0.1.0-3-gf9b5ecf-dirty") or a GoReleaser snapshot
+// ("0.0.0-SNAPSHOT-f9b5ecf") all read "dev f9b5ecf". Other prereleases
+// ("v0.2.0-rc.1") keep their full form; anything else (such as "dev") is
+// shown as is.
 func Version(v string) string {
 	s := strings.TrimPrefix(v, "v")
-	if s != "" && '0' <= s[0] && s[0] <= '9' {
-		return "v" + s
+	if s == "" || s[0] < '0' || s[0] > '9' {
+		return v
 	}
-	return v
+	if sha := buildCommit(s); sha != "" {
+		return "dev " + sha
+	}
+	return "v" + s
+}
+
+// IsShortVersion reports whether Version(v) dropped part of v, so the full
+// string belongs in a title.
+func IsShortVersion(v string) bool {
+	return strings.HasPrefix(Version(v), "dev ")
+}
+
+// buildCommit returns the short commit hash named by the prerelease part of
+// version s (without its "v"), or "" when it names none.
+func buildCommit(s string) string {
+	s, _, _ = strings.Cut(s, "+") // build metadata, e.g. "+dirty"
+	_, pre, ok := strings.Cut(s, "-")
+	if !ok {
+		return ""
+	}
+	parts := strings.Split(pre, "-")
+	if parts[len(parts)-1] == "dirty" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) < 2 {
+		return ""
+	}
+	last, prev := parts[len(parts)-1], parts[len(parts)-2]
+	var sha string
+	switch {
+	case strings.HasPrefix(last, "g") && allHex(last[1:]) && len(last) > 4 && allDigits(prev):
+		sha = last[1:] // git describe: <tag>-<count>-g<hash>
+	case len(last) == 12 && allHex(last) && pseudoTime(prev):
+		sha = last // Go pseudo-version: <base>-<yyyymmddhhmmss>-<hash12>
+	case prev == "SNAPSHOT" && len(last) >= 7 && allHex(last):
+		sha = last // GoReleaser snapshot: <version>-SNAPSHOT-<hash>
+	default:
+		return ""
+	}
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	return sha
+}
+
+// pseudoTime reports whether p ends in a pseudo-version timestamp: 14
+// digits, alone ("20261114015842") or after a dot ("0.20261114015842",
+// "rc.1.0.20261114015842").
+func pseudoTime(p string) bool {
+	if i := strings.LastIndexByte(p, '.'); i >= 0 {
+		p = p[i+1:]
+	}
+	return len(p) == 14 && allDigits(p)
+}
+
+func allHex(s string) bool {
+	for i := range len(s) {
+		if !isHex(s[i]) {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func allDigits(s string) bool {
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
 }

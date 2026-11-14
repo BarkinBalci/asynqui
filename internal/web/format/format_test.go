@@ -211,17 +211,43 @@ func TestDay(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"0.1.0", "v0.1.0"},
-		{"v0.1.0", "v0.1.0"},
-		{"v1.2.3-4-gabcdef-dirty", "v1.2.3-4-gabcdef-dirty"},
-		{"dev", "dev"},
-		{"abc1234", "abc1234"},
-		{"", ""},
+	tests := []struct {
+		in, want string
+		short    bool
+	}{
+		// Releases.
+		{"0.1.0", "v0.1.0", false},
+		{"v0.1.0", "v0.1.0", false},
+		{"v1.10.0+build.5", "v1.10.0+build.5", false},
+		// Go pseudo-versions (go build in a checkout).
+		{"v0.0.0-20261114015842-f9b5ecf3013c+dirty", "dev f9b5ecf", true},
+		{"v0.0.0-20261114015842-f9b5ecf3013c", "dev f9b5ecf", true},
+		{"v0.1.1-0.20261114015842-f9b5ecf3013c", "dev f9b5ecf", true},
+		{"v0.2.0-rc.1.0.20261114015842-f9b5ecf3013c", "dev f9b5ecf", true},
+		// git describe (make build).
+		{"v1.2.3-4-gabcdef-dirty", "dev abcdef", true},
+		{"v0.1.0-3-gf9b5ecf3", "dev f9b5ecf", true},
+		{"0.1.0-12-gf9b5ecf", "dev f9b5ecf", true},
+		// GoReleaser snapshot.
+		{"0.0.0-SNAPSHOT-f9b5ecf", "dev f9b5ecf", true},
+		// Prereleases that name no commit keep their form.
+		{"0.2.0-rc.1", "v0.2.0-rc.1", false},
+		{"v0.2.0-beta-2", "v0.2.0-beta-2", false},
+		{"v0.1.0-dirty", "v0.1.0-dirty", false},
+		{"v0.1.0-x-gzzzzzzz", "v0.1.0-x-gzzzzzzz", false},
+		{"v0.0.0-2026111401584-f9b5ecf3013c", "v0.0.0-2026111401584-f9b5ecf3013c", false},
+		// Not a version.
+		{"dev", "dev", false},
+		{"abc1234", "abc1234", false},
+		{"f9b5ecf-dirty", "f9b5ecf-dirty", false},
+		{"", "", false},
 	}
 	for _, tt := range tests {
 		if got := Version(tt.in); got != tt.want {
 			t.Errorf("Version(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+		if got := IsShortVersion(tt.in); got != tt.short {
+			t.Errorf("IsShortVersion(%q) = %v, want %v", tt.in, got, tt.short)
 		}
 	}
 }
