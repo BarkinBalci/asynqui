@@ -1,4 +1,4 @@
-//go:build e2e || screenshots
+//go:build e2e || demo
 
 package e2e
 

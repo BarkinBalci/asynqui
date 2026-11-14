@@ -1,4 +1,4 @@
-//go:build screenshots
+//go:build demo
 
 package e2e
 
@@ -57,7 +57,7 @@ const cursorScript = `(() => {
 // tab → select three tasks → Run, and writes it as a GIF.
 func recordDemo(t *testing.T, browser playwright.Browser, baseURL string, d demo, out string) {
 	t.Helper()
-	bctx, pg := newShotPage(t, browser, baseURL, "light", gifWidth, gifHeight, 1)
+	bctx, pg := newDemoPage(t, browser, baseURL, "light", gifWidth, gifHeight, 1)
 	if err := bctx.AddInitScript(playwright.Script{Content: new(cursorScript)}); err != nil {
 		t.Fatal(err)
 	}

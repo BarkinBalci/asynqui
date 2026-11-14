@@ -11,6 +11,6 @@
 // which they flush: ASYNQUI_E2E_REDIS=host:port, or testcontainers when it
 // is unset. See docs/contributing.md.
 //
-// The screenshots build tag holds TestScreenshots instead, which
-// regenerates the README images in docs/images on the same harness.
+// The demo build tag holds TestDemoGIF instead, which regenerates the
+// README's docs/images/demo.gif on the same harness.
 package e2e

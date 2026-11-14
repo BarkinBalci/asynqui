@@ -1,9 +1,8 @@
-//go:build screenshots
+//go:build demo
 
 package e2e
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -23,7 +22,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// imagesDir is where TestScreenshots writes, relative to e2e/.
+// imagesDir is where TestDemoGIF writes, relative to e2e/.
 const imagesDir = "../docs/images"
 
 // The demo connections: one logical DB each on the same Redis, plus one
@@ -35,20 +34,13 @@ const (
 	demoDown          = "analytics"
 )
 
-// Screenshot geometry.
-const (
-	shotWidth  = 1440
-	shotHeight = 900
-	shotScale  = 2
-)
-
-// TestScreenshots regenerates the README images in docs/images: four
-// pages in light and dark, and the demo GIF. It seeds a throwaway Redis
-// (ASYNQUI_E2E_REDIS, DBs 0 to 2 are flushed, or testcontainers) with
-// demo data through asynq's client, inspector, workers and schedulers.
+// TestDemoGIF regenerates the README's docs/images/demo.gif. It seeds a
+// throwaway Redis (ASYNQUI_E2E_REDIS, DBs 0 to 2 are flushed, or
+// testcontainers) with demo data through asynq's client, inspector,
+// workers and schedulers, and records a flow through asynqui.
 //
-//	go test -tags screenshots -run TestScreenshots ./e2e/
-func TestScreenshots(t *testing.T) {
+//	go test -tags demo -run TestDemoGIF ./e2e/
+func TestDemoGIF(t *testing.T) {
 	addr := startRedis(t)
 	demo := seedDemo(t, addr)
 
@@ -69,17 +61,6 @@ func TestScreenshots(t *testing.T) {
 
 	if err := os.MkdirAll(imagesDir, 0o750); err != nil {
 		t.Fatal(err)
-	}
-	shots := []shot{
-		{name: "overview", path: "/"},
-		{name: "connection", path: "/c/" + demoPayments, height: 980},
-		{name: "queue", path: "/c/" + demoPayments + "/queues/" + demo.queue + "?state=retry", prepare: selectRows(3)},
-		{name: "task", path: demo.taskPath},
-	}
-	for _, theme := range []string{"light", "dark"} {
-		for _, s := range shots {
-			capture(t, browser, app.url, theme, s, filepath.Join(imagesDir, s.name+"-"+theme+".png"))
-		}
 	}
 	recordDemo(t, browser, app.url, demo, filepath.Join(imagesDir, "demo.gif"))
 }
@@ -103,9 +84,19 @@ connections:
 	return b.String()
 }
 
-// deadAddr is a loopback address with nothing listening on it.
+// deadPort is where the unreachable connection points, so its address
+// reads the same on every run.
+const deadPort = "localhost:6380"
+
+// deadAddr is deadPort, or another loopback address when something
+// listens there.
 func deadAddr(t *testing.T) string {
 	t.Helper()
+	c, err := net.DialTimeout("tcp", deadPort, time.Second)
+	if err != nil {
+		return deadPort
+	}
+	_ = c.Close()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -117,11 +108,11 @@ func deadAddr(t *testing.T) string {
 	return addr
 }
 
-// ---- capture ----
+// ---- browser ----
 
-// newShotPage opens a tab with the theme cookie set, as the theme control
+// newDemoPage opens a tab with the theme cookie set, as the theme control
 // sets it.
-func newShotPage(t *testing.T, browser playwright.Browser, baseURL, theme string, w, h int, scale float64) (playwright.BrowserContext, playwright.Page) {
+func newDemoPage(t *testing.T, browser playwright.Browser, baseURL, theme string, w, h int, scale float64) (playwright.BrowserContext, playwright.Page) {
 	t.Helper()
 	bctx, err := browser.NewContext(playwright.BrowserNewContextOptions{
 		BaseURL:           new(baseURL),
@@ -143,56 +134,6 @@ func newShotPage(t *testing.T, browser playwright.Browser, baseURL, theme string
 	}
 	pg.SetDefaultTimeout(15000)
 	return bctx, pg
-}
-
-// shot is one page to capture: height overrides the viewport height,
-// and prepare sets the page up after it has settled.
-type shot struct {
-	name, path string
-	height     int
-	prepare    func(*testing.T, playwright.Page)
-}
-
-// capture opens the page, waits until every region has data and one
-// round of polls has landed, stops the page clock so relative times and
-// polls hold still, and saves a screenshot.
-func capture(t *testing.T, browser playwright.Browser, baseURL, theme string, s shot, out string) {
-	t.Helper()
-	bctx, pg := newShotPage(t, browser, baseURL, theme, shotWidth, cmp.Or(s.height, shotHeight), shotScale)
-	if err := pg.Clock().Install(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pg.Goto(s.path); err != nil {
-		t.Fatalf("open %s: %v", s.path, err)
-	}
-	settle(t, pg)
-	if s.prepare != nil {
-		s.prepare(t, pg)
-	}
-	now, err := pg.Evaluate(`() => Date.now()`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ms int64
-	switch v := now.(type) {
-	case int:
-		ms = int64(v)
-	case float64:
-		ms = int64(v)
-	}
-	if err := pg.Clock().PauseAt(ms + 200); err != nil {
-		t.Fatalf("pause clock: %v", err)
-	}
-	time.Sleep(300 * time.Millisecond)
-	if _, err := pg.Screenshot(playwright.PageScreenshotOptions{
-		Path:       new(out),
-		Animations: playwright.ScreenshotAnimationsDisabled,
-		Caret:      playwright.ScreenshotCaretHide,
-	}); err != nil {
-		t.Fatalf("screenshot %s: %v", out, err)
-	}
-	_ = bctx.Close()
-	t.Logf("wrote %s", out)
 }
 
 // settle waits until no region is still checking, then fires one poll
@@ -231,26 +172,6 @@ func settle(t *testing.T, pg playwright.Page) {
 	}
 }
 
-// selectRows ticks the first n task rows, so the toolbar shows its
-// actions, and moves the mouse off the table.
-func selectRows(n int) func(*testing.T, playwright.Page) {
-	return func(t *testing.T, pg playwright.Page) {
-		t.Helper()
-		boxes := pg.Locator("#tasks-rows input.cb")
-		for i := range n {
-			if err := boxes.Nth(i).Check(); err != nil {
-				t.Fatalf("select row %d: %v", i, err)
-			}
-		}
-		if err := pg.Mouse().Move(shotWidth-8, 8); err != nil {
-			t.Fatal(err)
-		}
-		if err := pg.Locator(".selc").WaitFor(playwright.LocatorWaitForOptions{State: playwright.WaitForSelectorStateVisible}); err != nil {
-			t.Fatalf("selection count: %v", err)
-		}
-	}
-}
-
 // ---- demo data ----
 
 // demoConn is one connection's logical DB and what runs on it: the
@@ -279,10 +200,9 @@ func demoConns() []demoConn {
 	}
 }
 
-// demo names what the seeder made for the captures.
+// demo names what the seeder made for the GIF.
 type demo struct {
-	queue    string // the payments queue whose Retry tab is shown
-	taskPath string // the Task page of a retried task
+	queue string // the payments queue whose retries the GIF runs
 }
 
 // outcome is what the demo worker does with one task.
@@ -362,8 +282,8 @@ func (s *seeder) id() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// add enqueues one task with outcome o and returns its ID.
-func (s *seeder) add(queue, typ, payload string, o outcome, opts ...asynq.Option) string {
+// add enqueues one task with outcome o.
+func (s *seeder) add(queue, typ, payload string, o outcome, opts ...asynq.Option) {
 	s.t.Helper()
 	id := s.id()
 	s.w.set(id, o)
@@ -371,7 +291,6 @@ func (s *seeder) add(queue, typ, payload string, o outcome, opts ...asynq.Option
 	if _, err := s.c.Enqueue(asynq.NewTask(typ, []byte(payload)), opts...); err != nil {
 		s.t.Fatalf("%s: enqueue %s on %s: %v", s.name, typ, queue, err)
 	}
-	return id
 }
 
 // ok enqueues n tasks that succeed.
@@ -383,9 +302,9 @@ func (s *seeder) ok(queue, typ string, n int, payload func() string) {
 
 // fail enqueues a task that ends in the retry set after tries attempts,
 // next before its next retry.
-func (s *seeder) fail(queue, typ, payload, msg string, tries int, next time.Duration) string {
+func (s *seeder) fail(queue, typ, payload, msg string, tries int, next time.Duration) {
 	s.retry[queue]++
-	return s.add(queue, typ, payload, outcome{err: msg, tries: tries, next: next})
+	s.add(queue, typ, payload, outcome{err: msg, tries: tries, next: next})
 }
 
 // dead enqueues a task that is archived after tries retries.
@@ -539,7 +458,7 @@ func seedDemo(t *testing.T, addr string) demo {
 	for _, h := range hooks {
 		s.fail("webhooks", "webhook:deliver", p.webhook(), h.err, h.tries, h.next)
 	}
-	taskID := s.fail("invoices", "invoice:generate", p.invoice(), "render invoice pdf: chromium: navigation timeout of 30000 ms exceeded", 3, 11*time.Minute+20*time.Second)
+	s.fail("invoices", "invoice:generate", p.invoice(), "render invoice pdf: chromium: navigation timeout of 30000 ms exceeded", 3, 11*time.Minute+20*time.Second)
 	s.fail("invoices", "invoice:send", p.invoiceSend(), "smtp: 421 4.7.0 Try again later, closing connection", 2, 6*time.Minute)
 	s.fail("critical", "payment:capture", p.capture(), "psp: 503 upstream unavailable (request_id req_8f2k1LqZ)", 1, 45*time.Second)
 	s.dead("refunds", "refund:process", p.refund(), "psp: refund rejected: charge has already been refunded", 3)
@@ -653,10 +572,7 @@ func seedDemo(t *testing.T, addr string) demo {
 		}
 		t.Cleanup(sch.Shutdown)
 	}
-	return demo{
-		queue:    "webhooks",
-		taskPath: "/c/" + demoPayments + "/queues/invoices/tasks/" + taskID,
-	}
+	return demo{queue: "webhooks"}
 }
 
 // seedDemoHistory writes demo data only: asynq's daily processed and
