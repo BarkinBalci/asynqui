@@ -507,7 +507,7 @@ func TestListActiveTasksStarted(t *testing.T) {
 	started := time.Date(2026, 11, 8, 0, 14, 2, 0, time.UTC)
 	f := newFakeTasks(ti("emails", "a1", asynq.TaskStateActive), ti("emails", "a2", asynq.TaskStateActive))
 	c := taskConn(t, f, "emails")
-	c.servers = &fakeServers{infos: []*asynq.ServerInfo{{ActiveWorkers: []*asynq.WorkerInfo{{TaskID: "a1", Started: started}}}, nil}}
+	c.servers = &fakeServers{infos: []*asynq.ServerInfo{{ActiveWorkers: []*asynq.WorkerInfo{{TaskID: "a1", Started: started}}}}}
 	got, err := c.ListTasks(t.Context(), "emails", TaskActive, 1, 20, false)
 	if err != nil {
 		t.Fatal(err)
@@ -639,7 +639,7 @@ func TestAllActions(t *testing.T) {
 
 func TestGroups(t *testing.T) {
 	f := newFakeTasks()
-	f.groups["emails"] = []*asynq.GroupInfo{{Group: "b", Size: 2}, nil, {Group: "a", Size: 7}}
+	f.groups["emails"] = []*asynq.GroupInfo{{Group: "b", Size: 2}, {Group: "a", Size: 7}}
 	c := taskConn(t, f, "emails")
 	got, err := c.Groups(t.Context(), "emails")
 	if err != nil {

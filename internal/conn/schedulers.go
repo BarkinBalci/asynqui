@@ -92,17 +92,11 @@ func (c *Conn) fetchSchedulerEntries(context.Context) ([]SchedulerEntry, error) 
 	}
 	out := make([]SchedulerEntry, 0, len(entries))
 	for _, e := range entries {
-		if e == nil {
-			continue
-		}
 		se := SchedulerEntry{ID: e.ID, Spec: e.Spec, Next: e.Next, Prev: e.Prev}
 		if e.Task != nil {
 			se.TaskType, se.Payload = e.Task.Type(), e.Task.Payload()
 		}
 		for _, o := range e.Opts {
-			if o == nil {
-				continue
-			}
 			eo := entryOption(o)
 			se.Options = append(se.Options, eo)
 			if o.Type() == asynq.QueueOpt {
@@ -226,9 +220,7 @@ func (c *Conn) fetchEnqueueEvents(ctx context.Context, entryID, queue string, pa
 		out.HasNext = len(next) > 0
 	}
 	for _, e := range evs {
-		if e != nil {
-			out.Events = append(out.Events, EnqueueEvent{TaskID: e.TaskID, EnqueuedAt: e.EnqueuedAt})
-		}
+		out.Events = append(out.Events, EnqueueEvent{TaskID: e.TaskID, EnqueuedAt: e.EnqueuedAt})
 	}
 	if queue != "" {
 		c.markExisting(ctx, queue, out.Events)

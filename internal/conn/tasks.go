@@ -281,11 +281,9 @@ func (c *Conn) listInspector(queue string, page, size int, list func(string, ...
 	if err != nil {
 		return nil, fmt.Errorf("list tasks of %s: %w", queue, taskErr(err))
 	}
-	out := make([]Task, 0, len(infos))
-	for _, ti := range infos {
-		if ti != nil {
-			out = append(out, newTask(ti))
-		}
+	out := make([]Task, len(infos))
+	for i, ti := range infos {
+		out[i] = newTask(ti)
 	}
 	return out, nil
 }
@@ -352,8 +350,6 @@ func (c *Conn) hydrate(ctx context.Context, queue string, state TaskState, entri
 				c.logger.Warn("task read failed; left out of the page", slog.String("queue", queue),
 					slog.String("task", e.ID), slog.String("error", err.Error()))
 				return
-			case ti == nil:
-				return
 			}
 			t := newTask(ti)
 			if t.State != state {
@@ -401,11 +397,9 @@ func (c *Conn) ListGroupTasks(ctx context.Context, queue, group string, page, si
 		if err != nil {
 			return nil, fmt.Errorf("list tasks of %s group %s: %w", queue, group, taskErr(err))
 		}
-		out := make([]Task, 0, len(infos))
-		for _, ti := range infos {
-			if ti != nil {
-				out = append(out, newTask(ti))
-			}
+		out := make([]Task, len(infos))
+		for i, ti := range infos {
+			out[i] = newTask(ti)
 		}
 		return out, nil
 	})
@@ -438,11 +432,9 @@ func (c *Conn) Groups(ctx context.Context, queue string) ([]Group, error) {
 		if err != nil {
 			return nil, fmt.Errorf("groups of %s: %w", queue, err)
 		}
-		out := make([]Group, 0, len(gs))
-		for _, g := range gs {
-			if g != nil {
-				out = append(out, Group{Name: g.Group, Size: g.Size})
-			}
+		out := make([]Group, len(gs))
+		for i, g := range gs {
+			out[i] = Group{Name: g.Group, Size: g.Size}
 		}
 		slices.SortFunc(out, func(a, b Group) int { return strings.Compare(a.Name, b.Name) })
 		return out, nil

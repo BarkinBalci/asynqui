@@ -108,9 +108,6 @@ func (c *Conn) fetchQueues(context.Context) ([]Queue, error) {
 	}
 	out := make([]Queue, 0, len(infos))
 	for _, qi := range infos {
-		if qi == nil {
-			continue
-		}
 		out = append(out, Queue{
 			Name:           qi.Queue,
 			Paused:         qi.Paused,
@@ -221,9 +218,6 @@ func (c *Conn) fetchHistory(queue string, days int) ([]DailyStat, error) {
 	}
 	for _, stats := range per {
 		for _, s := range stats {
-			if s == nil {
-				continue
-			}
 			if i, ok := index[utcDay(s.Date)]; ok {
 				out[i].Processed += s.Processed
 				out[i].Failed += s.Failed

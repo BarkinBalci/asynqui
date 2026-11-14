@@ -272,10 +272,8 @@ func TestServers(t *testing.T) {
 		{ID: "b", Host: "server-2", PID: 7, Concurrency: 10, Queues: map[string]int{"low": 1, "critical": 6, "default": 3, "emails": 3},
 			StrictPriority: true, Started: t0, Status: "active", ActiveWorkers: []*asynq.WorkerInfo{
 				{TaskID: "t2", TaskType: "email:send", Queue: "emails", Started: t0.Add(2 * time.Minute), Deadline: t0.Add(time.Hour)},
-				nil,
 				{TaskID: "t1", TaskType: "order:ship", Queue: "critical", Started: t0.Add(time.Minute), TaskPayload: []byte("{}")},
 			}},
-		nil,
 		{ID: "a", Host: "server-2", PID: 3, Status: "stopped", ActiveWorkers: []*asynq.WorkerInfo{}},
 		{ID: "c", Host: "server-1", PID: 9, Status: "active"},
 	}}
@@ -379,8 +377,7 @@ func TestSchedulerEntries(t *testing.T) {
 	t0 := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
 	fake := &fakeSchedulers{entries: []*asynq.SchedulerEntry{
 		{ID: "e2", Spec: "@every 30s", Task: asynq.NewTask("webhook:deliver", []byte(`{"a":1}`)),
-			Opts: []asynq.Option{asynq.Queue("critical"), asynq.MaxRetry(3), nil}, Next: t0.Add(30 * time.Second), Prev: t0},
-		nil,
+			Opts: []asynq.Option{asynq.Queue("critical"), asynq.MaxRetry(3)}, Next: t0.Add(30 * time.Second), Prev: t0},
 		// The queue on the task is not recorded: unknown.
 		{ID: "e1", Spec: "0 6 * * *", Task: asynq.NewTask("report:daily", nil, asynq.Queue("reports")), Next: t0.Add(24 * time.Hour),
 			Opts: []asynq.Option{asynq.Timeout(2 * time.Minute), asynq.Unique(time.Hour), asynq.ProcessAt(t0), asynq.Retention(time.Hour)}},

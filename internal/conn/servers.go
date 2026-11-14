@@ -74,9 +74,6 @@ func (c *Conn) fetchServers(context.Context) ([]Server, error) {
 	}
 	out := make([]Server, 0, len(infos))
 	for _, si := range infos {
-		if si == nil {
-			continue
-		}
 		s := Server{
 			ID:             si.ID,
 			Host:           si.Host,
@@ -91,9 +88,6 @@ func (c *Conn) fetchServers(context.Context) ([]Server, error) {
 		}
 		slices.SortStableFunc(s.Queues, func(a, b QueueWeight) int { return cmp.Compare(b.Weight, a.Weight) })
 		for _, w := range si.ActiveWorkers {
-			if w == nil {
-				continue
-			}
 			s.Workers = append(s.Workers, Worker{
 				TaskID:   w.TaskID,
 				TaskType: w.TaskType,
