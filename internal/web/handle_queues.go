@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/a-h/templ"
+
 	"github.com/BarkinBalci/asynqui/internal/authz"
 	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
@@ -311,9 +313,7 @@ func (d *deps) queueActions(m *pages.Queues, a access) {
 func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
-		r.Body = http.MaxBytesReader(w, r.Body, maxActionForm)
-		if err := r.ParseForm(); err != nil {
-			plainError(w, http.StatusBadRequest)
+		if !parseActionForm(w, r) {
 			return
 		}
 		names := uniqueValues(r.PostForm["queue"])
@@ -342,7 +342,7 @@ func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 			case isFragment(r):
 				plainError(w, http.StatusBadRequest)
 			case len(names) == 0:
-				http.Redirect(w, r, back, http.StatusSeeOther) //nolint:gosec // G710: back is built by d.url for this connection.
+				navigate(w, r, back)
 			default:
 				crumbs := []components.Crumb{{Text: name, URL: back}, {Label: pages.DeleteQueuesCrumb()}}
 				l := d.layout(r, a, components.SectionQueues, crumbs)
@@ -355,12 +355,9 @@ func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 		}
 
 		failures := d.runQueueAction(r.Context(), a.conn, verb, names)
-		if isFragment(r) {
-			d.render(w, r, http.StatusOK, pages.QueuesActionResult(d.queuesModel(r, a, v, answer{}), failures))
-			return
-		}
-		d.setFlash(w, name, failures)
-		http.Redirect(w, r, back, http.StatusSeeOther) //nolint:gosec // G710: back is built by d.url for this connection.
+		d.answerAction(w, r, name, func() templ.Component {
+			return pages.QueuesActionResult(d.queuesModel(r, a, v, answer{}), failures)
+		}, pages.Flash{Failures: failures}, back)
 	})
 }
 

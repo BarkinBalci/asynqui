@@ -42,7 +42,7 @@ func handleRecheck(d *deps) http.Handler {
 		a := accessFrom(r.Context())
 		_, _ = a.conn.Recheck(r.Context()) // the cards read the stored health
 		if !isFragment(r) {
-			http.Redirect(w, r, d.url(), http.StatusSeeOther)
+			navigate(w, r, d.url())
 			return
 		}
 		// Re-read after the check so every card, the badge and the sidebar

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/a-h/templ"
+
 	"github.com/BarkinBalci/asynqui/internal/authz"
 	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
@@ -415,11 +417,7 @@ func (d *deps) pager(m *pages.Queue, name, queue string, v queueView, rows int) 
 // a queue already paused and Resume a running one.
 func (d *deps) queuePageAction(w http.ResponseWriter, r *http.Request, a access, verb pages.QueueVerb, queue string, v queueView) {
 	failures := d.runQueueAction(r.Context(), a.conn, verb, []string{queue})
-	if isFragment(r) {
-		m := d.queueModel(r, a, queue, v, queueAnswer{})
-		d.render(w, r, http.StatusOK, pages.QueueActionResult(m, failures, nil))
-		return
-	}
-	d.setFlash(w, a.conn.Name(), failures)
-	http.Redirect(w, r, d.queueURL(a.conn.Name(), queue, v), http.StatusSeeOther) //nolint:gosec // G710: built by d.url for this connection.
+	d.answerAction(w, r, a.conn.Name(), func() templ.Component {
+		return pages.QueueActionResult(d.queueModel(r, a, queue, v, queueAnswer{}), failures, nil)
+	}, pages.Flash{Failures: failures}, d.queueURL(a.conn.Name(), queue, v))
 }

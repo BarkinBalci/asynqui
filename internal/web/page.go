@@ -98,6 +98,41 @@ func (d *deps) errorDocument(w http.ResponseWriter, r *http.Request, status int,
 	writeHTML(w, status, body)
 }
 
+// parseActionForm reads an action post's form, at most maxActionForm
+// bytes. On a bad one it answers 400 itself and returns false.
+func parseActionForm(w http.ResponseWriter, r *http.Request) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxActionForm)
+	if err := r.ParseForm(); err != nil {
+		plainError(w, http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// navigate sends the browser to target: an HX-Redirect for htmx, else a
+// 303 (post, redirect, get). Every target is built by d.url.
+func navigate(w http.ResponseWriter, r *http.Request, target string) {
+	if isFragment(r) {
+		w.Header().Set("HX-Redirect", target)
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther) //nolint:gosec // G710: target is built by d.url, inside this app.
+}
+
+// answerAction answers an action: with htmx the page's user-request
+// answer, result, which shows the failures as toasts; without JS a
+// redirect back, with f in the flash cookie for the page to show.
+func (d *deps) answerAction(w http.ResponseWriter, r *http.Request, conn string, result func() templ.Component, f pages.Flash, back string) {
+	if isFragment(r) {
+		d.render(w, r, http.StatusOK, result())
+		return
+	}
+	d.setFlash(w, conn, f)
+	navigate(w, r, back)
+}
+
 // handleNotFound is the catch-all route.
 func handleNotFound(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/a-h/templ"
+
 	"github.com/BarkinBalci/asynqui/internal/conn"
 	"github.com/BarkinBalci/asynqui/internal/web/format"
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
@@ -194,14 +196,7 @@ func handleFindTask(d *deps) http.Handler {
 			cancel()
 			switch {
 			case err == nil:
-				target := d.url("c", name, "queues", queue, "tasks", f.ID)
-				if isFragment(r) {
-					w.Header().Set("HX-Redirect", target)
-					w.Header().Set("Cache-Control", "no-store")
-					w.WriteHeader(http.StatusOK)
-					return
-				}
-				http.Redirect(w, r, target, http.StatusSeeOther) //nolint:gosec // G710: built by d.url for this connection.
+				navigate(w, r, d.url("c", name, "queues", queue, "tasks", f.ID))
 				return
 			case errors.Is(err, conn.ErrTaskNotFound), errors.Is(err, conn.ErrQueueNotFound):
 				f.Missed = true
@@ -275,9 +270,7 @@ func handleTaskAction(d *deps, verb conn.TaskVerb) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
 		name, queue := a.conn.Name(), r.PathValue("queue")
-		r.Body = http.MaxBytesReader(w, r.Body, maxActionForm)
-		if err := r.ParseForm(); err != nil {
-			plainError(w, http.StatusBadRequest)
+		if !parseActionForm(w, r) {
 			return
 		}
 		if len(r.PostForm["id"]) > maxTaskIDs || len(r.PostForm["group"]) > maxTaskIDs {
@@ -304,7 +297,7 @@ func handleTaskAction(d *deps, verb conn.TaskVerb) http.Handler {
 				plainError(w, http.StatusBadRequest)
 				return
 			}
-			http.Redirect(w, r, back, http.StatusSeeOther) //nolint:gosec // G710: built by d.url for this connection.
+			navigate(w, r, back)
 			return
 		}
 		if (verb == conn.TaskDelete || verb == conn.TaskArchive || f.all) && !f.confirm {
@@ -330,35 +323,26 @@ func handleTaskAction(d *deps, verb conn.TaskVerb) http.Handler {
 			cancel()
 		}
 		notice, failures := d.runTaskAction(r.Context(), a.conn, queue, verb, f)
-		switch {
-		case f.fromTask && verb == conn.TaskDelete && len(failures) == 0:
+		if f.fromTask && verb == conn.TaskDelete && len(failures) == 0 {
 			tab := tabView(tabState, pageSizes()[0])
 			if tabState == conn.TaskAggregating {
 				tab.group = tabGroup
 			}
-			target := d.queueURL(name, queue, tab)
-			d.setFlashAll(w, name, pages.Flash{Notice: notice})
-			if isFragment(r) {
-				w.Header().Set("HX-Redirect", target)
-				w.Header().Set("Cache-Control", "no-store")
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			http.Redirect(w, r, target, http.StatusSeeOther) //nolint:gosec // G710: built by d.url for this connection.
-		case isFragment(r) && f.fromTask:
-			m := d.taskModel(r, a, queue, f.ids[0], f.taskView, taskAnswer{})
-			d.render(w, r, http.StatusOK, pages.TaskActionResult(m, failures))
-		case isFragment(r):
-			m := d.queueModel(r, a, queue, f.queueView, queueAnswer{fresh: true, notice: notice})
-			d.render(w, r, http.StatusOK, pages.QueueActionResult(m, nil, failures))
-		default:
-			fl := pages.Flash{TaskFailures: failures}
-			if !f.fromTask {
-				fl.Notice = notice
-			}
-			d.setFlashAll(w, name, fl)
-			http.Redirect(w, r, back, http.StatusSeeOther) //nolint:gosec // G710: built by d.url for this connection.
+			d.setFlash(w, name, pages.Flash{Notice: notice})
+			navigate(w, r, d.queueURL(name, queue, tab))
+			return
 		}
+		fl := pages.Flash{TaskFailures: failures}
+		if !f.fromTask {
+			fl.Notice = notice
+		}
+		d.answerAction(w, r, name, func() templ.Component {
+			if f.fromTask {
+				return pages.TaskActionResult(d.taskModel(r, a, queue, f.ids[0], f.taskView, taskAnswer{}), failures)
+			}
+			m := d.queueModel(r, a, queue, f.queueView, queueAnswer{fresh: true, notice: notice})
+			return pages.QueueActionResult(m, nil, failures)
+		}, fl, back)
 	})
 }
 

@@ -15,7 +15,7 @@ import (
 func roundTrip(t *testing.T, d *deps, f pages.Flash, tamper func(string) string) (pages.Flash, bool) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	d.setFlashAll(w, "main", f)
+	d.setFlash(w, "main", f)
 	cookies := w.Result().Cookies()
 	if len(cookies) != 1 {
 		t.Fatalf("cookies = %v", cookies)

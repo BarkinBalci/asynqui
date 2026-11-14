@@ -41,16 +41,10 @@ type flashItem struct {
 	N *int64 `json:"n,omitempty"`
 }
 
-// setFlash stores queue action failures for the connection's next page
-// view. With no failures it does nothing.
-func (d *deps) setFlash(w http.ResponseWriter, conn string, failures []pages.ActionFailure) {
-	d.setFlashAll(w, conn, pages.Flash{Failures: failures})
-}
-
-// setFlashAll stores f for the connection's next page view. With nothing
+// setFlash stores f for the connection's next page view. With nothing
 // in f it does nothing. Items that do not fit the size bound are dropped,
 // failures first from the end; the notice is kept.
-func (d *deps) setFlashAll(w http.ResponseWriter, conn string, f pages.Flash) {
+func (d *deps) setFlash(w http.ResponseWriter, conn string, f pages.Flash) {
 	var items []flashItem
 	if f.Notice != nil {
 		n := f.Notice.Count
