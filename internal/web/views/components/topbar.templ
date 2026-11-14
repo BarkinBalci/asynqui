@@ -50,7 +50,7 @@ templ TopBarView(m TopBar) {
 // segButton is one button of a segmented control: a submit button, so the
 // control works without JS; app.js applies it in place.
 templ segButton(name, value string, on bool, extra templ.Attributes) {
-	<button type="submit" name={ name } value={ value } aria-pressed={ ariaBool(on) } { segAttrs(on, extra)... }>
+	<button type="submit" name={ name } value={ value } aria-pressed={ AriaBool(on) } { segAttrs(on, extra)... }>
 		{ children... }
 	</button>
 }
@@ -108,7 +108,8 @@ func crumbAttrs(c Crumb) templ.Attributes {
 	return a
 }
 
-func ariaBool(b bool) string {
+// AriaBool is b as an ARIA boolean attribute value.
+func AriaBool(b bool) string {
 	if b {
 		return "true"
 	}

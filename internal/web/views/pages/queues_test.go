@@ -13,15 +13,7 @@ import (
 
 func renderDoc(t *testing.T, m Queues) *goquery.Document {
 	t.Helper()
-	var b strings.Builder
-	if err := QueuesPoll(m).Render(context.Background(), &b); err != nil {
-		t.Fatal(err)
-	}
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(b.String()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return doc
+	return renderC(t, QueuesPoll(m))
 }
 
 func text(s *goquery.Selection) string { return strings.Join(strings.Fields(s.Text()), " ") }

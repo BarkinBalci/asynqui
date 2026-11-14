@@ -119,13 +119,13 @@ templ taskActions(m Task, oob bool) {
 			@verbButton(b)
 		}
 		if m.ArchiveDialog.ID != "" {
-			@components.ConfirmDialog(m.ArchiveDialog, archiveTaskTitle(), verbLabel(TaskArchive)) {
+			@components.ConfirmDialog(m.ArchiveDialog, archiveTaskTitle(), verbLabel(TaskArchive, false)) {
 				<p class="mono dlg-id"><bdi>{ format.VisibleID(m.ID) }</bdi></p>
 				@archiveWarning()
 			}
 		}
 		if m.DeleteDialog.ID != "" {
-			@components.ConfirmDialog(m.DeleteDialog, deleteTaskTitle(), verbLabel(TaskDelete)) {
+			@components.ConfirmDialog(m.DeleteDialog, deleteTaskTitle(), verbLabel(TaskDelete, false)) {
 				<p class="mono dlg-id"><bdi>{ format.VisibleID(m.ID) }</bdi></p>
 			}
 		}

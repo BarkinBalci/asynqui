@@ -258,7 +258,7 @@ templ throughputCard(t Throughput, oob bool) {
 						}
 						<div class="seg" role="group" aria-label="Range">
 							for _, r := range t.Ranges {
-								<button id={ r.ID } type="submit" name="range" value={ r.Value } aria-pressed={ pressed(r.On) } { onClass(r.On)... }>{ format.Number(int64(r.Days)) }d</button>
+								<button id={ r.ID } type="submit" name="range" value={ r.Value } aria-pressed={ components.AriaBool(r.On) } { on(r.On, "")... }>{ format.Number(int64(r.Days)) }d</button>
 							}
 						</div>
 					</form>
@@ -303,18 +303,16 @@ templ throughputFailed() {
 	Could not load throughput
 }
 
-func onClass(on bool) templ.Attributes {
-	if on {
+// on marks the current choice of a control: class "on", and
+// aria-current set to current unless it is empty.
+func on(b bool, current string) templ.Attributes {
+	if !b {
+		return nil
+	}
+	if current == "" {
 		return templ.Attributes{"class": "on"}
 	}
-	return nil
-}
-
-func pressed(on bool) string {
-	if on {
-		return "true"
-	}
-	return "false"
+	return templ.Attributes{"class": "on", "aria-current": current}
 }
 
 // DeleteQueuesCrumb is the confirmation page's title and last breadcrumb.

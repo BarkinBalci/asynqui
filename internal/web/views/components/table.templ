@@ -4,7 +4,7 @@ import "github.com/BarkinBalci/asynqui/internal/web/format"
 
 // Badge is a pill with a tone; the caller writes its text.
 templ Badge(t Tone) {
-	<span class={ "badge", toneClass(t) }>
+	<span class={ "badge", ToneClass(t) }>
 		{ children... }
 	</span>
 }
@@ -22,7 +22,8 @@ templ QueueStateBadge(paused bool) {
 	}
 }
 
-func toneClass(t Tone) string {
+// ToneClass is a tone's badge class.
+func ToneClass(t Tone) string {
 	switch t {
 	case ToneOK:
 		return "badge-ok"

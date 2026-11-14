@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"strings"
 	"time"
 
 	"github.com/BarkinBalci/asynqui/internal/web/format"
@@ -194,7 +195,17 @@ templ taskCard(m Queue, oob bool) {
 		@liveData(m.Live, queueFailed()) {
 			<nav class="tabs" aria-label="Task states">
 				for _, t := range m.Tabs {
-					<a id={ TabID(t.State) } class={ "tab", templ.KV("on", t.On) } href={ templ.SafeURL(t.URL) } hx-get={ t.URL } hx-swap="none" hx-push-url="true" { currentAttr(t.On)... }>
+					<a
+						id={ TabID(t.State) }
+						class={ "tab", templ.KV("on", t.On) }
+						href={ templ.SafeURL(t.URL) }
+						hx-get={ t.URL }
+						hx-swap="none"
+						hx-push-url="true"
+						if t.On {
+							aria-current="page"
+						}
+					>
 						{ stateText(t.State) + " " }
 						@tabCount(t, false)
 					</a>
@@ -217,7 +228,7 @@ templ taskCard(m Queue, oob bool) {
 				@groupsTable(m, false)
 				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
 					for _, d := range m.AllDialogs {
-						@components.ConfirmDialog(d.Dialog, groupsTitle(d.Verb), allLabel(d.Verb)) {
+						@components.ConfirmDialog(d.Dialog, groupsTitle(d.Verb), verbLabel(d.Verb, true)) {
 							<ul class="dlg-list mono" data-sel-names></ul>
 							if d.Verb == TaskArchive {
 								@archiveWarning()
@@ -249,18 +260,18 @@ templ taskCard(m Queue, oob bool) {
 				</div>
 				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
 					if m.ArchiveDialog.ID != "" {
-						@components.ConfirmDialog(m.ArchiveDialog, archiveTasksTitle(), verbLabel(TaskArchive)) {
+						@components.ConfirmDialog(m.ArchiveDialog, archiveTasksTitle(), verbLabel(TaskArchive, false)) {
 							<ul class="dlg-list mono" data-sel-names></ul>
 							@archiveWarning()
 						}
 					}
 					if m.DeleteDialog.ID != "" {
-						@components.ConfirmDialog(m.DeleteDialog, deleteTasksTitle(), verbLabel(TaskDelete)) {
+						@components.ConfirmDialog(m.DeleteDialog, deleteTasksTitle(), verbLabel(TaskDelete, false)) {
 							<ul class="dlg-list mono" data-sel-names></ul>
 						}
 					}
 					for _, d := range m.AllDialogs {
-						@components.ConfirmDialog(d.Dialog, allTitle(d.Verb, m.Tab, m.Group, m.Total), allLabel(d.Verb)) {
+						@components.ConfirmDialog(d.Dialog, allTitle(d.Verb, m.Tab, m.Group, m.Total), verbLabel(d.Verb, true)) {
 							if d.Verb == TaskArchive {
 								@archiveWarning()
 							}
@@ -272,40 +283,24 @@ templ taskCard(m Queue, oob bool) {
 	</section>
 }
 
-func currentAttr(on bool) templ.Attributes {
-	if on {
-		return templ.Attributes{"aria-current": "page"}
-	}
-	return nil
-}
-
 templ tabCount(t Tab, oob bool) {
-	<span id={ TabCountID(t.State) } class={ "count", countClass(t.State) } { components.OOB(oob)... }>{ format.Number(t.Count) }</span>
+	<span id={ TabCountID(t.State) } class={ "count", components.ToneClass(stateTone(t.State)) } { components.OOB(oob)... }>{ format.Number(t.Count) }</span>
 }
 
 templ verbButton(b TaskActionButton) {
-	switch  {
-		case b.All && b.Verb == TaskRun:
-			@components.ActionButton(b.Action, components.IconRun("14"), allLabelText(b.Verb))
-		case b.All && b.Verb == TaskArchive:
-			@components.ActionButton(b.Action, components.IconArchive("14"), allLabelText(b.Verb))
-		case b.All:
-			@components.ActionButton(b.Action, components.IconDelete("14"), allLabelText(b.Verb))
-		default:
-			@taskVerbButton(b)
-	}
+	@components.ActionButton(b.Action, verbIcon(b.Verb, "14"), verbText(b.Verb, b.All))
 }
 
-templ taskVerbButton(b TaskActionButton) {
-	switch b.Verb {
+templ verbIcon(v TaskVerb, size string) {
+	switch v {
 		case TaskRun:
-			@components.ActionButton(b.Action, components.IconRun("14"), "Run now")
+			@components.IconRun(size)
 		case TaskArchive:
-			@components.ActionButton(b.Action, components.IconArchive("14"), "Archive")
+			@components.IconArchive(size)
 		case TaskCancel:
-			@components.ActionButton(b.Action, components.IconCancel("14"), "Cancel")
+			@components.IconCancel(size)
 		default:
-			@components.ActionButton(b.Action, components.IconDelete("14"), "Delete")
+			@components.IconDelete(size)
 	}
 }
 
@@ -589,13 +584,13 @@ templ archiveWarning() {
 
 // groupsTitle is the title of an "all" dialog of the selected groups.
 templ groupsTitle(v TaskVerb) {
-	{ allLabelText(v) + " tasks in the selected groups" }
+	{ verbText(v, true) + " tasks in the selected groups" }
 }
 
 // allTitle is the "all" dialog's title; app.js updates the count when
 // it opens the dialog. In a group's list it names the group.
 templ allTitle(v TaskVerb, s TaskState, group string, total int64) {
-	{ allLabelText(v) + " " }<span data-all-total>{ format.Number(total) }</span>{ " " + scopeTasks(s, group, total) }
+	{ verbText(v, true) + " " }<span data-all-total>{ format.Number(total) }</span>{ " " + scopeTasks(s, group, total) }
 }
 
 // scopeTasks names n of the tasks a table lists: "pending tasks", or
@@ -604,24 +599,11 @@ func scopeTasks(s TaskState, group string, n int64) string {
 	if group != "" {
 		return tasksWord(n) + " in " + format.VisibleID(group)
 	}
-	return stateLowerText(s) + " " + tasksWord(n)
+	return strings.ToLower(stateText(s)) + " " + tasksWord(n)
 }
 
-templ allLabel(v TaskVerb) {
-	{ allLabelText(v) }
-}
-
-templ verbLabel(v TaskVerb) {
-	switch v {
-		case TaskRun:
-			Run now
-		case TaskArchive:
-			Archive
-		case TaskCancel:
-			Cancel
-		default:
-			Delete
-	}
+templ verbLabel(v TaskVerb, all bool) {
+	{ verbText(v, all) }
 }
 
 // StateName is a state's label: tabs, badges and breadcrumbs.
@@ -650,38 +632,29 @@ func stateText(s TaskState) string {
 	return "Pending"
 }
 
-func stateLowerText(s TaskState) string {
-	switch s {
-	case StateActive:
-		return "active"
-	case StateAggregating:
-		return "aggregating"
-	case StateScheduled:
-		return "scheduled"
-	case StateRetry:
-		return "retry"
-	case StateArchived:
-		return "archived"
-	case StateCompleted:
-		return "completed"
-	}
-	return "pending"
-}
-
-func allLabelText(v TaskVerb) string {
-	switch v {
-	case TaskRun:
+// verbText is a verb's button label, or its "all" variant's.
+func verbText(v TaskVerb, all bool) string {
+	switch {
+	case all && v == TaskRun:
 		return "Run all"
-	case TaskArchive:
+	case all && v == TaskArchive:
 		return "Archive all"
+	case all:
+		return "Delete all"
+	case v == TaskRun:
+		return "Run now"
+	case v == TaskArchive:
+		return "Archive"
+	case v == TaskCancel:
+		return "Cancel"
 	}
-	return "Delete all"
+	return "Delete"
 }
 
 // allTitleText is the "all" confirmation's title as plain text: the
 // confirmation page's heading, title and breadcrumb.
 func allTitleText(v TaskVerb, s TaskState, total int64) string {
-	return allLabelText(v) + " " + format.Number(total) + " " + scopeTasks(s, "", total)
+	return verbText(v, true) + " " + format.Number(total) + " " + scopeTasks(s, "", total)
 }
 
 func tasksWord(n int64) string {
@@ -727,24 +700,6 @@ func stateTone(s TaskState) components.Tone {
 		return components.ToneOK
 	}
 	return components.ToneNeutral
-}
-
-func countClass(s TaskState) string {
-	switch stateTone(s) {
-	case components.ToneInfo:
-		return "badge-info"
-	case components.ToneTeal:
-		return "badge-teal"
-	case components.ToneViolet:
-		return "badge-violet"
-	case components.ToneOrange:
-		return "badge-orange"
-	case components.ToneDanger:
-		return "badge-danger"
-	case components.ToneOK:
-		return "badge-ok"
-	}
-	return "badge-neutral"
 }
 
 templ noticeText(n TaskNotice) {
@@ -917,9 +872,9 @@ templ ConfirmTasksPage(m ConfirmTasks) {
 				<a class="btn" href={ templ.SafeURL(m.CancelURL) }>Cancel</a>
 				<button type="submit" class={ "btn", templ.KV("danger", dangerVerb(m.Verb)), templ.KV("primary", !dangerVerb(m.Verb)) }>
 					if m.All {
-						@allLabel(m.Verb)
+						@verbLabel(m.Verb, true)
 					} else {
-						@verbLabel(m.Verb)
+						@verbLabel(m.Verb, false)
 					}
 				</button>
 			</form>
@@ -931,9 +886,9 @@ templ ConfirmTasksPage(m ConfirmTasks) {
 templ confirmTitle(m ConfirmTasks) {
 	switch  {
 		case len(m.Groups) == 1:
-			{ allLabelText(m.Verb) + " " + scopeTasks(StateAggregating, m.Groups[0], 0) }
+			{ verbText(m.Verb, true) + " " + scopeTasks(StateAggregating, m.Groups[0], 0) }
 		case len(m.Groups) > 1:
-			{ allLabelText(m.Verb) + " tasks in " + format.Number(int64(len(m.Groups))) + " groups" }
+			{ verbText(m.Verb, true) + " tasks in " + format.Number(int64(len(m.Groups))) + " groups" }
 		case m.All:
 			{ allTitleText(m.Verb, m.State, m.Total) }
 		case m.Verb == TaskArchive && len(m.IDs) == 1:

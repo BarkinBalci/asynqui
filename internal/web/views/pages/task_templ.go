@@ -703,7 +703,7 @@ func taskActions(m Task, oob bool) templ.Component {
 				}
 				return nil
 			})
-			templ_7745c5c3_Err = components.ConfirmDialog(m.ArchiveDialog, archiveTaskTitle(), verbLabel(TaskArchive)).Render(templ.WithChildren(ctx, templ_7745c5c3_Var26), templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.ConfirmDialog(m.ArchiveDialog, archiveTaskTitle(), verbLabel(TaskArchive, false)).Render(templ.WithChildren(ctx, templ_7745c5c3_Var26), templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -740,7 +740,7 @@ func taskActions(m Task, oob bool) templ.Component {
 				}
 				return nil
 			})
-			templ_7745c5c3_Err = components.ConfirmDialog(m.DeleteDialog, deleteTaskTitle(), verbLabel(TaskDelete)).Render(templ.WithChildren(ctx, templ_7745c5c3_Var28), templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = components.ConfirmDialog(m.DeleteDialog, deleteTaskTitle(), verbLabel(TaskDelete, false)).Render(templ.WithChildren(ctx, templ_7745c5c3_Var28), templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

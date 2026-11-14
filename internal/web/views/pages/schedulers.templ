@@ -159,8 +159,8 @@ templ payloadCard(p Payload) {
 			<h2 class="card-title" id="payload-title">Payload</h2>
 			if p.JSON {
 				<nav class="seg" aria-label="Payload view">
-					<a id="payload-json" href={ templ.SafeURL(p.JSONURL) } { toggleAttrs(!p.Raw)... }>JSON</a>
-					<a id="payload-raw" href={ templ.SafeURL(p.RawURL) } { toggleAttrs(p.Raw)... }>Raw</a>
+					<a id="payload-json" href={ templ.SafeURL(p.JSONURL) } { on(!p.Raw, "true")... }>JSON</a>
+					<a id="payload-raw" href={ templ.SafeURL(p.RawURL) } { on(p.Raw, "true")... }>Raw</a>
 				</nav>
 			}
 		</div>
@@ -170,14 +170,6 @@ templ payloadCard(p Payload) {
 			@components.CodeBlock(PayloadID, p.Text, "Payload", "Copy payload")
 		}
 	</section>
-}
-
-// toggleAttrs mark the current view of a two-link toggle.
-func toggleAttrs(on bool) templ.Attributes {
-	if on {
-		return templ.Attributes{"class": "on", "aria-current": "true"}
-	}
-	return nil
 }
 
 templ entryHistory(h History, oob bool) {
