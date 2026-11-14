@@ -3,6 +3,7 @@ package conn_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -31,7 +32,9 @@ func TestIntegrationServersAndSchedulers(t *testing.T) {
 	if err := srv.Start(mux); err != nil {
 		t.Fatal(err)
 	}
-	sch := asynq.NewScheduler(opt, &asynq.SchedulerOpts{LogLevel: asynq.FatalLevel})
+	// The scheduler first writes its entries after one heartbeat (10s by
+	// default), so beat every second.
+	sch := asynq.NewScheduler(opt, &asynq.SchedulerOpts{LogLevel: asynq.FatalLevel, HeartbeatInterval: time.Second})
 	id, err := sch.Register("@every 1s", asynq.NewTask("report:daily", []byte(`{"a":1}`)), asynq.Queue("reports"), asynq.MaxRetry(2))
 	if err != nil {
 		t.Fatal(err)
@@ -58,10 +61,11 @@ func TestIntegrationServersAndSchedulers(t *testing.T) {
 		t.Errorf("worker = %+v", w)
 	}
 
-	entries, err := c.SchedulerEntries(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	var entries []conn.SchedulerEntry
+	eventually(t, "the scheduler entry", func() bool {
+		entries, err = c.SchedulerEntries(t.Context())
+		return err == nil && len(entries) > 0
+	})
 	if len(entries) != 1 || entries[0].ID != id || entries[0].Queue != "reports" || entries[0].Spec != "@every 1s" ||
 		string(entries[0].Payload) != `{"a":1}` || len(entries[0].Options) != 2 {
 		t.Fatalf("entries = %+v", entries)
