@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -24,9 +26,10 @@ const (
 )
 
 // ErrNotRelease is returned by New for a running version that is not a
-// release: not a semantic version (such as "dev"), or one with a prerelease
-// part, which also covers git describe output ("v0.1.0-3-gabc1234-dirty").
-// Such builds are never checked.
+// release: not a semantic version (such as "dev"), one with a prerelease
+// part (git describe output such as "v0.1.0-3-gabc1234-dirty", and
+// pseudo-versions), or one with build metadata ("v0.1.0+dirty"). Such
+// builds are never checked.
 var ErrNotRelease = errors.New("not a release version")
 
 // Options configure a Checker. Version is required.
@@ -51,7 +54,7 @@ type Options struct {
 // when it is newer than the running version. It is safe for concurrent use.
 type Checker struct {
 	version string
-	current semver
+	current string // canonical, "v1.2.3"
 	logger  *slog.Logger
 	client  *http.Client
 	after   func(time.Duration) <-chan time.Time
@@ -65,8 +68,8 @@ type Checker struct {
 // New returns a Checker for o.Version, or ErrNotRelease when that is not a
 // release version.
 func New(o Options) (*Checker, error) {
-	cur, ok := parseSemver(o.Version)
-	if !ok || cur.pre != "" {
+	cur, ok := releaseVersion(o.Version)
+	if !ok {
 		return nil, fmt.Errorf("version %q: %w", o.Version, ErrNotRelease)
 	}
 	c := &Checker{
@@ -135,13 +138,13 @@ func (c *Checker) check(ctx context.Context) {
 		c.logger.Debug("update check failed", slog.Any("error", err))
 		return
 	}
-	v, ok := parseSemver(rel.TagName)
-	if !ok || v.pre != "" || rel.Draft || rel.Prerelease {
+	v, ok := releaseVersion(rel.TagName)
+	if !ok || rel.Draft || rel.Prerelease {
 		c.logger.Debug("update check ignored a release", slog.String("tag", rel.TagName),
 			slog.Bool("draft", rel.Draft), slog.Bool("prerelease", rel.Prerelease))
 		return
 	}
-	newer := c.current.olderThan(v)
+	newer := semver.Compare(c.current, v) < 0
 
 	c.mu.Lock()
 	changed := newer && c.latest != rel.TagName
