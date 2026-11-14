@@ -21,6 +21,7 @@ asynqui/
 │   ├── conn/                  # Registry: name → inspector/redis; health loop; per-connection cache
 │   ├── auth/                  # none | basic | proxy | oidc; session cookie
 │   ├── authz/                 # roles and per-connection policy: Role(user, conn), Can(...)
+│   ├── update/                # GitHub release check: startup + every 24h, Latest()
 │   └── web/
 │       ├── server.go          # NewServer(deps...) http.Handler
 │       ├── routes.go          # every URL, in one file, with its required role
@@ -35,18 +36,22 @@ asynqui/
 ├── config.example.yaml        # every key; loads without env vars
 ├── config.dev.yaml            # make run: localhost:6379, auth none, admin
 ├── Makefile
-└── .github/workflows/ci.yml
+├── .goreleaser.yaml           # release builds, archives, checksums, changelog, images
+├── Dockerfile                 # release image: GoReleaser's prebuilt binary on distroless
+├── Dockerfile.dev             # local image built from source (make docker)
+└── .github/workflows/         # ci.yml; release.yml on v* tags
 ```
 
 ### Dependency direction (one way, no cycles)
 
 ```
 cmd/asynqui → web → conn, auth, authz → config
-                 ↘ chart
-                 ↘ views → format
+            ↘ update     ↘ chart
+                         ↘ views → format
 ```
 
 - Nothing imports `web`.
+- `update` imports no other internal package; `web` sees it only through its `UpdateSource` interface (`Latest() (version, url, ok)`), and `cmd/asynqui` passes nil when the check is off or the build is not a release.
 - `views` imports only its own components and `web/format`.
 - `format`, `chart` and `config` import no other internal package.
 
@@ -78,19 +83,20 @@ func main() {
 func run(ctx context.Context, args []string, lookupEnv func(string) (string, bool), stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	opts, err := parseFlags(args, lookupEnv, stderr) // flag > env; -h → opts.help, return nil
+	opts, err := parseFlags(args, lookupEnv, stderr) // flag > env; -h → opts.help, -version → print; return nil
 	// --- fail fast: everything below can fail and runs before Listen ---
 	cfg, err := config.Load(opts.configPath, lookupEnv, overrides) // file > default; flags/env override
 	authn, err := auth.New(ctx, …)                               // OIDC discovery happens here
 	reg, err := conn.NewRegistry(cfg.Connections, logger)          // no Redis I/O; fails only on unreadable TLS files
+	updates := newUpdateChecker(cfg.UpdateCheck, version, logger)  // nil when off or not a release; Run starts after Listen
 	defer reg.Close()                                             // stops the health loops, then closes the clients
 	srv := &http.Server{
-		Handler:     handler, // web.NewServer(web.Deps{Logger, Config, Auth, Policy, Conns: reg, Ready, Version}); fails on a bad trusted origin
+		Handler:     handler, // web.NewServer(web.Deps{Logger, Config, Auth, Policy, Conns: reg, Ready, Version, Updates}); fails on a bad trusted origin
 		BaseContext: func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 		// ReadHeaderTimeout 10s, ReadTimeout 30s, WriteTimeout 60s, IdleTimeout 120s
 	}
 	ln, err := lc.Listen(ctx, "tcp", cfg.Server.Addr)
-	go srv.Serve(ln); reg.Start(ctx)                         // health loops in the background
+	go srv.Serve(ln); reg.Start(ctx); go updates.Run(ctx)    // health loops and the update check in the background
 
 	<-ctx.Done() // or a Serve error
 	stop()                           // a second signal now force-quits
@@ -278,14 +284,15 @@ Other conventions:
 
 - **Tools module:** `tools/go.mod` pins templ and golangci-lint with `tool` directives. Run them as `go tool -modfile=tools/go.mod <tool>`; the main `go.mod` lists only runtime and test dependencies.
 - **Go version:** `go 1.26.0` with `toolchain go1.26.10` in both `go.mod` files. CI installs `1.26.x`.
-- **Makefile:** `make help` lists the targets (`generate`, `lint`, `test`, `test-race`, `run`, `build`, `tidy`).
+- **Makefile:** `make help` lists the targets (`generate`, `lint`, `test`, `test-race`, `run`, `build`, `docker`, `tidy`). `build` stamps `main.version` from `git describe`.
 - **CI** (`.github/workflows/ci.yml`, actions pinned by commit SHA): `go mod tidy -diff` for both modules, templ generate + `git status --porcelain` must be empty, vet, golangci-lint, `go test -race`, static build.
+- **Release** (`.github/workflows/release.yml`, on `v*` tags, actions pinned by SHA, only `contents: write` and `packages: write`): tests, then GoReleaser at a pinned version (keep it in sync with the header of `.goreleaser.yaml`). Check the config with `go run github.com/goreleaser/goreleaser/v2@<version> check`.
 
 ## Documentation plan
 
 - **README.md:** what asynqui is, a screenshot, and the quickstart.
 - **`config.example.yaml`:** every option with comments. CI checks that it parses and validates.
 - **`docs/`:** requirements (behaviour, config reference), architecture (this file) and [deployment](deployment.md) now; authentication, authorization and contributing guides later.
-- **`CHANGELOG.md`:** generated by GoReleaser.
+- **Changelog:** GoReleaser writes it into each GitHub release from the commit messages; there is no `CHANGELOG.md`.
 - **pkg.go.dev:** shows only the `cmd/asynqui` package comment, which points to the README.
 - **A docs site:** Hugo on GitHub Pages, added only once `docs/` outgrows plain Markdown.

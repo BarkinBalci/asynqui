@@ -30,8 +30,14 @@ const (
 // in conn's cache, so the next poll usually has them.
 const defaultSummaryBudget = 1500 * time.Millisecond
 
+// UpdateSource reports a release newer than the running version: its
+// version and the URL of its release notes, with ok true when one is known.
+type UpdateSource interface {
+	Latest() (version, url string, ok bool)
+}
+
 // Deps are the dependencies of NewServer. Every field is required except
-// Version, Now, SummaryBudget and PageBudget.
+// Version, Updates, Now, SummaryBudget and PageBudget.
 type Deps struct {
 	Logger *slog.Logger
 	Config *config.Config
@@ -42,6 +48,8 @@ type Deps struct {
 	// Version is the build version shown in the sidebar and on the login
 	// page. Empty means "dev".
 	Version string
+	// Updates drives the sidebar's update dot. Nil means no update check.
+	Updates UpdateSource
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 	// SummaryBudget bounds the Overview's wait for summaries. Zero means
@@ -61,6 +69,7 @@ type deps struct {
 	conns   ConnectionSource
 	ready   *Readiness
 	version string
+	updates UpdateSource // nil without an update check
 	now     func() time.Time
 	budget  time.Duration
 	// pageBudget bounds a connection page's wait for its data.
@@ -108,6 +117,7 @@ func newServer(d Deps) (*deps, http.Handler, error) {
 		conns:         d.Conns,
 		ready:         d.Ready,
 		version:       d.Version,
+		updates:       d.Updates,
 		now:           d.Now,
 		budget:        d.SummaryBudget,
 		pageBudget:    d.PageBudget,

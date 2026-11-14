@@ -197,7 +197,13 @@ func (d *deps) footer() components.Footer {
 	if strings.HasPrefix(v, "v") && !strings.ContainsAny(v, "-+") {
 		release = releasesURL + "/tag/" + v
 	}
-	return components.Footer{Version: v, ReleaseURL: release, SourceURL: sourceURL}
+	f := components.Footer{Version: v, ReleaseURL: release, SourceURL: sourceURL}
+	if d.updates != nil {
+		if _, u, ok := d.updates.Latest(); ok {
+			f.UpdateAvailable, f.ReleaseURL = true, u
+		}
+	}
+	return f
 }
 
 func healthView(s HealthState) components.Health {

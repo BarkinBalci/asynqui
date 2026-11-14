@@ -22,6 +22,7 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/auth"
 	"github.com/BarkinBalci/asynqui/internal/config"
 	"github.com/BarkinBalci/asynqui/internal/conn"
+	"github.com/BarkinBalci/asynqui/internal/update"
 	"github.com/BarkinBalci/asynqui/internal/web"
 )
 
@@ -61,6 +62,10 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	if opts.help {
 		return nil
 	}
+	if opts.version {
+		_, err := fmt.Fprintf(stdout, "asynqui %s\n", version)
+		return err
+	}
 
 	cfg, err := config.Load(opts.configPath, lookupEnv, opts.overrides)
 	if err != nil {
@@ -88,11 +93,10 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	if err != nil {
 		return err
 	}
-	if cfg.UpdateCheck {
-		// TODO: the GitHub release check (24h cache, fails silently).
-		logger.Info("update check not implemented yet")
-	} else {
-		logger.Info("update check disabled")
+	checker := newUpdateChecker(cfg.UpdateCheck, version, logger)
+	var updates web.UpdateSource // a nil *update.Checker must stay a nil interface
+	if checker != nil {
+		updates = checker
 	}
 	// No Redis I/O here: a Redis that is down never fails startup.
 	reg, err := conn.NewRegistry(cfg.Connections, logger)
@@ -115,6 +119,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		Conns:   registrySource{reg: reg},
 		Ready:   &ready,
 		Version: version,
+		Updates: updates,
 	})
 	if err != nil {
 		return err
@@ -146,6 +151,10 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	logger.Info("listening", slog.String("addr", ln.Addr().String()), slog.String("version", version))
 	// Health loops keep running while the instance drains; Close stops them.
 	reg.Start(context.WithoutCancel(ctx))
+	// The update check stops with ctx: a draining instance does not need it.
+	if checker != nil {
+		go checker.Run(ctx)
+	}
 
 	select {
 	case err := <-errc:
@@ -172,6 +181,21 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	}
 	logger.Info("stopped")
 	return nil
+}
+
+// newUpdateChecker returns the GitHub release check, or nil when
+// update_check is off or this build is not a release (such as "dev").
+func newUpdateChecker(enabled bool, version string, logger *slog.Logger) *update.Checker {
+	if !enabled {
+		logger.Info("update check disabled")
+		return nil
+	}
+	c, err := update.New(update.Options{Version: version, Logger: logger})
+	if err != nil {
+		logger.Info("update check skipped", slog.Any("reason", err))
+		return nil
+	}
+	return c
 }
 
 // isLoopback reports whether a listen address accepts only local

@@ -10,17 +10,43 @@ asynqmon, plus:
 
 > Status: under active development towards v0.1.0.
 
+<!-- TODO: screenshots (Overview, Queue page; light and dark). -->
+
 ## Quickstart
-
-_Coming with the first release._ It will look like:
-
-```sh
-docker run -p 8080:8080 -v $PWD/asynqui.yaml:/asynqui.yaml ghcr.io/barkinbalci/asynqui
-```
 
 Start from [config.example.yaml](config.example.yaml). It loads as is (no login,
 read-only `viewer` role); set `authz.default: admin` for full control without
 login, or configure an auth provider.
+
+### Binary
+
+Download an archive for your platform from
+[Releases](https://github.com/BarkinBalci/asynqui/releases) and check it against
+`checksums.txt`, then:
+
+```sh
+cp config.example.yaml asynqui.yaml   # edit connections
+./asynqui -config asynqui.yaml        # http://localhost:8080
+```
+
+### Docker
+
+The image reads its config from `/etc/asynqui/config.yaml` and runs as a non-root
+user:
+
+```sh
+docker run --rm -p 8080:8080 \
+  -v "$PWD/asynqui.yaml:/etc/asynqui/config.yaml:ro" \
+  ghcr.io/barkinbalci/asynqui:latest
+```
+
+Inside a container, `localhost` is the container itself: point
+`connections[].addr` at a reachable Redis host.
+
+### Kubernetes
+
+See [deployment](docs/deployment.md) for a Deployment and Service with probes
+and graceful shutdown.
 
 ## Configuration
 
@@ -30,9 +56,14 @@ login, or configure an auth provider.
 | Listen address | `-addr` | `ASYNQUI_ADDR` | `server.addr` | `:8080` |
 | Log level | `-log-level` | `ASYNQUI_LOG_LEVEL` | `log.level` | `info` |
 
+`asynqui -version` prints the version.
+
 Precedence is flag > env > file > default. Any other value can come from the
 environment through `${NAME}` or `${NAME:-default}` in the YAML. Every key is
 listed in [requirements §8](docs/requirements.md#8-configuration).
+
+asynqui checks GitHub for a newer release once a day and shows a dot next to the
+version in the sidebar. Set `update_check: false` to turn it off.
 
 ## Health probes
 
@@ -54,6 +85,8 @@ Needs Go 1.26+. Tools are pinned in `tools/go.mod`.
 ```sh
 make help       # list targets
 make run        # localhost:6379, no login, admin (config.dev.yaml)
+make build      # bin/asynqui, version from git describe
+make docker     # asynqui:dev image from source (Dockerfile.dev)
 make lint test
 make test-race  # needs cgo and a C compiler
 ```

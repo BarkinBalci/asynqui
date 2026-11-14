@@ -2,17 +2,109 @@
 
 Behaviour is specified in [requirements.md](requirements.md) (§7 Operational, §8 Configuration). This page covers what the deployment around asynqui must get right.
 
-## Probes
+## Container image
 
-Probe paths include `server.base_path`.
+`ghcr.io/barkinbalci/asynqui` is multi-arch (linux/amd64, linux/arm64) and built on `gcr.io/distroless/static-debian12:nonroot`. Tags: the exact version (`0.1.0`), `0.1` and `latest`; prereleases get only their exact version. Pin the exact version in production.
+
+- Runs as UID/GID 65532 and listens on 8080.
+- Reads its config from `/etc/asynqui/config.yaml` (set through `ASYNQUI_CONFIG`; `-config` overrides it). Mount the file read-only.
+- Flags go after the image name, e.g. `docker run ... ghcr.io/barkinbalci/asynqui:0.1.0 -log-level debug`.
+- There is no shell, so there is no Docker `HEALTHCHECK`. Use the HTTP probes below; Docker Compose users can probe from another container or rely on the orchestrator.
+
+## Kubernetes example
+
+Secrets come from the environment through interpolation (`${NAME}`), so the ConfigMap holds no secrets.
 
 ```yaml
-livenessProbe:
-  httpGet: { path: /health/liveness, port: 8080 }   # <base_path>/health/liveness
-readinessProbe:
-  httpGet: { path: /health/readiness, port: 8080 }
-  periodSeconds: 2
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: asynqui
+data:
+  config.yaml: |
+    server:
+      shutdown_delay: 5s
+    connections:
+      - name: prod
+        addr: redis.prod.svc.cluster.local:6379
+        password: ${REDIS_PASSWORD}
+    auth:
+      provider: proxy
+      proxy:
+        trusted_proxies: ["10.0.0.10/32"]
+    authz:
+      bindings:
+        - groups: [platform]
+          role: admin
+          connections: ["*"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asynqui
+  labels: { app: asynqui }
+spec:
+  replicas: 2 # stateless: sessions live in the cookie, so replicas need only the same config
+  selector:
+    matchLabels: { app: asynqui }
+  template:
+    metadata:
+      labels: { app: asynqui }
+    spec:
+      # Must exceed shutdown_delay (5s) + the 10s shutdown timeout.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: asynqui
+          image: ghcr.io/barkinbalci/asynqui:0.1.0
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: asynqui, key: redis-password }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/asynqui
+              readOnly: true
+          livenessProbe:
+            httpGet: { path: /health/liveness, port: http }
+          readinessProbe:
+            httpGet: { path: /health/readiness, port: http }
+            periodSeconds: 2
+            failureThreshold: 2 # 2 × 2s stays under shutdown_delay
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+      volumes:
+        - name: config
+          configMap: { name: asynqui }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: asynqui
+spec:
+  selector: { app: asynqui }
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
 ```
+
+## Probes
+
+Probe paths include `server.base_path`: with `base_path: /asynq` they are `/asynq/health/liveness` and `/asynq/health/readiness`.
+
+- `/health/liveness` answers 200 whenever the process serves HTTP.
+- `/health/readiness` answers 200 while serving and 503 from the start of shutdown.
 
 Readiness never depends on Redis, so a Redis outage does not unroute or restart replicas.
 
@@ -82,3 +174,14 @@ The login rate limit (5 attempts per minute) is keyed by `r.RemoteAddr`. Behind 
 ## `auth.provider: none`
 
 Everyone gets `authz.default` (viewer unless set). asynqui logs a WARN at startup when it listens on a non-loopback address with no authentication. Put it behind something that authenticates, or bind it to `127.0.0.1`.
+
+## Update check
+
+With `update_check: true` (the default), a release build asks `https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h. A newer release puts a dot next to the version in the sidebar, linking to its release notes.
+
+- The request is made by the server, not the browser, so the CSP does not change. It needs egress to `api.github.com:443` and honours `HTTPS_PROXY`.
+- It sends only `User-Agent: asynqui/<version>`: no config, connection names or user data.
+- Failures (no egress, rate limits, the 5s timeout) are logged at debug level and change nothing. Drafts, prereleases and non-semver tags are ignored.
+- Builds without a release version (`dev` from `go build`) never check.
+
+Set `update_check: false` to disable it, e.g. in air-gapped clusters or where egress is restricted.

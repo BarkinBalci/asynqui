@@ -208,6 +208,8 @@ type testOpts struct {
 	budget       time.Duration
 	// idp is the fake OIDC provider for provider oidc.
 	idp *httptest.Server
+	// updates is the update check; nil means none.
+	updates UpdateSource
 }
 
 const (
@@ -285,6 +287,7 @@ func newTestDeps(t *testing.T, o testOpts) (*deps, http.Handler, *fakeConns) {
 		Conns:         o.conns,
 		Ready:         o.ready,
 		Version:       "0.1.0",
+		Updates:       o.updates,
 		Now:           fixedNow,
 		SummaryBudget: o.budget,
 	})

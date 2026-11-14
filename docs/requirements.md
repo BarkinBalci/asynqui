@@ -166,7 +166,7 @@ authz:
   - `v{version}` on the left, followed by an accent dot when a newer GitHub release exists. Both link to the release notes.
   - A muted "Source ↗" link on the right.
   - There is no GitHub logo, Docs link or Report-issue link.
-  - The update check is cached for 24h, fails silently, and can be disabled with `update_check: false`.
+  - The update check (§7 "Update check") is cached for 24h, fails silently, and can be disabled with `update_check: false`. With an update, the version and dot link to the newer release's notes; otherwise to the running release's notes.
 
 ### Top bar (every page, every control 36px tall)
 - **Breadcrumbs:** `Overview / {conn} / {section} / {item}`. Every segment except the last is a link.
@@ -379,8 +379,9 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 
 ### Command line
 - A single static binary.
-- **Flags:** `-config`, `-addr`, `-log-level`. `-h` prints usage to stderr and exits 0.
-- **Exit codes:** 0 after a clean shutdown or `-h`; 1 on a startup, serve or shutdown error (message on stderr); 2 on a usage error (unknown flag or positional argument).
+- **Flags:** `-config`, `-addr`, `-log-level`, `-version`. `-h` prints usage to stderr and exits 0. `-version` prints `asynqui {version}` to stdout and exits 0 without reading the config.
+- **Version:** stamped at build time into `main.version` (`-ldflags "-X main.version=…"`): GoReleaser writes the tag without its `v` (`0.1.0`), `make build` writes `git describe` output, and a plain `go build` leaves `dev`.
+- **Exit codes:** 0 after a clean shutdown, `-h` or `-version`; 1 on a startup, serve or shutdown error (message on stderr); 2 on a usage error (unknown flag or positional argument).
 
 ### Precedence
 **flag > env > file > default.** A flag counts as set only if it appears on the command line (detected with `flag.FlagSet.Visit`), even when its value equals the default. An `ASYNQUI_*` variable that is set but empty counts as unset.
@@ -398,7 +399,7 @@ These are the only environment variables asynqui reads directly. Everything else
 2. Load, interpolate and validate the config file. A missing file is an error.
 3. Initialise authentication, including OIDC discovery, and the authorization policy.
 4. Build the connection registry. This opens no Redis connections and never fails on Redis being down.
-5. Open the listener and start the health loop.
+5. Open the listener and start the health loop and the update check.
 
 Any error in steps 1–5 is printed to stderr and exits 1. The process never serves in a half-initialised state.
 
@@ -443,8 +444,17 @@ Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control:
 - Connections are fetched in parallel. One slow or failing connection never blocks a page.
 - Polling "Off" sends no polling requests at all.
 
+### Update check
+- With `update_check: true` and a release version (a semantic version; `dev` and other builds never check), the server sends `GET https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h, until shutdown starts.
+- The request carries `User-Agent: asynqui/{version}` and nothing identifying. It is server-side, so the CSP is unchanged.
+- It times out after 5s. A failure (network, non-200, malformed JSON) is logged at debug level and keeps the last result.
+- Drafts, prereleases and tags that are not a semantic version without a prerelease part are ignored. A release newer than the running version (semver precedence; a running prerelease is older than its release) is remembered with its notes URL, `https://github.com/BarkinBalci/asynqui/releases/tag/{tag}`, and logged once at info; an equal or older one clears it.
+
 ### Releases
-GoReleaser builds linux/darwin/windows for amd64 and arm64, plus a multi-arch Docker image (distroless).
+- A `v*` tag runs `.github/workflows/release.yml` (permissions `contents: write` and `packages: write` only), which runs the tests and then GoReleaser (`.goreleaser.yaml`).
+- Binaries: linux, darwin and windows on amd64 and arm64, `CGO_ENABLED=0`, `-trimpath`, `-s -w`. Archives (`tar.gz`, `zip` on Windows) include LICENSE, README.md and config.example.yaml, with `checksums.txt` (SHA-256).
+- The changelog in the GitHub release is grouped by conventional-commit prefix (features, fixes, performance, documentation, other); `test:`, `ci:`, `chore:` and `build:` commits are left out. Tags with a prerelease part are published as GitHub prereleases.
+- Image: `ghcr.io/barkinbalci/asynqui` for linux/amd64 and linux/arm64 on distroless `static-debian12:nonroot` (pinned by digest), tagged `{version}`, `{major}.{minor}` and `latest` (prereleases only `{version}`). It runs as UID 65532, exposes 8080, sets `ASYNQUI_CONFIG=/etc/asynqui/config.yaml`, and has no `HEALTHCHECK` (no shell; use the probes).
 
 ## 8. Configuration
 
@@ -474,7 +484,7 @@ YAML, path from §7 "Precedence". [config.example.yaml](../config.example.yaml) 
 | `server.trusted_origins` | `[]` | Origins like `https://ops.example.com`. |
 | `log.level` | `info` | `debug`, `info`, `warn`, `error`. |
 | `refresh.default` | `5s` | `off`, `2s`, `5s`, `10s`. Initial auto-refresh for visitors without the cookie. |
-| `update_check` | `true` | GitHub release check, cached 24h, fails silently. |
+| `update_check` | `true` | GitHub release check at startup and every 24h, fails silently (§7 "Update check"). |
 | `connections` | — | Required, at least one. |
 | `connections[].name` | — | Required, unique, `^[a-z0-9][a-z0-9._-]{0,62}$`. |
 | `connections[].addr` | — | Required, `host:port`. |

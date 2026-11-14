@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -67,6 +68,12 @@ func TestParseFlags(t *testing.T) {
 			args: []string{"asynqui", "-h"},
 			want: options{help: true},
 		},
+		{
+			name: "version ignores the rest",
+			args: []string{"asynqui", "-version", "-addr", ":7070"},
+			env:  map[string]string{"ASYNQUI_LOG_LEVEL": "loud"},
+			want: options{version: true},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -117,6 +124,29 @@ func TestRunHelp(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "-addr") {
 		t.Errorf("usage not written to stderr: %q", stderr.String())
+	}
+}
+
+func TestRunVersion(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := run(t.Context(), []string{"asynqui", "-version", "-config", "/does/not/exist"}, env(nil), &stdout, io.Discard); err != nil {
+		t.Fatalf("run -version = %v, want nil", err)
+	}
+	if got := stdout.String(); got != "asynqui "+version+"\n" {
+		t.Errorf("stdout = %q", got)
+	}
+}
+
+func TestNewUpdateChecker(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	if c := newUpdateChecker(false, "0.1.0", logger); c != nil {
+		t.Error("checker with update_check: false")
+	}
+	if c := newUpdateChecker(true, "dev", logger); c != nil {
+		t.Error("checker for a dev build")
+	}
+	if c := newUpdateChecker(true, "0.1.0", logger); c == nil {
+		t.Error("no checker for a release build")
 	}
 }
 

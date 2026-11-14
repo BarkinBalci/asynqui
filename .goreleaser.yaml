@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+#
+# Release configuration, run by .github/workflows/release.yml on v* tags.
+# Validate locally with:
+#   go run github.com/goreleaser/goreleaser/v2@v2.20.2 check
+# Keep the version in sync with the workflow's goreleaser-action `version`.
+version: 2
+
+project_name: asynqui
+
+builds:
+  - id: asynqui
+    main: ./cmd/asynqui
+    binary: asynqui
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    # Reproducible builds: file times come from the tagged commit.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: asynqui
+    ids: [asynqui]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - config.example.yaml
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: git
+  sort: asc
+  # Grouped by conventional-commit prefix; anything else lands in "Other".
+  # With `use: git` each entry starts with the commit hash, hence `^.*?`.
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\(.+\))??!?:.+$'
+      order: 2
+    - title: Documentation
+      regexp: '^.*?docs(\(.+\))??!?:.+$'
+      order: 3
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^.*?(test|ci|chore|build)(\(.+\))??!?:.+$'
+      - '^.*?Merge (pull request|branch) '
+
+dockers_v2:
+  - id: asynqui
+    ids: [asynqui]
+    dockerfile: Dockerfile
+    images:
+      - ghcr.io/barkinbalci/asynqui
+    # Prereleases get only their exact version, never "latest" or "X.Y".
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: asynqui
+      org.opencontainers.image.description: Web dashboard for asynq across multiple Redis instances
+      org.opencontainers.image.source: https://github.com/BarkinBalci/asynqui
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+    # GHCR reads the package description and repository link from the index.
+    annotations:
+      org.opencontainers.image.description: Web dashboard for asynq across multiple Redis instances
+      org.opencontainers.image.source: https://github.com/BarkinBalci/asynqui
+      org.opencontainers.image.licenses: MIT
+
+release:
+  github:
+    owner: BarkinBalci
+    name: asynqui
+  # Tags like v0.2.0-rc.1 are published as GitHub prereleases, which the
+  # update check ignores.
+  prerelease: auto

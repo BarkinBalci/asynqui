@@ -16,6 +16,7 @@ type options struct {
 	configPath string
 	overrides  config.Overrides
 	help       bool
+	version    bool // print the version and exit
 }
 
 // usageError reports a command-line error that the flag package has already
@@ -37,6 +38,7 @@ func parseFlags(args []string, lookupEnv func(string) (string, bool), stderr io.
 	configPath := fs.String("config", "asynqui.yaml", "path to the configuration file (env ASYNQUI_CONFIG)")
 	addr := fs.String("addr", config.DefaultAddr, "listen address (env ASYNQUI_ADDR; overrides server.addr)")
 	logLevel := fs.String("log-level", config.DefaultLogLevel, "debug, info, warn or error (env ASYNQUI_LOG_LEVEL; overrides log.level)")
+	printVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return options{help: true}, nil
@@ -47,6 +49,9 @@ func parseFlags(args []string, lookupEnv func(string) (string, bool), stderr io.
 		_, _ = fmt.Fprintf(stderr, "unexpected argument %q\n", fs.Arg(0))
 		fs.Usage()
 		return options{}, usageError{fmt.Errorf("unexpected argument %q", fs.Arg(0))}
+	}
+	if *printVersion {
+		return options{version: true}, nil
 	}
 
 	set := make(map[string]bool)
