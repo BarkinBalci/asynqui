@@ -12,12 +12,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// fakeKeys is a hand-written keyReader over in-memory sorted sets (kept in
-// score order) and lists (head first), with Redis's range semantics.
+// fakeKeys is a hand-written keyReader over in-memory sorted sets, kept
+// in score order, with Redis's range semantics.
 type fakeKeys struct {
 	mu    sync.Mutex
 	zsets map[string][]redis.Z
-	lists map[string][]string
 	err   error
 	// last records the last read: key, start, stop and rev.
 	last struct {
@@ -29,7 +28,7 @@ type fakeKeys struct {
 }
 
 func newFakeKeys() *fakeKeys {
-	return &fakeKeys{zsets: map[string][]redis.Z{}, lists: map[string][]string{}}
+	return &fakeKeys{zsets: map[string][]redis.Z{}}
 }
 
 // span resolves Redis's inclusive, possibly negative range over n items.
@@ -67,42 +66,23 @@ func (f *fakeKeys) zrange(_ context.Context, key string, start, stop int64, rev 
 	return zs[lo:hi], nil
 }
 
-func (f *fakeKeys) lrange(_ context.Context, key string, start, stop int64) ([]string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.reads++
-	f.last.key, f.last.start, f.last.stop, f.last.rev = key, start, stop, false
-	if f.err != nil {
-		return nil, f.err
-	}
-	l := f.lists[key]
-	lo, hi, ok := span(len(l), start, stop)
-	if !ok {
-		return nil, nil
-	}
-	return slices.Clone(l[lo:hi]), nil
-}
-
 func TestStateKey(t *testing.T) {
 	tests := []struct {
 		state TaskState
 		key   string
-		zset  bool
 	}{
-		{TaskPending, "asynq:{q:1}:pending", false},
-		{TaskScheduled, "asynq:{q:1}:scheduled", true},
-		{TaskRetry, "asynq:{q:1}:retry", true},
-		{TaskArchived, "asynq:{q:1}:archived", true},
-		{TaskCompleted, "asynq:{q:1}:completed", true},
+		{TaskScheduled, "asynq:{q:1}:scheduled"},
+		{TaskRetry, "asynq:{q:1}:retry"},
+		{TaskArchived, "asynq:{q:1}:archived"},
+		{TaskCompleted, "asynq:{q:1}:completed"},
 	}
 	for _, tt := range tests {
-		key, zset, ok := stateKey("q:1", tt.state)
-		if !ok || key != tt.key || zset != tt.zset {
-			t.Errorf("stateKey(%v) = %q, %v, %v; want %q, %v", tt.state, key, zset, ok, tt.key, tt.zset)
+		if key, ok := stateKey("q:1", tt.state); !ok || key != tt.key {
+			t.Errorf("stateKey(%v) = %q, %v; want %q", tt.state, key, ok, tt.key)
 		}
 	}
-	for _, s := range []TaskState{TaskActive, TaskAggregating, 0} {
-		if _, _, ok := stateKey("q", s); ok {
+	for _, s := range []TaskState{TaskActive, TaskPending, TaskAggregating, 0} {
+		if _, ok := stateKey("q", s); ok {
 			t.Errorf("stateKey(%v) has a key", s)
 		}
 	}
@@ -110,8 +90,6 @@ func TestStateKey(t *testing.T) {
 
 func TestReadStateIDs(t *testing.T) {
 	f := newFakeKeys()
-	// LPUSH order: p0 first, so the head is the newest.
-	f.lists["asynq:{q}:pending"] = []string{"p4", "p3", "p2", "p1", "p0"}
 	f.zsets["asynq:{q}:archived"] = []redis.Z{{Score: 100, Member: "x0"}, {Score: 200, Member: "x1"}, {Score: 300, Member: "x2"}}
 	ids := func(es []keyEntry) []string {
 		var out []string
@@ -122,22 +100,18 @@ func TestReadStateIDs(t *testing.T) {
 	}
 	tests := []struct {
 		name   string
-		state  TaskState
 		off, n int
 		desc   bool
 		want   []string
 	}{
-		{"pending oldest first", TaskPending, 0, 2, false, []string{"p0", "p1"}},
-		{"pending oldest first, page 2", TaskPending, 2, 2, false, []string{"p2", "p3"}},
-		{"pending oldest first, short last page", TaskPending, 4, 2, false, []string{"p4"}},
-		{"pending past the end", TaskPending, 6, 2, false, nil},
-		{"pending newest first", TaskPending, 0, 2, true, []string{"p4", "p3"}},
-		{"pending newest first, last page", TaskPending, 4, 2, true, []string{"p0"}},
-		{"archived oldest first", TaskArchived, 1, 5, false, []string{"x1", "x2"}},
-		{"archived newest first", TaskArchived, 0, 2, true, []string{"x2", "x1"}},
+		{"oldest first", 0, 2, false, []string{"x0", "x1"}},
+		{"oldest first, short last page", 1, 5, false, []string{"x1", "x2"}},
+		{"past the end", 3, 2, false, nil},
+		{"newest first", 0, 2, true, []string{"x2", "x1"}},
+		{"newest first, last page", 2, 2, true, []string{"x0"}},
 	}
 	for _, tt := range tests {
-		got, err := readStateIDs(t.Context(), f, "q", tt.state, tt.off, tt.n, tt.desc)
+		got, err := readStateIDs(t.Context(), f, "q", TaskArchived, tt.off, tt.n, tt.desc)
 		if err != nil {
 			t.Fatalf("%s: %v", tt.name, err)
 		}
@@ -150,11 +124,13 @@ func TestReadStateIDs(t *testing.T) {
 	if err != nil || len(got) != 1 || !got[0].Score.Equal(time.Unix(300, 0)) {
 		t.Errorf("archived score = %+v, %v; want 300", got, err)
 	}
-	if _, err := readStateIDs(t.Context(), f, "q", TaskActive, 0, 1, false); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("active: err = %v, want ErrUnsupported", err)
+	for _, s := range []TaskState{TaskActive, TaskPending} {
+		if _, err := readStateIDs(t.Context(), f, "q", s, 0, 1, false); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("%v: err = %v, want ErrUnsupported", s, err)
+		}
 	}
 	f.err = errors.New("LOADING")
-	if _, err := readStateIDs(t.Context(), f, "q", TaskPending, 0, 1, false); !errors.Is(err, f.err) {
+	if _, err := readStateIDs(t.Context(), f, "q", TaskArchived, 0, 1, false); !errors.Is(err, f.err) {
 		t.Errorf("read error: err = %v", err)
 	}
 }

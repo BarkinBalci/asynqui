@@ -26,6 +26,10 @@ jobs:
           cache: false # no cache restored into a release build
       - name: test
         # ubuntu runners ship Docker (testcontainers) and gcc (-race needs cgo).
+        # ASYNQUI_REQUIRE_DOCKER fails the integration tests instead of
+        # skipping them when Docker is missing.
+        env:
+          ASYNQUI_REQUIRE_DOCKER: '1'
         run: go test -race ./...
 
   goreleaser:

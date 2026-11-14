@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -205,34 +206,42 @@ func TestQueueSort(t *testing.T) {
 		}
 	}
 
-	// Pending sorts with ?dir= but has no time column to put the link on;
-	// active never sorts.
+	// Pending and active come in asynq's order: no sort link, ?dir= is
+	// ignored and left out of their links.
 	h, _ := newTestServer(t, adminOpts())
-	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?dir=desc&size=50"}))
-	if first := doc.Find("#tasks-rows a.row-link").First().AttrOr("title", ""); first != "p24" || doc.Find("[aria-sort]").Length() != 0 {
-		t.Errorf("pending newest first starts with %q", first)
+	for _, path := range []string{"/c/main/queues/default?dir=desc", "/c/main/queues/default?state=active&dir=desc"} {
+		doc := parse(t, do(t, h, request{path: path}))
+		if first := doc.Find("#tasks-rows a.row-link").First().AttrOr("title", ""); (first != "p00" && first != "a0") || doc.Find("[aria-sort]").Length() != 0 {
+			t.Errorf("%s: starts with %q", path, first)
+		}
+		if doc.Find("#tasks-size-form input[name=dir]").Length() != 0 || strings.Contains(doc.Find("#page-next").AttrOr("href", ""), "dir=") {
+			t.Errorf("%s: links keep an ignored direction", path)
+		}
 	}
-	if href := doc.Find("#page-next").AttrOr("href", ""); href != "" {
-		t.Errorf("one page has a next link %q", href)
+
+	// Over several pages: tabs reset the direction, pager links and the
+	// size picker keep it, and flipping the order goes back to page 1.
+	conns := defaultConns()
+	for i := range 30 {
+		conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: fmt.Sprintf("s%02d", i+2), Queue: "default", Type: "t", State: TaskScheduled})
+	}
+	h, _ = newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
+	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=scheduled&dir=desc&page=2"}))
+	if href := doc.Find("#tab-archived").AttrOr("href", ""); href != "/c/main/queues/default?state=archived" {
+		t.Errorf("archived tab = %q", href)
+	}
+	if href := doc.Find("#page-prev").AttrOr("href", ""); href != "/c/main/queues/default?dir=desc&state=scheduled" {
+		t.Errorf("previous page = %q", href)
 	}
 	if doc.Find("#tasks-size-form input[name=dir][value=desc]").Length() != 1 {
 		t.Error("the size picker must keep the direction")
 	}
-	doc = parse(t, do(t, h, request{path: "/c/main/queues/default?state=active&dir=desc"}))
-	if doc.Find("[aria-sort]").Length() != 0 || doc.Find("#tasks-rows a.row-link").First().AttrOr("title", "") != "a0" {
-		t.Error("active sorts")
-	}
-	// Tabs reset the direction; pager links keep it.
-	doc = parse(t, do(t, h, request{path: "/c/main/queues/default?dir=desc"}))
-	if href := doc.Find("#tab-archived").AttrOr("href", ""); href != "/c/main/queues/default?state=archived" {
-		t.Errorf("archived tab = %q", href)
-	}
-	if href := doc.Find("#page-next").AttrOr("href", ""); href != "/c/main/queues/default?dir=desc&page=2" {
-		t.Errorf("next page = %q", href)
+	if href := doc.Find("#sort-time").AttrOr("href", ""); href != "/c/main/queues/default?state=scheduled" {
+		t.Errorf("flip from page 2 = %q, want page 1", href)
 	}
 
 	// The archived column is the archive time, not the last failure.
-	conns := defaultConns()
+	conns = defaultConns()
 	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "x9", Queue: "default", Type: "t", State: TaskArchived,
 		ArchivedAt: fixedNow().Add(-2 * time.Hour)})
 	h, _ = newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
@@ -563,5 +572,63 @@ func TestQueuePauseFromQueuePage(t *testing.T) {
 	if text(doc.Find("#queue-badge")) != "Running" || text(doc.Find("#queue-toggle button")) != "Pause queue" ||
 		doc.Find("#tab-retry.on").Length() != 1 {
 		t.Error("htmx resume does not answer for the Queue page")
+	}
+}
+
+// Group names are any string: links, form values and the group view
+// survive &, #, % and /, and the dialogs list the names as data-label.
+func TestQueueGroupNames(t *testing.T) {
+	const name = "a&b #c%/d"
+	conns := defaultConns()
+	conns.tasks.groups["default"] = []Group{{Name: name, Size: 1}}
+	conns.tasks.tasks = append(conns.tasks.tasks, Task{ID: "odd-0", Queue: "default", Type: "batch", State: TaskAggregating, Group: name})
+	h, _ := newTestServer(t, testOpts{conns: conns, authz: adminOpts().authz})
+
+	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating"}))
+	box := doc.Find("#groups tbody input.cb")
+	if box.AttrOr("value", "") != name || box.AttrOr("data-label", "") != name {
+		t.Errorf("checkbox value %q label %q", box.AttrOr("value", ""), box.AttrOr("data-label", ""))
+	}
+	href := doc.Find("#groups tbody a.row-link").AttrOr("href", "")
+	u, err := url.Parse(href)
+	if err != nil || u.Path != "/c/main/queues/default" || u.Query().Get("group") != name || u.Query().Get("state") != "aggregating" {
+		t.Fatalf("group link = %q", href)
+	}
+
+	doc = parse(t, do(t, h, request{path: href}))
+	if doc.Find("#tasks-rows a.row-link").First().AttrOr("title", "") != "odd-0" || text(doc.Find(".group-nav .mono")) != name ||
+		doc.Find("input[form=tasks-form][name=group]").AttrOr("value", "") != name {
+		t.Errorf("group view = %q", text(doc.Find("#task-card")))
+	}
+	if got := text(doc.Find("#tasks-all-run-title")); got != "Run all 1 task in "+name {
+		t.Errorf("all dialog title = %q", got)
+	}
+
+	form := url.Values{"all": {"1"}, "state": {"aggregating"}, "group": {name}, "confirm": {"1"}, "next": {href}}.Encode()
+	rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/run", form: form})
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != href {
+		t.Errorf("run all = %d -> %q, want back to %q", rec.Code, rec.Header().Get("Location"), href)
+	}
+	if got := conns.taskActions(); len(got) != 1 || got[0] != "run-all default/group:"+name {
+		t.Errorf("acted = %q", got)
+	}
+}
+
+// An operator may run and archive a group's tasks but not delete them.
+func TestQueueGroupRoles(t *testing.T) {
+	h, conns := newTestServer(t, testOpts{authz: config.Authz{Default: config.RoleOperator}})
+	form := "all=1&state=aggregating&group=g1&confirm=1"
+	if rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete", form: form, htmx: true}); rec.Code != http.StatusForbidden {
+		t.Errorf("operator delete all = %d, want 403", rec.Code)
+	}
+	if rec := do(t, h, request{method: http.MethodPost, path: "/c/main/queues/default/tasks/archive", form: form, htmx: true}); rec.Code != http.StatusOK {
+		t.Errorf("operator archive all = %d, want 200", rec.Code)
+	}
+	if got := conns.taskActions(); len(got) != 1 || got[0] != "archive-all default/group:g1" {
+		t.Errorf("acted = %q", got)
+	}
+	doc := parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating"}))
+	if del := doc.Find("#act-all-delete"); del.AttrOr("title", "") != "Requires admin" || del.AttrOr("disabled", "x") != "" {
+		t.Error("operator's Delete all must be disabled")
 	}
 }

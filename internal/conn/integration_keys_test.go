@@ -16,9 +16,10 @@ import (
 
 // TestIntegrationKeys pins the asynq key layout that conn's direct reads
 // (keys.go) assume, against the asynq version in go.mod: real tasks are
-// enqueued, scheduled, failed into retry, archived and completed, then the
-// raw keys are read and their order and scores checked, and so are the
-// task tables built on them. A change in asynq's layout fails here.
+// scheduled, failed into retry, archived (by hand and by a worker) and
+// completed, then the raw sorted sets are read and their order and scores
+// checked, and so are the task tables built on them, both ways. A change
+// in asynq's layout fails here.
 func TestIntegrationKeys(t *testing.T) {
 	_, addr := runRedis(t, redisImage)
 	cc := connection("main", addr, 0)
@@ -51,9 +52,9 @@ func TestIntegrationKeys(t *testing.T) {
 		}
 		return out
 	}
-	list := func(state conn.TaskState, desc bool) []string {
+	listIn := func(queue string, state conn.TaskState, desc bool) []string {
 		t.Helper()
-		ts, err := c.ListTasks(ctx, "q", state, 1, 20, desc)
+		ts, err := c.ListTasks(ctx, queue, state, 1, 20, desc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,19 +64,9 @@ func TestIntegrationKeys(t *testing.T) {
 		}
 		return out
 	}
-
-	// Pending: LPUSHed, so the head is the newest.
-	for _, id := range []string{"p1", "p2", "p3"} {
-		enq(id, asynq.Queue("q"))
-	}
-	if got, err := rdb.LRange(ctx, "asynq:{q}:pending", 0, -1).Result(); err != nil || !cmp.Equal(got, []string{"p3", "p2", "p1"}) {
-		t.Errorf("pending list = %v, %v; want newest at the head", got, err)
-	}
-	if got := list(conn.TaskPending, false); !cmp.Equal(got, []string{"p1", "p2", "p3"}) {
-		t.Errorf("pending oldest first = %v", got)
-	}
-	if got := list(conn.TaskPending, true); !cmp.Equal(got, []string{"p3", "p2", "p1"}) {
-		t.Errorf("pending newest first = %v", got)
+	list := func(state conn.TaskState, desc bool) []string {
+		t.Helper()
+		return listIn("q", state, desc)
 	}
 
 	// Scheduled: scored by process_at, whatever the enqueue order.
@@ -89,6 +80,9 @@ func TestIntegrationKeys(t *testing.T) {
 	}
 	if got := list(conn.TaskScheduled, true); !cmp.Equal(got, []string{"s2", "s1", "s3"}) {
 		t.Errorf("scheduled latest first = %v", got)
+	}
+	if got := list(conn.TaskScheduled, false); !cmp.Equal(got, []string{"s3", "s1", "s2"}) {
+		t.Errorf("scheduled soonest first = %v", got)
 	}
 
 	// Archived: scored by when it was archived. Archive in distinct
@@ -126,12 +120,15 @@ func TestIntegrationKeys(t *testing.T) {
 			t.Errorf("%s ArchivedAt = %v, want its score %d", task.ID, task.ArchivedAt, got[2-i].Score)
 		}
 	}
+	if got := list(conn.TaskArchived, false); !cmp.Equal(got, []string{"a3", "a1", "a2"}) {
+		t.Errorf("archived oldest first = %v", got)
+	}
 
 	// Retry and completed, through a worker: retry is scored by the next
 	// process time, completed by completed_at + retention.
 	mux := asynq.NewServeMux()
 	mux.HandleFunc("t", func(_ context.Context, task *asynq.Task) error {
-		if string(task.Payload())[0] == 'r' {
+		if p := string(task.Payload()); p[0] == 'r' || p[0] == 'w' {
 			return errors.New("boom")
 		}
 		return nil
@@ -155,12 +152,23 @@ func TestIntegrationKeys(t *testing.T) {
 	enq("c3", asynq.Queue("work"), asynq.Retention(3*time.Hour))
 	enq("c1", asynq.Queue("work"), asynq.Retention(time.Hour))
 	enq("c2", asynq.Queue("work"), asynq.Retention(2*time.Hour))
+	workerStart := time.Now().Unix()
+	enq("w1", asynq.Queue("work"), asynq.MaxRetry(0)) // archived by the worker
 	insp := c.Inspector()
-	eventually(t, "two retry and three completed tasks", func() bool {
+	eventually(t, "two retry, three completed and one archived task", func() bool {
 		qi, err := insp.GetQueueInfo("work")
-		return err == nil && qi.Retry == 2 && qi.Completed == 3
+		return err == nil && qi.Retry == 2 && qi.Completed == 3 && qi.Archived == 1
 	})
+	workerEnd := time.Now().Unix()
 	srv.Shutdown()
+
+	// A worker archives with the same score: when it archived the task.
+	if got := zrange("asynq:{work}:archived"); len(got) != 1 || got[0].ID != "w1" || got[0].Score < workerStart || got[0].Score > workerEnd {
+		t.Errorf("worker-archived set = %+v, want w1 scored in [%d, %d]", got, workerStart, workerEnd)
+	}
+	if ts, err := c.ListTasks(ctx, "work", conn.TaskArchived, 1, 20, true); err != nil || len(ts) != 1 || ts[0].ArchivedAt.Unix() < workerStart {
+		t.Errorf("worker-archived page = %+v, %v", ts, err)
+	}
 
 	score := func(id string, at time.Time) entry {
 		return entry{id, at.Unix()}
@@ -189,15 +197,22 @@ func TestIntegrationKeys(t *testing.T) {
 	if err != nil || len(ts) != 2 || ts[0].ID != "c3" || ts[1].ID != "c2" {
 		t.Errorf("completed latest expiry first = %+v, %v", ts, err)
 	}
-	ts, err = c.ListTasks(ctx, "work", conn.TaskRetry, 1, 20, false)
-	if err != nil || len(ts) != 2 || ts[0].ID != "r1" || ts[1].ID != "r2" {
-		t.Errorf("retry soonest first = %+v, %v", ts, err)
+	if got := listIn("work", conn.TaskCompleted, false); !cmp.Equal(got, []string{"c1", "c2", "c3"}) {
+		t.Errorf("completed soonest expiry first = %v", got)
+	}
+	if got := listIn("work", conn.TaskRetry, false); !cmp.Equal(got, []string{"r1", "r2"}) {
+		t.Errorf("retry soonest first = %v", got)
+	}
+	if got := listIn("work", conn.TaskRetry, true); !cmp.Equal(got, []string{"r2", "r1"}) {
+		t.Errorf("retry latest first = %v", got)
 	}
 
 	// A queue holding only completed tasks is not empty: asynq's own check
 	// would delete it and orphan them.
-	if _, err := c.DeleteAllTasks(ctx, "work", conn.TaskRetry); err != nil {
-		t.Fatal(err)
+	for _, s := range []conn.TaskState{conn.TaskRetry, conn.TaskArchived} {
+		if _, err := c.DeleteAllTasks(ctx, "work", s); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := c.DeleteQueue(ctx, "work"); !errors.Is(err, conn.ErrQueueNotEmpty) {
 		t.Errorf("delete a queue of completed tasks: %v, want ErrQueueNotEmpty", err)

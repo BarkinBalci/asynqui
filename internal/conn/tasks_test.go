@@ -3,6 +3,7 @@ package conn
 import (
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strconv"
 	"sync"
@@ -21,8 +22,11 @@ type fakeTasks struct {
 	tasks  map[string]*asynq.TaskInfo // by queue + "/" + id
 	order  []string                   // keys in list order
 	groups map[string][]*asynq.GroupInfo
-	// err fails every call when set.
-	err error
+	// err fails every call when set; taskErr fails GetTaskInfo of one
+	// task, and delay slows GetTaskInfo of the others.
+	err     error
+	taskErr map[string]error
+	delay   time.Duration
 	// calls counts the calls by method name; opts records the last list
 	// call's page and size.
 	calls map[string]int
@@ -61,6 +65,14 @@ func (f *fakeTasks) GetTaskInfo(queue, id string) (*asynq.TaskInfo, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.taskErr[id]; err != nil {
+		return nil, err
+	}
+	if f.delay > 0 {
+		f.mu.Unlock()
+		time.Sleep(f.delay)
+		f.mu.Lock()
+	}
 	t, ok := f.tasks[queue+"/"+id]
 	if !ok {
 		return nil, fmt.Errorf("asynq: %w", asynq.ErrTaskNotFound)
@@ -293,20 +305,15 @@ func taskConn(t *testing.T, f *fakeTasks, queues ...string) *Conn {
 	return c
 }
 
-// keysOf lays out the fake's tasks as asynq would: each pending task
-// LPUSHed in order, the others in their state's sorted set scored by
-// their position.
+// keysOf lays out the fake's tasks as asynq would: each scheduled, retry,
+// archived or completed task in its state's sorted set, scored by its
+// position.
 func keysOf(f *fakeTasks) *fakeKeys {
 	k := newFakeKeys()
 	for i, key := range f.order {
 		t := f.tasks[key]
-		name, zset, ok := stateKey(t.Queue, taskState(t.State))
-		switch {
-		case !ok:
-		case zset:
+		if name, ok := stateKey(t.Queue, taskState(t.State)); ok {
 			k.zsets[name] = append(k.zsets[name], redis.Z{Score: float64(i), Member: t.ID})
-		default:
-			k.lists[name] = append([]string{t.ID}, k.lists[name]...)
 		}
 	}
 	return k
@@ -357,17 +364,27 @@ func TestListTasks(t *testing.T) {
 	if got[0].State != TaskPending || got[0].Type != "email:welcome" || string(got[0].Payload) != `{"a":1}` {
 		t.Errorf("task = %+v", got[0])
 	}
+	if f.page != [2]int{2, 2} {
+		t.Errorf("asked page/size %v, want [2 2]", f.page)
+	}
+	// Pending comes from the Inspector, in its order: desc is ignored.
 	got, err = c.ListTasks(t.Context(), "emails", TaskPending, 1, 2, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff := cmp.Diff([]string{"p4", "p3"}, ids(got)); diff != "" {
-		t.Errorf("newest first (-want +got):\n%s", diff)
+	if diff := cmp.Diff([]string{"p0", "p1"}, ids(got)); diff != "" {
+		t.Errorf("pending with desc (-want +got):\n%s", diff)
+	}
+	if keys.reads != 0 {
+		t.Errorf("pending read asynq's keys %d times", keys.reads)
 	}
 
 	// Cached: the same page within a second is one read.
+	if _, err := c.ListTasks(t.Context(), "emails", TaskScheduled, 1, 2, false); err != nil {
+		t.Fatal(err)
+	}
 	reads, infos := keys.reads, f.count("GetTaskInfo")
-	if _, err := c.ListTasks(t.Context(), "emails", TaskPending, 2, 2, false); err != nil {
+	if _, err := c.ListTasks(t.Context(), "emails", TaskScheduled, 1, 2, false); err != nil {
 		t.Fatal(err)
 	}
 	if keys.reads != reads || f.count("GetTaskInfo") != infos {
@@ -385,8 +402,11 @@ func TestListTasks(t *testing.T) {
 	if _, err := c.ListTasks(t.Context(), "emails", TaskAggregating, 1, 20, false); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("aggregating: err = %v, want ErrUnsupported", err)
 	}
-	if _, err := c.ListTasks(t.Context(), "gone", TaskPending, 1, 20, false); !errors.Is(err, ErrQueueNotFound) {
+	if _, err := c.ListTasks(t.Context(), "gone", TaskRetry, 1, 20, false); !errors.Is(err, ErrQueueNotFound) {
 		t.Errorf("missing queue: err = %v, want ErrQueueNotFound", err)
+	}
+	if _, err := c.ListTasks(t.Context(), "gone", TaskPending, 1, 20, false); !errors.Is(err, ErrQueueNotFound) || !errors.Is(err, asynq.ErrQueueNotFound) {
+		t.Errorf("missing queue, pending: err = %v, want ErrQueueNotFound", err)
 	}
 	if _, err := c.ListTasks(t.Context(), "gone", TaskActive, 1, 20, false); !errors.Is(err, ErrQueueNotFound) || !errors.Is(err, asynq.ErrQueueNotFound) {
 		t.Errorf("missing queue, active: err = %v, want ErrQueueNotFound", err)
@@ -424,15 +444,62 @@ func TestListTasksSorted(t *testing.T) {
 		t.Error("newest first read without REV")
 	}
 
-	// Any other hydrate failure fails the page.
-	f.err = errors.New("NOPERM")
-	if _, err := c.ListTasks(t.Context(), "emails", TaskArchived, 1, 20, false); err == nil {
-		t.Error("a failing GetTaskInfo did not fail the page")
-	}
-	f.err = nil
 	keys.err = errors.New("LOADING")
 	if _, err := c.ListTasks(t.Context(), "emails", TaskArchived, 2, 20, false); !errors.Is(err, keys.err) {
 		t.Errorf("a failing range read: err = %v", err)
+	}
+}
+
+// A task whose read fails with an error reply is left out of the page;
+// a gone queue or an unreachable server fails the page, and no further
+// reads start after the first such failure.
+func TestListTasksHydrateErrors(t *testing.T) {
+	var tasks []*asynq.TaskInfo
+	var zs []redis.Z
+	for i := range 40 {
+		id := fmt.Sprintf("r%02d", i)
+		tasks = append(tasks, ti("emails", id, asynq.TaskStateRetry))
+		zs = append(zs, redis.Z{Score: float64(i), Member: id})
+	}
+	tests := []struct {
+		name    string
+		err     error
+		want    error // nil: the page loads without the task
+		maxRead int
+	}{
+		{"error reply skips the task", replyErr("NOPERM no permissions"), nil, 40},
+		{"queue gone fails the page", fmt.Errorf("asynq: %w", asynq.ErrQueueNotFound), ErrQueueNotFound, 1 + queueConcurrency},
+		{"unreachable fails the page", &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")}, nil, 1 + queueConcurrency},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFakeTasks(tasks...)
+			f.taskErr = map[string]error{"r00": tt.err}
+			f.delay = 5 * time.Millisecond
+			c := taskConn(t, f, "emails")
+			keys := newFakeKeys()
+			keys.zsets["asynq:{emails}:retry"] = zs
+			c.keys = keys
+			got, err := c.ListTasks(t.Context(), "emails", TaskRetry, 1, 40, false)
+			unreachable := Unreachable(tt.err)
+			switch {
+			case unreachable:
+				if !Unreachable(err) {
+					t.Errorf("err = %v, want an unreachable error", err)
+				}
+			case tt.want != nil:
+				if !errors.Is(err, tt.want) {
+					t.Errorf("err = %v, want %v", err, tt.want)
+				}
+			default:
+				if err != nil || len(got) != 39 || got[0].ID != "r01" {
+					t.Errorf("page = %d tasks, %v; want 39 without r00", len(got), err)
+				}
+			}
+			if n := f.count("GetTaskInfo"); n > tt.maxRead {
+				t.Errorf("%d reads, want at most %d", n, tt.maxRead)
+			}
+		})
 	}
 }
 

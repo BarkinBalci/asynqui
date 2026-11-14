@@ -205,7 +205,7 @@ authz:
 3. **Gmail-style select all** (task tables): the header checkbox selects the current page and shows a banner, "All N on this page are selected. Select all {total} {state} tasks". Once clicked, the banner reads "All {total} {state} tasks are selected. Clear selection", and actions then apply to the whole state through the `*All*` APIs. Not on the Active tab (no `*All*` cancel in asynq).
 4. **Sorting:**
    - The queues table sorts by any column.
-   - Task tables sort by their state's time column only, both ways (§6.3). Active and Aggregating tables do not sort.
+   - The scheduled, retry, archived and completed task tables sort by their state's time column only, both ways (§6.3). Active, Pending and Aggregating tables do not sort.
    - Servers: every column except Queues is sortable.
    - Schedulers: every column except Payload and Options is sortable.
    - Sort state lives in the URL query.
@@ -265,14 +265,13 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 - **Tabs, each with a count:** Active, Pending (default), Aggregating, Scheduled, Retry, Archived, Completed.
 - **Find task:** a secondary "Find task" button in the header opens a dialog "Find task in {queue}" with one Task ID field. The lookup is `GetTaskInfo(queue, id)`, an exact ID in this queue: a match opens the Task page, a miss shows "Task not found" inline. `/` opens it outside text fields, the field is focused, Enter submits, Escape closes it and focus returns to the button. Without JS the button links to a page with the same form (`/c/{conn}/queues/{queue}/find`).
 - **Table:** checkbox, Task ID (shortened, mono, links to the task), Type, Payload (mono, truncated to one line), then the columns that depend on the tab.
-- **Sort:** the state's time column sorts both ways, server-side, with the existing sort header (`?dir=asc|desc`, `aria-sort`); the link flips the direction and keeps the page and size; tab links reset it. It works without JS.
+- **Sort:** on the scheduled, retry, archived and completed tabs the state's time column sorts both ways, server-side, with the existing sort header (`?dir=asc|desc`, `aria-sort`). The link flips the direction, goes back to page 1 and keeps the size; pager links and the rows-per-page select keep the direction; tab links reset it. It works without JS.
   - Scheduled: Process at (asynq's process time), soonest first by default.
   - Retry: Next retry, soonest first by default.
   - Archived: Archived at (when asynq archived it), newest first by default.
   - Completed: Result kept until (asynq orders completed tasks by when their result expires, `CompletedAt` + retention, not by completion time), latest first by default.
-  - Pending: queue order, oldest (next to run) first by default; `?dir=desc` lists the newest first. There is no time column to carry the sort link (asynq keeps no enqueue time), so the page offers none.
-  - Active: asynq's order, never sorted. Aggregating: asynq's order within a group.
-  - The Inspector cannot list in reverse, so these reads go to Redis directly: one range read of the state's key for the page, then `GetTaskInfo` per row (architecture: "Direct Redis reads"). A task that leaves the state between the two reads is left out, so a page may show fewer rows.
+  - Pending and Active: asynq's order (oldest first), never sorted; `?dir=` is ignored. Aggregating: asynq's order within a group.
+  - The Inspector cannot list in reverse, so the sorted tabs read Redis directly: one range read of the state's sorted set for the page, then `GetTaskInfo` per row (architecture: "Direct Redis reads"). A task that leaves the state between the two reads is left out, and so is one whose read fails with an error reply (logged as a WARN), so a page may show fewer rows. A queue that is gone or a server that cannot be reached fails the page as usual.
 
 | Tab | Columns | Bulk actions | "All" actions |
 |---|---|---|---|
@@ -286,17 +285,17 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 | Aggregating, one group | — | Run now, Archive, Delete | Run all, Archive all, Delete all (of the group) |
 
 - **asynq limits:** `TaskInfo` has no enqueue time, so Pending has no time column. Archived at is the task's score in asynq's archived set, read with the page (a task archived by hand has no Last failed time).
-- **Archive:** every Archive and Archive all button is red (danger) and asks first. Its dialog (and the no-JS confirmation page) says: "asynq keeps at most 10,000 archived tasks for 90 days; older ones are removed." (asynq v0.26.0 trims the archive to 10,000 tasks and 90 days on every archive.)
+- **Archive:** every Archive and Archive all button is red (danger) and asks first. Its dialog (and the no-JS confirmation page) says: "asynq keeps at most 10,000 archived tasks for 90 days; beyond that, tasks are removed." (asynq v0.26.0 trims the archive to 10,000 tasks and 90 days on every archive.)
 - **Active:** no "select all N" and no "Cancel all" (asynq has no `CancelProcessing` for a state); Cancel sends `CancelProcessing` per selected task.
 
 - **Aggregating tab:** lists groups (`Groups(queue)`) with their sizes, each with a checkbox and a link to the group's tasks (`?state=aggregating&group=`). Empty state: "No aggregating tasks".
-  - The toolbar's Run all, Archive all and Delete all act on the selected groups, one asynq `RunAllAggregatingTasks(queue, group)`, `ArchiveAllAggregatingTasks` or `DeleteAllAggregatingTasks` per group, after a dialog listing them. The notice reports the sum asynq returns; a failing group gets a toast ("Could not run all tasks in {group}").
-  - A group's tasks (`ListAggregatingTasks(queue, group)`) list like any task table, with "Groups / {group}" above the toolbar linking back. Run now, Archive and Delete act on the selection (asynq's `RunTask`, `ArchiveTask`, `DeleteTask`, which accept aggregating tasks though their docs do not say so; kept as in asynqmon), and "select all N" offers the group's Run all, Archive all and Delete all. The pager counts the group's size.
+  - The toolbar's Run all, Archive all and Delete all act on the selected groups, one asynq `RunAllAggregatingTasks(queue, group)`, `ArchiveAllAggregatingTasks` or `DeleteAllAggregatingTasks` per group, after a dialog ("Run all tasks in the selected groups") listing them; without JS the confirmation page is titled "Run all tasks in {group}" or "Run all tasks in N groups". The notice reports the sum asynq returns; a failing group gets a toast ("Could not run all tasks in {group}").
+  - A group's tasks (`ListAggregatingTasks(queue, group)`) list like any task table, with "Groups / {group}" above the toolbar linking back. Run now, Archive and Delete act on the selection (asynq's `RunTask`, `ArchiveTask`, `DeleteTask`, which accept aggregating tasks though their docs do not say so; kept as in asynqmon), and "select all N" offers the group's Run all, Archive all and Delete all; its copy names the group ("Select all 8 tasks in {group}", "Run all 8 tasks in {group}", empty state "No tasks in {group}"). The pager counts the group's size.
   - Roles: Delete and Delete all need admin, the others operator. Polling and selection follow the other tabs: a poll swaps the group list (or the group's table, banner and pager), never the toolbar or dialogs.
 - **After an action:** an inline result notice ("Archived 12 tasks"). The table refreshes and the selection clears. Failures show one toast per task ("Task {shortId} not found", "Could not run {shortId}" with asynq's error).
 - **Pagination:** a page past the end (tasks moved on) shows the last page, or the first when the state has no tasks.
 - **"All" actions** run asynq's `*All*` call when the dialog is confirmed: they act on whatever tasks the state holds at that moment (tasks may have arrived or left since the count was shown), and the notice reports the count asynq returns. The "all" selection stays while its dialog is open, whatever a poll changes on the page.
-- **Untrusted text:** task IDs, types, queue and group names, payload previews and errors are isolated with `<bdi>`, and bidirectional control characters in IDs and names show as U+FFFD (the title and Copy keep the real value).
+- **Untrusted text:** task IDs, types, queue and group names, payload previews and errors are isolated with `<bdi>`, and bidirectional control characters in IDs and names show as U+FFFD (the title and Copy keep the real value). So do the checkboxes' accessible labels and the names a confirmation dialog lists (each checkbox's `data-label`).
 
 ### 6.4 Task `/c/{conn}/queues/{queue}/tasks/{id}`
 - **Breadcrumb:** `Overview / {conn} / {queue} / {state} / {shortId}`.

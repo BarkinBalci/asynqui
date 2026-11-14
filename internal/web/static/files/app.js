@@ -341,7 +341,8 @@
 	// ---- confirmation dialogs ----
 	// A button with data-confirm="dialog-id" opens that <dialog> instead of
 	// submitting (without JS it submits, and the server asks on a page).
-	// [data-sel-names] in the dialog lists the selected rows' values.
+	// [data-sel-names] in the dialog lists the selected rows' data-label
+	// (the value with bidirectional controls made visible), or values.
 	// [data-dialog-close] closes it; so does its confirm button once htmx
 	// has sent the request.
 	document.addEventListener("click", function (e) {
@@ -359,7 +360,7 @@
 				for (var i = 0; i < boxes.length; i++) {
 					if (boxes[i].checked) {
 						var li = document.createElement("li");
-						li.textContent = boxes[i].value;
+						li.textContent = boxes[i].getAttribute("data-label") || boxes[i].value;
 						list.appendChild(li);
 					}
 				}

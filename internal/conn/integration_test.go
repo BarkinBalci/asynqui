@@ -3,6 +3,8 @@ package conn_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -19,14 +21,16 @@ import (
 )
 
 // These tests run a real Redis (or Valkey) with testcontainers. They skip
-// when no Docker provider is available.
+// when no Docker provider is available, unless ASYNQUI_REQUIRE_DOCKER=1
+// (set in CI), which makes them fail instead: TestIntegrationKeys pins
+// the asynq key layout and must never be skipped silently there.
 
 const redisImage = "redis:7.4-alpine"
 
 // runRedis starts a container and returns it with its host:port.
 func runRedis(t *testing.T, image string, opts ...testcontainers.ContainerCustomizer) (*tcredis.RedisContainer, string) {
 	t.Helper()
-	testcontainers.SkipIfProviderIsNotHealthy(t)
+	requireDocker(t)
 	ctr, err := tcredis.Run(t.Context(), image, opts...)
 	testcontainers.CleanupContainer(t, ctr)
 	if err != nil {
@@ -37,6 +41,32 @@ func runRedis(t *testing.T, image string, opts ...testcontainers.ContainerCustom
 		t.Fatal(err)
 	}
 	return ctr, addr
+}
+
+// requireDocker skips the test without a healthy Docker provider, or
+// fails it when ASYNQUI_REQUIRE_DOCKER=1.
+func requireDocker(t *testing.T) {
+	t.Helper()
+	if os.Getenv("ASYNQUI_REQUIRE_DOCKER") != "1" {
+		testcontainers.SkipIfProviderIsNotHealthy(t)
+		return
+	}
+	err := func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic: %v", r)
+			}
+		}()
+		p, err := testcontainers.ProviderDefault.GetProvider()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = p.Close() }()
+		return p.Health(t.Context())
+	}()
+	if err != nil {
+		t.Fatalf("ASYNQUI_REQUIRE_DOCKER=1 but Docker is unavailable: %v", err)
+	}
 }
 
 func connection(name, addr string, db int) config.Connection {

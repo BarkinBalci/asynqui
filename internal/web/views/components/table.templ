@@ -1,5 +1,7 @@
 package components
 
+import "github.com/BarkinBalci/asynqui/internal/web/format"
+
 // Badge is a pill with a tone; the caller writes its text.
 templ Badge(t Tone) {
 	<span class={ "badge", toneClass(t) }>
@@ -117,9 +119,9 @@ templ SelectAllHeader(id, form string) {
 templ SelectCell(s RowSelect) {
 	<td class="cb-col">
 		if s.Fresh {
-			<input id={ s.ID } class="cb" type="checkbox" form={ s.Form } name={ s.Name } value={ s.Value }/>
+			<input id={ s.ID } class="cb" type="checkbox" form={ s.Form } name={ s.Name } value={ s.Value } data-label={ format.VisibleID(s.Value) }/>
 		} else {
-			<input id={ s.ID } class="cb" type="checkbox" form={ s.Form } name={ s.Name } value={ s.Value } hx-preserve="true"/>
+			<input id={ s.ID } class="cb" type="checkbox" form={ s.Form } name={ s.Name } value={ s.Value } data-label={ format.VisibleID(s.Value) } hx-preserve="true"/>
 		}
 		<label class="sr-only" for={ s.ID }>
 			{ children... }

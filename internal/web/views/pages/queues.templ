@@ -218,7 +218,7 @@ templ queuesTable(m Queues, oob bool) {
 						for _, r := range m.Rows {
 							<tr data-state={ queueState(r.Paused) } data-empty?={ r.Size == 0 } data-filter-text={ r.Name }>
 								@components.SelectCell(r.Select) {
-									Select queue { r.Name }
+									Select queue { format.VisibleID(r.Name) }
 								}
 								<td><a id={ r.LinkID } class="row-link" href={ templ.SafeURL(r.URL) }>{ r.Name }</a></td>
 								<td>

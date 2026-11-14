@@ -1332,9 +1332,9 @@ func queuesTable(m Queues, oob bool) templ.Component {
 							return templ_7745c5c3_Err
 						}
 						var templ_7745c5c3_Var56 string
-						templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.JoinStringErrs(r.Name)
+						templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.JoinStringErrs(format.VisibleID(r.Name))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/pages/queues.templ`, Line: 221, Col: 30}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/pages/queues.templ`, Line: 221, Col: 48}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var56))
 						if templ_7745c5c3_Err != nil {

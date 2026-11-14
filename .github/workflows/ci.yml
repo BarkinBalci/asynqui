@@ -35,6 +35,11 @@ jobs:
         run: go tool -modfile=tools/go.mod golangci-lint run
       - name: test
         # ubuntu runners ship Docker (testcontainers) and gcc (-race needs cgo).
+        # ASYNQUI_REQUIRE_DOCKER fails the integration tests instead of
+        # skipping them when Docker is missing, so the asynq key layout
+        # test (TestIntegrationKeys) always runs here.
+        env:
+          ASYNQUI_REQUIRE_DOCKER: '1'
         run: go test -race ./...
       - name: build
         run: CGO_ENABLED=0 go build -trimpath ./cmd/asynqui

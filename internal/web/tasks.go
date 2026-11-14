@@ -14,10 +14,10 @@ type TaskSource interface {
 	// QueueInfo reads one queue's counters. An unknown queue is
 	// ErrQueueNotFound.
 	QueueInfo(ctx context.Context, name, queue string) (QueueInfo, error)
-	// Tasks lists one page (1-based) of the queue's tasks in state, by
-	// the state's time: oldest first, newest first with desc (see
-	// sortable). Active tasks come in asynq's order. Aggregating tasks are
-	// listed per group (GroupTasks).
+	// Tasks lists one page (1-based) of the queue's tasks in state. The
+	// sortable states come by their time: soonest or oldest first, latest
+	// first with desc. Active and pending tasks come in asynq's order.
+	// Aggregating tasks are listed per group (GroupTasks).
 	Tasks(ctx context.Context, name, queue string, state TaskState, page, size int, desc bool) ([]Task, error)
 	// Groups lists the queue's aggregation groups.
 	Groups(ctx context.Context, name, queue string) ([]Group, error)
@@ -171,8 +171,8 @@ func taskVerbs(s TaskState) []TaskVerb { return tabVerbs(s) }
 
 // sortable reports whether the state's table sorts by its time column:
 // scheduled and retry by the next process time, archived by when it was
-// archived, completed by when its result expires. Pending has no time
-// column (asynq keeps no enqueue time) though its list sorts too.
+// archived, completed by when its result expires. Tasks applies desc for
+// these states only.
 func sortable(s TaskState) bool {
 	switch s {
 	case TaskScheduled, TaskRetry, TaskArchived, TaskCompleted:
@@ -181,12 +181,8 @@ func sortable(s TaskState) bool {
 	return false
 }
 
-// sortsByTime reports whether Tasks applies desc for the state.
-func sortsByTime(s TaskState) bool { return s == TaskPending || sortable(s) }
-
 // taskDefaultDesc is the state's default direction: what is next first for
-// pending, scheduled and retry, the most recent first for archived and
-// completed.
+// scheduled and retry, the most recent first for archived and completed.
 func taskDefaultDesc(s TaskState) bool { return s == TaskArchived || s == TaskCompleted }
 
 func stateParam(s TaskState) string { return pages.StateParam(pageState(s)) }

@@ -285,7 +285,7 @@ templ taskCard(m Queue, oob bool) {
 							}
 						}
 						for _, d := range m.AllDialogs {
-							@components.ConfirmDialog(d.Dialog, allTitle(d.Verb, m.Tab, m.Total), allLabel(d.Verb)) {
+							@components.ConfirmDialog(d.Dialog, allTitle(d.Verb, m.Tab, m.Group, m.Total), allLabel(d.Verb)) {
 								if d.Verb == TaskArchive {
 									@archiveWarning()
 								}
@@ -341,8 +341,8 @@ templ tasksBanner(m Queue, oob bool) {
 	if m.AllowAll && m.Total > int64(len(m.Rows)) {
 		<div id={ TasksBannerID } class="sel-banner" data-select-banner={ TasksFormID } data-total={ format.Number(m.Total) } hidden { components.OOB(oob)... }>
 			<span data-banner-page>All { format.Number(int64(len(m.Rows))) } on this page are selected.</span>
-			<button id="sel-everything" type="button" class="linkbtn" data-banner-page data-select-everything={ TasksFormID }>{ "Select all " + format.Number(m.Total) + " " + stateLowerText(m.Tab) + " tasks" }</button>
-			<span data-banner-all hidden>{ "All " + format.Number(m.Total) + " " + stateLowerText(m.Tab) + " tasks are selected." }</span>
+			<button id="sel-everything" type="button" class="linkbtn" data-banner-page data-select-everything={ TasksFormID }>{ "Select all " + format.Number(m.Total) + " " + scopeTasks(m.Tab, m.Group, m.Total) }</button>
+			<span data-banner-all hidden>{ "All " + format.Number(m.Total) + " " + scopeTasks(m.Tab, m.Group, m.Total) + " are selected." }</span>
 			<button id="sel-clear" type="button" class="linkbtn" data-banner-all data-clear-everything={ TasksFormID } hidden>Clear selection</button>
 		</div>
 	} else {
@@ -378,13 +378,13 @@ templ tasksTable(m Queue, oob bool) {
 			<tbody id={ TasksRowsID }>
 				if len(m.Rows) == 0 {
 					@components.EmptyRow(columns(m.Tab)) {
-						{ "No " + stateLowerText(m.Tab) + " tasks" }
+						{ "No " + scopeTasks(m.Tab, m.Group, 0) }
 					}
 				}
 				for _, r := range m.Rows {
 					<tr>
 						@components.SelectCell(r.Select) {
-							Select task { r.ID }
+							Select task { format.VisibleID(r.ID) }
 						}
 						<td><a id={ r.LinkID } class="row-link mono" href={ templ.SafeURL(r.URL) } title={ r.ID }><bdi>{ format.ShortID(format.VisibleID(r.ID)) }</bdi></a></td>
 						<td class="ty"><bdi>{ format.VisibleID(r.Type) }</bdi></td>
@@ -545,7 +545,7 @@ templ groupsTable(m Queue, oob bool) {
 					for _, g := range m.Groups {
 						<tr>
 							@components.SelectCell(g.Select) {
-								Select group { g.Name }
+								Select group { format.VisibleID(g.Name) }
 							}
 							<td><a id={ g.LinkID } class="row-link mono" href={ templ.SafeURL(g.URL) } hx-get={ g.URL } hx-swap="none" hx-push-url="true"><bdi>{ format.VisibleID(g.Name) }</bdi></a></td>
 							<td class="num">{ format.Number(g.Size) }</td>
@@ -609,18 +609,27 @@ templ archiveTasksTitle() {
 // archiveWarning is every Archive confirmation's note on asynq trimming
 // the archive.
 templ archiveWarning() {
-	<p class="dlg-warn">asynq keeps at most { format.Number(ArchiveCap) } archived tasks for { format.Number(ArchiveDays) } days; older ones are removed.</p>
+	<p class="dlg-warn">asynq keeps at most { format.Number(ArchiveCap) } archived tasks for { format.Number(ArchiveDays) } days; beyond that, tasks are removed.</p>
 }
 
 // groupsTitle is the title of an "all" dialog of the selected groups.
 templ groupsTitle(v TaskVerb) {
-	{ allLabelText(v) + " tasks in groups" }
+	{ allLabelText(v) + " tasks in the selected groups" }
 }
 
 // allTitle is the "all" dialog's title; app.js updates the count when
-// it opens the dialog.
-templ allTitle(v TaskVerb, s TaskState, total int64) {
-	{ allLabelText(v) + " " }<span data-all-total>{ format.Number(total) }</span>{ " " + stateLowerText(s) + " tasks" }
+// it opens the dialog. In a group's list it names the group.
+templ allTitle(v TaskVerb, s TaskState, group string, total int64) {
+	{ allLabelText(v) + " " }<span data-all-total>{ format.Number(total) }</span>{ " " + scopeTasks(s, group, total) }
+}
+
+// scopeTasks names n of the tasks a table lists: "pending tasks", or
+// "tasks in {group}" in an aggregation group's list ("task" for one).
+func scopeTasks(s TaskState, group string, n int64) string {
+	if group != "" {
+		return tasksWord(n) + " in " + format.VisibleID(group)
+	}
+	return stateLowerText(s) + " " + tasksWord(n)
 }
 
 templ allLabel(v TaskVerb) {
@@ -697,7 +706,7 @@ func allLabelText(v TaskVerb) string {
 // allTitleText is the "all" confirmation's title as plain text: the
 // confirmation page's heading, title and breadcrumb.
 func allTitleText(v TaskVerb, s TaskState, total int64) string {
-	return allLabelText(v) + " " + format.Number(total) + " " + stateLowerText(s) + " tasks"
+	return allLabelText(v) + " " + format.Number(total) + " " + scopeTasks(s, "", total)
 }
 
 func tasksWord(n int64) string {
@@ -963,12 +972,18 @@ templ ConfirmTasksPage(m ConfirmTasks) {
 // ConfirmTitle is the confirmation page's title and last breadcrumb.
 templ confirmTitle(m ConfirmTasks) {
 	switch {
-		case len(m.Groups) > 0:
-			@groupsTitle(m.Verb)
+		case len(m.Groups) == 1:
+			{ allLabelText(m.Verb) + " " + scopeTasks(StateAggregating, m.Groups[0], 0) }
+		case len(m.Groups) > 1:
+			{ allLabelText(m.Verb) + " tasks in " + format.Number(int64(len(m.Groups))) + " groups" }
 		case m.All:
 			{ allTitleText(m.Verb, m.State, m.Total) }
+		case m.Verb == TaskArchive && len(m.IDs) == 1:
+			Archive task
 		case m.Verb == TaskArchive:
 			@archiveTasksTitle()
+		case len(m.IDs) == 1:
+			Delete task
 		default:
 			@deleteTasksTitle()
 	}

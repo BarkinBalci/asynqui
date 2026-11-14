@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -206,36 +207,39 @@ func (c *Conn) checkQueue(queue string) error {
 // tasks in state, from the 1s cache when fresh. A queue the connection does
 // not have is ErrQueueNotFound.
 //
-// Pending, scheduled, retry, archived and completed tasks come in the
-// order of the state's time: oldest first, or newest first with desc. The
+// Scheduled, retry, archived and completed tasks come in the order of the
+// state's time, the score of asynq's sorted set for the state (see
+// keys.go): soonest or oldest first, or latest first with desc. The
 // Inspector cannot list in reverse, so the page's IDs are read with one
-// range read of asynq's key for the state (see keys.go: the pending list's
-// position, the sorted sets' scores), then each is read with GetTaskInfo,
-// queueConcurrency at a time. A task that left the state between the two
-// reads (run, deleted, moved on) is left out, so a page may come up
-// short. Archived tasks carry ArchivedAt from their score.
+// range read of the set, then each is read with GetTaskInfo,
+// queueConcurrency at a time (see hydrate). Archived tasks carry
+// ArchivedAt from their score.
 //
-// Active tasks come in asynq's order (desc is ignored) and carry Started
-// from the servers' worker lists: the Servers snapshot the Servers page
-// shares. Aggregating tasks are listed per group (ListGroupTasks), so that
-// state is ErrUnsupported.
+// Pending and active tasks come in asynq's order (oldest first; desc is
+// ignored), from ListPendingTasks and ListActiveTasks. Active tasks carry
+// Started from the servers' worker lists: the Servers snapshot the
+// Servers page shares. Aggregating tasks are listed per group
+// (ListGroupTasks), so that state is ErrUnsupported.
 //
-// Cost: an SMEMBERS for the existence check and one range read, then per
-// task GetTaskInfo's SISMEMBER and Lua script; for active tasks one
-// ListActiveTasks.
+// Cost: for the sorted states an SMEMBERS for the existence check and one
+// range read, then per task GetTaskInfo's SISMEMBER and Lua script; for
+// pending and active tasks one List*Tasks.
 //
 // The slice is shared between callers, who must not modify it.
 func (c *Conn) ListTasks(ctx context.Context, queue string, state TaskState, page, size int, desc bool) ([]Task, error) {
 	if state == TaskAggregating || state < TaskActive || state > TaskCompleted {
 		return nil, ErrUnsupported
 	}
-	if state == TaskActive {
+	if _, sorted := stateKey(queue, state); !sorted {
 		desc = false
 	}
 	page, size = max(page, 1), min(max(size, 1), MaxPageSize)
 	return cached(ctx, c.cache, tasksKey(queue, state, page, size, desc), cacheTTL, func(ctx context.Context) ([]Task, error) {
-		if state == TaskActive {
+		switch state {
+		case TaskActive:
 			return c.listActive(ctx, queue, page, size)
+		case TaskPending:
+			return c.listInspector(queue, page, size, c.tasks.ListPendingTasks)
 		}
 		if err := c.checkQueue(queue); err != nil {
 			return nil, err
@@ -244,56 +248,88 @@ func (c *Conn) ListTasks(ctx context.Context, queue string, state TaskState, pag
 		if err != nil {
 			return nil, fmt.Errorf("list tasks of %s: %w", queue, err)
 		}
-		return c.hydrate(queue, state, entries)
+		return c.hydrate(ctx, queue, state, entries)
 	})
 }
 
-// listActive is one page of the queue's active tasks, from the Inspector.
-func (c *Conn) listActive(ctx context.Context, queue string, page, size int) ([]Task, error) {
+// listInspector is one page of tasks from an Inspector list method.
+func (c *Conn) listInspector(queue string, page, size int, list func(string, ...asynq.ListOption) ([]*asynq.TaskInfo, error)) ([]Task, error) {
 	infos, err := recovered(func() ([]*asynq.TaskInfo, error) {
-		return c.tasks.ListActiveTasks(queue, asynq.PageSize(size), asynq.Page(page))
+		return list(queue, asynq.PageSize(size), asynq.Page(page))
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list tasks of %s: %w", queue, taskErr(err))
 	}
-	var starts map[string]time.Time
-	if len(infos) > 0 {
-		// A failing server read leaves Started out rather than failing
-		// the list.
-		starts, _ = c.workerStarts(ctx)
-	}
 	out := make([]Task, 0, len(infos))
 	for _, ti := range infos {
-		if ti == nil {
-			continue
+		if ti != nil {
+			out = append(out, newTask(ti))
 		}
-		t := newTask(ti)
-		t.Started = starts[t.ID]
-		out = append(out, t)
+	}
+	return out, nil
+}
+
+// listActive is one page of the queue's active tasks, from the Inspector,
+// with each task's start from the servers' worker lists.
+func (c *Conn) listActive(ctx context.Context, queue string, page, size int) ([]Task, error) {
+	out, err := c.listInspector(queue, page, size, c.tasks.ListActiveTasks)
+	if err != nil || len(out) == 0 {
+		return out, err
+	}
+	// A failing server read leaves Started out rather than failing the
+	// list.
+	starts, _ := c.workerStarts(ctx)
+	for i := range out {
+		out[i].Started = starts[out[i].ID]
 	}
 	return out, nil
 }
 
 // hydrate reads each entry's task with GetTaskInfo, at most
-// queueConcurrency at a time, and returns them in the entries' order. A
-// task that is gone, or no longer in state, is left out. Any other
-// failure fails the whole page.
-func (c *Conn) hydrate(queue string, state TaskState, entries []keyEntry) ([]Task, error) {
+// queueConcurrency at a time, and returns them in the entries' order.
+//
+// A task that is gone, or no longer in state (run, deleted, moved on
+// between the two reads), is left out, so a page may come up short. So is
+// one whose read fails with an error reply (a WARN is logged): one bad
+// task does not hide the page. A queue that is gone (ErrQueueNotFound) or
+// a server that cannot be reached (Unreachable) fails the page, and no
+// further reads start after either.
+func (c *Conn) hydrate(ctx context.Context, queue string, state TaskState, entries []keyEntry) ([]Task, error) {
 	tasks := make([]Task, len(entries))
 	keep := make([]bool, len(entries))
-	errs := make([]error, len(entries))
+	var (
+		mu    sync.Mutex
+		fatal error
+	)
+	failed := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return fatal != nil
+	}
 	sem := make(chan struct{}, queueConcurrency)
 	var wg sync.WaitGroup
 	for i, e := range entries {
 		sem <- struct{}{}
+		if failed() || ctx.Err() != nil {
+			<-sem
+			break
+		}
 		wg.Go(func() {
 			defer func() { <-sem }()
 			ti, err := recovered(func() (*asynq.TaskInfo, error) { return c.tasks.GetTaskInfo(queue, e.ID) })
 			switch {
 			case errors.Is(err, asynq.ErrTaskNotFound):
 				return
+			case errors.Is(err, asynq.ErrQueueNotFound), Unreachable(err):
+				mu.Lock()
+				if fatal == nil {
+					fatal = err
+				}
+				mu.Unlock()
+				return
 			case err != nil:
-				errs[i] = err
+				c.logger.Warn("task read failed; left out of the page", slog.String("queue", queue),
+					slog.String("task", e.ID), slog.String("error", err.Error()))
 				return
 			case ti == nil:
 				return
@@ -309,10 +345,11 @@ func (c *Conn) hydrate(queue string, state TaskState, entries []keyEntry) ([]Tas
 		})
 	}
 	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, fmt.Errorf("list tasks of %s: %w", queue, taskErr(err))
-		}
+	if fatal != nil {
+		return nil, fmt.Errorf("list tasks of %s: %w", queue, taskErr(fatal))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	out := make([]Task, 0, len(entries))
 	for i, t := range tasks {

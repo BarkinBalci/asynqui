@@ -29,8 +29,8 @@ type queueView struct {
 	// group is the aggregation group whose tasks the Aggregating tab
 	// lists; empty lists the groups.
 	group string
-	// desc lists newest first (see sortsByTime); its default depends on
-	// the state (taskDefaultDesc).
+	// desc lists latest first (sortable states only); its default
+	// depends on the state (taskDefaultDesc).
 	desc bool
 	page int
 	size int
@@ -53,7 +53,7 @@ func parseQueueView(q url.Values) queueView {
 		v.state = s
 	}
 	v.desc = taskDefaultDesc(v.state)
-	if sortsByTime(v.state) {
+	if sortable(v.state) {
 		switch q.Get("dir") {
 		case "asc":
 			v.desc = false
@@ -81,7 +81,7 @@ func (v queueView) values() url.Values {
 	if v.state == TaskAggregating && v.group != "" {
 		q.Set("group", v.group)
 	}
-	if sortsByTime(v.state) && v.desc != taskDefaultDesc(v.state) {
+	if sortable(v.state) && v.desc != taskDefaultDesc(v.state) {
 		dir := "asc"
 		if v.desc {
 			dir = "desc"
@@ -281,8 +281,9 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 		}
 	}
 	if sortable(v.state) {
+		// Flipping the order starts again at the first page.
 		flip := v
-		flip.desc = !v.desc
+		flip.desc, flip.page = !v.desc, 1
 		dir := components.SortAsc
 		if v.desc {
 			dir = components.SortDesc

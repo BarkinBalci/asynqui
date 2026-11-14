@@ -316,7 +316,13 @@ func TestTitles(t *testing.T) {
 		{request{path: "/c/main/queues/default/find"}, "Find task in default – asynqui", "Find task"},
 		{request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete", form: "all=1&state=pending"},
 			"Delete all 25 pending tasks – asynqui", "Delete all 25 pending tasks"},
-		{request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete", form: "id=p00"}, "Delete tasks – asynqui", "Delete tasks"},
+		{request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete", form: "id=p00"}, "Delete task – asynqui", "Delete task"},
+		{request{method: http.MethodPost, path: "/c/main/queues/default/tasks/delete", form: "id=p00&id=p01"}, "Delete tasks – asynqui", "Delete tasks"},
+		{request{method: http.MethodPost, path: "/c/main/queues/default/tasks/archive", form: "id=p00"}, "Archive task – asynqui", "Archive task"},
+		{request{method: http.MethodPost, path: "/c/main/queues/default/tasks/run", form: "all=1&state=aggregating&group=g1"},
+			"Run all tasks in g1 – asynqui", "Run all tasks in g1"},
+		{request{method: http.MethodPost, path: "/c/main/queues/default/tasks/run", form: "all=1&state=aggregating&group=g1&group=g2"},
+			"Run all tasks in 2 groups – asynqui", "Run all tasks in 2 groups"},
 	}
 	for _, tt := range tests {
 		doc := parse(t, do(t, h, tt.rq))
@@ -431,7 +437,7 @@ func TestTaskActions(t *testing.T) {
 		{name: "archive without JS asks on a page", rq: post(base+"archive", "id=p00&state=pending", false), status: http.StatusOK,
 			check: func(t *testing.T, rec *httptest.ResponseRecorder) {
 				doc := parse(t, rec)
-				if text(doc.Find("h1")) != "Archive tasks" || !strings.Contains(text(doc.Find(".dlg-warn")), "older ones are removed") ||
+				if text(doc.Find("h1")) != "Archive task" || !strings.Contains(text(doc.Find(".dlg-warn")), "beyond that, tasks are removed") ||
 					doc.Find(`form button.btn.danger`).Length() != 1 || doc.Find(`input[name=confirm][value="1"]`).Length() != 1 {
 					t.Error("archive confirmation page")
 				}
@@ -541,7 +547,7 @@ func TestTaskActions(t *testing.T) {
 		{name: "group all without JS asks on a page", rq: post(base+"archive", "all=1&state=aggregating&group=g1", false), status: http.StatusOK,
 			check: func(t *testing.T, rec *httptest.ResponseRecorder) {
 				doc := parse(t, rec)
-				if text(doc.Find("h1")) != "Archive all tasks in groups" || text(doc.Find(".dlg-list li")) != "g1" ||
+				if text(doc.Find("h1")) != "Archive all tasks in g1" || text(doc.Find(".dlg-list li")) != "g1" ||
 					doc.Find(`input[name=group][value=g1]`).Length() != 1 || doc.Find(".dlg-warn").Length() != 1 {
 					t.Errorf("group confirmation page = %q", text(doc.Find("main")))
 				}
