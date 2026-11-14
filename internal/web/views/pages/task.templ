@@ -59,59 +59,52 @@ templ TaskActionResult(m Task, failures []TaskFailure) {
 }
 
 templ taskMain(m Task, oob bool) {
-	<div id={ TaskMainID } class="content-region" { components.OOB(oob)... }>
-		switch  {
-			case m.NotFound:
-				<div class="page-head">
-					<h1 class="h1">Task not found</h1>
+	@liveBody(TaskMainID, m.Live, !m.NotFound, nil, taskNotFound(), taskFailed(), oob) {
+		<a id="task-back" class="back-link" href={ templ.SafeURL(m.TabURL) }>
+			@components.IconBack("16")
+			<bdi>{ m.Queue }</bdi>{ " › " + stateText(m.Status) }
+		</a>
+		<div class="page-head task-head">
+			<div class="detail-head">
+				<div class="detail-title">
+					<h1 class="h1"><bdi>{ format.VisibleID(m.Type) }</bdi></h1>
+					@taskBadge(m, false)
 				</div>
-			case m.Live.State != DataReady:
-				<section class="card">
-					@liveData(m.Live, taskFailed())
+				<div class="detail-id">
+					<span class="mono id-full"><bdi>{ format.VisibleID(m.ID) }</bdi></span>
+					@components.CopyIDButton("task-copy-id", m.ID)
+				</div>
+			</div>
+			@taskActions(m, false)
+		</div>
+		<div class="detail-cols">
+			<div class="detail-main detail-stack">
+				<section class="card" aria-labelledby="payload-title">
+					<div class="cardhead">
+						<h2 class="card-title" id="payload-title">Payload</h2>
+						if m.PayloadJSON {
+							<nav class="seg" aria-label="Payload view">
+								<a id="payload-json" href={ templ.SafeURL(m.JSONURL) } { onClass(!m.Raw)... } { currentAttr(!m.Raw)... }>JSON</a>
+								<a id="payload-raw" href={ templ.SafeURL(m.RawURL) } { onClass(m.Raw)... } { currentAttr(m.Raw)... }>Raw</a>
+							</nav>
+						}
+					</div>
+					if m.Payload == "" {
+						<p class="empty">No payload</p>
+					} else {
+						@components.CodeBlock("payload", m.Payload, "Payload", "Copy payload")
+					}
 				</section>
-			default:
-				<a id="task-back" class="back-link" href={ templ.SafeURL(m.TabURL) }>
-					@components.IconBack("16")
-					<bdi>{ m.Queue }</bdi>{ " › " + stateText(m.Status) }
-				</a>
-				<div class="page-head task-head">
-					<div class="detail-head">
-						<div class="detail-title">
-							<h1 class="h1"><bdi>{ format.VisibleID(m.Type) }</bdi></h1>
-							@taskBadge(m, false)
-						</div>
-						<div class="detail-id">
-							<span class="mono id-full"><bdi>{ format.VisibleID(m.ID) }</bdi></span>
-							@components.CopyIDButton("task-copy-id", m.ID)
-						</div>
-					</div>
-					@taskActions(m, false)
-				</div>
-				<div class="detail-cols">
-					<div class="detail-main detail-stack">
-						<section class="card" aria-labelledby="payload-title">
-							<div class="cardhead">
-								<h2 class="card-title" id="payload-title">Payload</h2>
-								if m.PayloadJSON {
-									<nav class="seg" aria-label="Payload view">
-										<a id="payload-json" href={ templ.SafeURL(m.JSONURL) } { onClass(!m.Raw)... } { currentAttr(!m.Raw)... }>JSON</a>
-										<a id="payload-raw" href={ templ.SafeURL(m.RawURL) } { onClass(m.Raw)... } { currentAttr(m.Raw)... }>Raw</a>
-									</nav>
-								}
-							</div>
-							if m.Payload == "" {
-								<p class="empty">No payload</p>
-							} else {
-								@components.CodeBlock("payload", m.Payload, "Payload", "Copy payload")
-							}
-						</section>
-						@taskError(m, false)
-						@taskResult(m, false)
-					</div>
-					@taskDetails(m, false)
-				</div>
-		}
-	</div>
+				@taskError(m, false)
+				@taskResult(m, false)
+			</div>
+			@taskDetails(m, false)
+		</div>
+	}
+}
+
+templ taskNotFound() {
+	Task not found
 }
 
 templ deleteTaskTitle() {

@@ -131,39 +131,22 @@ templ ServerNotFound() {
 }
 
 templ serverBody(m Server, oob bool) {
-	<div id={ ServerBodyID } class="content-region" { components.OOB(oob)... }>
-		if m.Live.State != DataReady {
-			<div class="page-head">
-				<h1 class="h1 h1-mono mono">
-					@lastCrumb(m.Layout)
-				</h1>
+	@liveBody(ServerBodyID, m.Live, m.Found, lastCrumb(m.Layout), ServerNotFound(), serversFailed(), oob) {
+		<div class="detail-head">
+			<div class="detail-title">
+				<h1 class="h1 h1-mono mono">{ m.Row.Host }</h1>
+				@serverState(m.Row, false)
 			</div>
-			<div class="card">
-				@liveData(m.Live, serversFailed())
+			<div class="detail-id">
+				<span class="mono">{ m.Row.ID }</span>
+				@components.CopyIDButton(CopyIDButtonID, m.Row.ID)
 			</div>
-		} else if !m.Found {
-			<div class="page-head">
-				<h1 class="h1">
-					@ServerNotFound()
-				</h1>
-			</div>
-		} else {
-			<div class="detail-head">
-				<div class="detail-title">
-					<h1 class="h1 h1-mono mono">{ m.Row.Host }</h1>
-					@serverState(m.Row, false)
-				</div>
-				<div class="detail-id">
-					<span class="mono">{ m.Row.ID }</span>
-					@components.CopyIDButton(CopyIDButtonID, m.Row.ID)
-				</div>
-			</div>
-			<div class="detail-cols">
-				@serverWorkers(m, false)
-				@serverDetails(m, false)
-			</div>
-		}
-	</div>
+		</div>
+		<div class="detail-cols">
+			@serverWorkers(m, false)
+			@serverDetails(m, false)
+		</div>
+	}
 }
 
 templ serverState(r ServerRow, oob bool) {

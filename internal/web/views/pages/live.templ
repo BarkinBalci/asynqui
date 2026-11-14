@@ -50,6 +50,34 @@ templ liveData(l Live, failed templ.Component) {
 	}
 }
 
+// liveBody is a detail page's body: why there is no data yet (under
+// heading, if any), notFound as the heading when the item is gone, or the
+// item itself (children).
+templ liveBody(id string, l Live, found bool, heading, notFound, failed templ.Component, oob bool) {
+	<div id={ id } class="content-region" { components.OOB(oob)... }>
+		if l.State != DataReady {
+			if heading != nil {
+				<div class="page-head">
+					<h1 class="h1 h1-mono mono">
+						@heading
+					</h1>
+				</div>
+			}
+			<div class="card">
+				@liveData(l, failed)
+			</div>
+		} else if !found {
+			<div class="page-head">
+				<h1 class="h1">
+					@notFound
+				</h1>
+			</div>
+		} else {
+			{ children... }
+		}
+	</div>
+}
+
 func bannerID(l Live) string {
 	if l.BannerID != "" {
 		return l.BannerID
