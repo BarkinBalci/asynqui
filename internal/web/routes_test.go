@@ -50,24 +50,26 @@ func routePages() []page {
 	}
 }
 
-// action is a post of the route table, one that acts when allowed.
+// action is a post of the route table: what it does when allowed (acted,
+// as actedOn lists it) and the role it needs.
 type action struct {
 	path, form string
 	need       config.Role
+	acted      string
 }
 
 func routeActions() []action {
 	return []action{
-		{"/c/%s/recheck", "", config.RoleViewer},
-		{"/c/%s/queues/pause", "queue=default", config.RoleOperator},
-		{"/c/%s/queues/resume", "queue=image-resize", config.RoleOperator},
-		{"/c/%s/queues/delete", "queue=image-resize&confirm=1", config.RoleAdmin},
-		{"/c/%s/queues/default/tasks/run", "id=s0&confirm=1", config.RoleOperator},
-		{"/c/%s/queues/default/tasks/archive", "id=s0&confirm=1", config.RoleOperator},
-		{"/c/%s/queues/default/tasks/archive", "all=1&state=aggregating&group=g1&confirm=1", config.RoleOperator},
-		{"/c/%s/queues/default/tasks/cancel", "id=a0", config.RoleOperator},
-		{"/c/%s/queues/default/tasks/delete", "id=p00&confirm=1", config.RoleAdmin},
-		{"/c/%s/queues/default/tasks/delete", "all=1&state=aggregating&group=g1&confirm=1", config.RoleAdmin},
+		{"/c/%s/recheck", "", config.RoleViewer, "recheck main"},
+		{"/c/%s/queues/pause", "queue=default", config.RoleOperator, "pause main/default"},
+		{"/c/%s/queues/resume", "queue=image-resize", config.RoleOperator, "resume main/image-resize"},
+		{"/c/%s/queues/delete", "queue=image-resize&confirm=1", config.RoleAdmin, "delete main/image-resize"},
+		{"/c/%s/queues/default/tasks/run", "id=s0&confirm=1", config.RoleOperator, "run default/s0"},
+		{"/c/%s/queues/default/tasks/archive", "id=s0&confirm=1", config.RoleOperator, "archive default/s0"},
+		{"/c/%s/queues/default/tasks/archive", "all=1&state=aggregating&group=g1&confirm=1", config.RoleOperator, "archive-all default/group:g1"},
+		{"/c/%s/queues/default/tasks/cancel", "id=a0", config.RoleOperator, "cancel default/a0"},
+		{"/c/%s/queues/default/tasks/delete", "id=p00&confirm=1", config.RoleAdmin, "delete default/p00"},
+		{"/c/%s/queues/default/tasks/delete", "all=1&state=aggregating&group=g1&confirm=1", config.RoleAdmin, "delete-all default/group:g1"},
 	}
 }
 
@@ -105,11 +107,15 @@ func roleRank(r config.Role) int {
 	return slices.Index([]config.Role{config.RoleNone, config.RoleViewer, config.RoleOperator, config.RoleAdmin}, r)
 }
 
-func actedCount(c *fakeConns) int {
+// actedOn lists what the fake did: rechecks, queue actions, task actions.
+func actedOn(c *fakeConns) string {
 	c.mu.Lock()
-	n := len(c.rechecked)
+	var out []string
+	for _, name := range c.rechecked {
+		out = append(out, "recheck "+name)
+	}
 	c.mu.Unlock()
-	return n + len(c.actions()) + len(c.taskActions())
+	return strings.Join(slices.Concat(out, c.actions(), c.taskActions()), ", ")
 }
 
 // TestRoutesAccess: viewer is enough for a page and the route's role for
@@ -138,8 +144,12 @@ func TestRoutesAccess(t *testing.T) {
 			if rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
 				t.Errorf("POST = %d", rec.Code)
 			}
-			if n := actedCount(c); n != 0 {
-				t.Errorf("a page acted %d times", n)
+			rec = do(t, h, request{method: http.MethodPost, path: fmt.Sprintf(p.path, "main"), user: "ada", header: map[string]string{"Sec-Fetch-Site": "cross-site"}})
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("cross-origin POST = %d", rec.Code)
+			}
+			if got := actedOn(c); got != "" {
+				t.Errorf("a page acted: %s", got)
 			}
 		})
 	}
@@ -150,10 +160,10 @@ func TestRoutesAccess(t *testing.T) {
 				rec := do(t, h, request{method: http.MethodPost, path: fmt.Sprintf(a.path, "main"), user: user, form: a.form})
 				allowed := roleRank(role) >= roleRank(a.need)
 				switch {
-				case allowed && (rec.Code != http.StatusSeeOther || actedCount(c) == 0):
-					t.Errorf("%s = %d, acted %d; want 303 and an action", user, rec.Code, actedCount(c))
-				case !allowed && (rec.Code != http.StatusForbidden || actedCount(c) != 0 || rec.Header().Get("Cache-Control") != "no-store"):
-					t.Errorf("%s = %d, acted %d; want an uncached 403 and nothing done", user, rec.Code, actedCount(c))
+				case allowed && (rec.Code != http.StatusSeeOther || actedOn(c) != a.acted):
+					t.Errorf("%s = %d, acted %q; want 303 and %q", user, rec.Code, actedOn(c), a.acted)
+				case !allowed && (rec.Code != http.StatusForbidden || actedOn(c) != "" || rec.Header().Get("Cache-Control") != "no-store"):
+					t.Errorf("%s = %d, acted %q; want an uncached 403 and nothing done", user, rec.Code, actedOn(c))
 				}
 			}
 			h, c := newTestServer(t, roleOpts())
@@ -169,8 +179,8 @@ func TestRoutesAccess(t *testing.T) {
 					t.Errorf("cross-origin %v = %d", hdr, rec.Code)
 				}
 			}
-			if n := actedCount(c); n != 0 {
-				t.Errorf("refused posts acted %d times", n)
+			if got := actedOn(c); got != "" {
+				t.Errorf("refused posts acted: %s", got)
 			}
 		})
 	}

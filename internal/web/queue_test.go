@@ -462,6 +462,10 @@ func TestQueueRoles(t *testing.T) {
 			check("#act-archive", tt.archive)
 			check("#act-delete", tt.del)
 			check("#queue-toggle-btn", tt.toggle)
+			// The aggregation groups' "all" buttons.
+			doc = parse(t, do(t, h, request{path: "/c/main/queues/default?state=aggregating"}))
+			check("#act-all-archive", tt.archive)
+			check("#act-all-delete", tt.del)
 		})
 	}
 }

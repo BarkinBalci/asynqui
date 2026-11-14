@@ -87,6 +87,42 @@ func TestServeHeaders(t *testing.T) {
 	}
 }
 
+// TestCSSReferences: every relative url() of the embedded stylesheets is
+// an embedded file, so it is served next to them.
+func TestCSSReferences(t *testing.T) {
+	sub, err := fs.Sub(FS, "files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	err = fs.WalkDir(sub, ".", func(name string, _ fs.DirEntry, err error) error {
+		if err != nil || path.Ext(name) != ".css" {
+			return err
+		}
+		b, err := fs.ReadFile(sub, name)
+		if err != nil {
+			return err
+		}
+		for _, m := range regexp.MustCompile(`url\(\s*['"]?([^'")\s]+)['"]?\s*\)`).FindAllStringSubmatch(string(b), -1) {
+			ref := m[1]
+			if strings.Contains(ref, ":") || strings.HasPrefix(ref, "/") || strings.HasPrefix(ref, "#") {
+				continue // absolute, data: or a fragment
+			}
+			n++
+			if st, err := fs.Stat(sub, path.Join(path.Dir(name), ref)); err != nil || st.IsDir() {
+				t.Errorf("%s: url(%s) is not an embedded file", name, ref)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Error("no url() found; pattern wrong?")
+	}
+}
+
 // TestDarkTokensMatch keeps the two dark-token blocks of app.css (explicit
 // dark, and system under prefers-color-scheme: dark) identical, and checks
 // both define every color token of the light block.
