@@ -70,7 +70,7 @@ tasks:
   tidy-tools:
     internal: true
     dir: tools
-    cmd: go mod tidy {{.FLAGS}}
+    cmd: go mod tidy{{if .FLAGS}} {{.FLAGS}}{{end}}
 
   # Keep in sync with the check job in .github/workflows/ci.yml. No -race
   # (needs cgo; see test-race), and integration tests skip without Docker.
@@ -80,9 +80,16 @@ tasks:
       - go mod tidy -diff
       - task: tidy-tools
         vars: {FLAGS: -diff}
-      - '{{.TOOL}} templ generate'
-      - git status --porcelain
-      - test -z "$(git status --porcelain)"
+      # Fails only if generate changes something, so uncommitted work is fine.
+      - silent: true
+        cmd: |
+          before="$(git status --porcelain; git diff)"
+          {{.TOOL}} templ generate
+          if [ "$before" != "$(git status --porcelain; git diff)" ]; then
+            echo "templ output was stale; review and commit the regenerated files"
+            git status --porcelain
+            exit 1
+          fi
       - go vet ./...
       - '{{.TOOL}} golangci-lint run'
       - go test ./...
