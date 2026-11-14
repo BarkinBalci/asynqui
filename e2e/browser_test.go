@@ -30,6 +30,7 @@ func TestBrowser(t *testing.T) {
 		{"RefreshOffAnd2s", testRefreshOffAnd2s},
 		{"PollingPausesWhileHidden", testPollingPausesWhileHidden},
 		{"SortDuringPoll", testSortDuringPoll},
+		{"QueuesTableFits", testQueuesTableFits},
 		{"PickerSurvivesPoll", testPickerSurvivesPoll},
 		{"SelectionSurvivesPoll", testSelectionSurvivesPoll},
 		{"DeleteNeedsEmptyQueue", testDeleteNeedsEmptyQueue},

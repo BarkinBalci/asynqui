@@ -517,14 +517,16 @@ html:not(.js) .js-only{display:none}
 /* data tables */
 .tbl-scroll{overflow-x:auto}
 .tbl{width:100%;border-collapse:collapse;font-size:13px}
-.tbl th{padding:10px 16px;background:var(--th-bg);border-bottom:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600;text-align:left;white-space:nowrap}
-.tbl td{padding:11px 16px;border-bottom:1px solid var(--divider);white-space:nowrap;vertical-align:middle}
+.tbl th{padding:10px 12px;background:var(--th-bg);border-bottom:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600;text-align:left;white-space:nowrap}
+.tbl td{padding:11px 12px;border-bottom:1px solid var(--divider);white-space:nowrap;vertical-align:middle}
 .tbl tbody tr:last-child td{border-bottom:0}
 .tbl tbody tr:has(.cb:checked){background:var(--selected)}
 .tbl .num{text-align:right;font-variant-numeric:tabular-nums}
 .tbl .strong{font-weight:600}
-.tbl tfoot td,.tbl tfoot th{padding:11px 16px;border-top:1px solid var(--border);border-bottom:0;background:var(--th-bg);color:var(--text);font-size:13px;font-weight:600}
+.tbl tfoot td,.tbl tfoot th{padding:11px 12px;border-top:1px solid var(--border);border-bottom:0;background:var(--th-bg);color:var(--text);font-size:13px;font-weight:600}
 .tbl .empty{white-space:normal}
+.tbl :is(th,td):first-child{padding-left:16px}
+.tbl :is(th,td):last-child{padding-right:16px}
 .cb-col{width:36px}
 .tbl th.cb-col,.tbl td.cb-col{padding-right:0}
 .cb{width:16px;height:16px;margin:0;vertical-align:middle;accent-color:var(--accent);cursor:pointer}
