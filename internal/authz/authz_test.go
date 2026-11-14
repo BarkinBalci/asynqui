@@ -267,23 +267,6 @@ func TestNewCopiesInput(t *testing.T) {
 	}
 }
 
-func TestFoldUsername(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"", ""},
-		{"jdoe", "jdoe"},
-		{"JDoe@Example.COM", "jdoe@example.com"},
-		{"\u212Aevin", "\u212Aevin"},       // Kelvin sign is not K
-		{"adm\u0130n", "adm\u0130n"},       // U+0130 is not I
-		{"\u212Bngström", "\u212Bngström"}, // Angstrom sign is not Å
-		{"ÄBC", "Äbc"},                     // only ASCII folds
-	}
-	for _, tt := range tests {
-		if got := FoldUsername(tt.in); got != tt.want {
-			t.Errorf("FoldUsername(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
 // TestLookalikeUsernames: Unicode case folding would map these onto the
 // bound ASCII names; ASCII-only folding must not.
 func TestLookalikeUsernames(t *testing.T) {

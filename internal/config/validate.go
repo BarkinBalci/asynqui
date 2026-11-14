@@ -229,7 +229,7 @@ func (p *problems) basic(b Basic) {
 	for i, u := range b.Users {
 		at := fmt.Sprintf("auth.basic.users[%d]", i)
 		if p.required(at+".username", u.Username) {
-			key := foldASCII(u.Username)
+			key := FoldUsername(u.Username)
 			if j, dup := first[key]; dup {
 				p.add(at+".username", fmt.Sprintf("duplicate (case-insensitive) of auth.basic.users[%d]", j))
 			} else {
@@ -251,15 +251,20 @@ func (p *problems) basic(b Basic) {
 	}
 }
 
-// foldASCII lowercases ASCII A–Z only, as authz.FoldUsername does: users
-// whose names differ only in ASCII case would share bindings.
-func foldASCII(s string) string {
-	return strings.Map(func(r rune) rune {
-		if 'A' <= r && r <= 'Z' {
-			return r + ('a' - 'A')
+// FoldUsername lowercases ASCII A–Z and leaves every other byte alone, so
+// usernames compare case-insensitively without Unicode folding: the
+// duplicate check here, authz's binding match and auth's per-user rate
+// limit all use it. Unicode folding would let look-alikes such as the
+// Kelvin sign (U+212A) or the Angstrom sign (U+212B) match "k" or "å", and
+// İ (U+0130) match "i"; invalid UTF-8 stays as it is.
+func FoldUsername(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
 		}
-		return r
-	}, s)
+	}
+	return string(b)
 }
 
 // isBcryptHash reports whether h is a well-formed bcrypt hash: a known

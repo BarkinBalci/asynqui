@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BarkinBalci/asynqui/internal/authz"
 	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
@@ -272,7 +271,7 @@ func (a *Authenticator) basicLogin(w http.ResponseWriter, r *http.Request, next 
 	ok, retry := a.ipLimit.allow(clientKey(r.RemoteAddr))
 	if ok {
 		var r2 time.Duration
-		ok, r2 = a.usrLimit.allow(authz.FoldUsername(username))
+		ok, r2 = a.usrLimit.allow(config.FoldUsername(username))
 		retry = max(retry, r2)
 	}
 	if !ok {

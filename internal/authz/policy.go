@@ -9,7 +9,7 @@ import (
 )
 
 // Identity is what the policy needs to know about a user. Name is the
-// username matched against a binding's users after FoldUsername; Groups
+// username matched against a binding's users after config.FoldUsername; Groups
 // are matched exactly against its groups.
 type Identity struct {
 	Name   string
@@ -48,7 +48,7 @@ func New(a config.Authz) (*Policy, error) {
 			return nil, fmt.Errorf("authz.bindings[%d].role: %w", i, err)
 		}
 		p.bindings = append(p.bindings, binding{
-			users:  set(b.Users, FoldUsername),
+			users:  set(b.Users, config.FoldUsername),
 			groups: set(b.Groups, nil),
 			role:   role,
 			conns:  slices.Clone(b.Connections),
@@ -129,7 +129,7 @@ func (p *Policy) MaxRole(user Identity, conns []string) Role {
 
 func (b binding) matchesUser(u Identity) bool {
 	if u.Name != "" {
-		if _, ok := b.users[FoldUsername(u.Name)]; ok {
+		if _, ok := b.users[config.FoldUsername(u.Name)]; ok {
 			return true
 		}
 	}
