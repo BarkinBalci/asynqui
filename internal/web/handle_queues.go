@@ -50,10 +50,6 @@ const maxActionForm = 64 << 10
 // defaultRange is the chart's default range in days.
 const defaultRange = 14
 
-// pollInit is the poll URL's ?poll= value for a page without data
-// regions: the answer then renders every region.
-const pollInit = "init"
-
 // rangeChoices are the chart's ranges in days, in control order.
 func rangeChoices() []int { return []int{7, 14, 30, 90} }
 
@@ -175,30 +171,13 @@ func (d *deps) queuesURL(conn string, v queuesView) string {
 	return d.urlQuery(v.values(), "c", conn)
 }
 
-// answer is what a Connection page request is answered with.
-type answer struct {
-	// poll is a poll: the chart's controls are left alone.
-	poll bool
-	// init is a poll from a page without data regions.
-	init bool
-}
-
-// answerFor tells a poll (htmx names the triggering element in
-// HX-Trigger) from a user request.
-func answerFor(r *http.Request) answer {
-	if !isFragment(r) || r.Header.Get("HX-Trigger") != pages.QueuesPollID {
-		return answer{}
-	}
-	return answer{poll: true, init: r.URL.Query().Get("poll") == pollInit}
-}
-
 // handleQueues serves GET /c/{conn}, the Connection page. With HX-Request
 // (a poll, a sort or a chart change) it answers with out-of-band swaps
 // instead (pages.QueuesPoll).
 func handleQueues(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
-		m := d.queuesModel(r, a, parseQueuesView(r.URL.Query()), answerFor(r))
+		m := d.queuesModel(r, a, parseQueuesView(r.URL.Query()), liveAnswer(r, pages.QueuesPollID))
 		if isFragment(r) {
 			d.render(w, r, http.StatusOK, pages.QueuesPoll(m))
 			return
@@ -213,63 +192,40 @@ func handleQueues(d *deps) http.Handler {
 // queuesModel reads the connection's queues and history, in parallel and
 // within the page budget, and builds the page model for state v.
 func (d *deps) queuesModel(r *http.Request, a access, v queuesView, ans answer) pages.Queues {
-	name, health := a.conn.Name(), a.conn.Health()
-	m := pages.Queues{
-		Addr:    a.conn.Addr(),
-		Health:  healthView(health.State),
-		FormURL: d.url("c", name, "queues", "pause"),
-		Poll:    ans.poll,
-		Init:    ans.init,
-	}
-
-	var rows []conn.Queue
-	switch health.State {
-	case conn.StateDown:
-		m.State, m.Error = pages.DataFailed, errText(health.Err)
-	default:
-		ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
-		defer cancel()
-		var (
-			hist    []conn.DailyStat
-			histErr error
-			wg      sync.WaitGroup
-		)
+	name := a.conn.Name()
+	ctx, cancel := d.pageContext(r.Context())
+	defer cancel()
+	var (
+		hist    []conn.DailyStat
+		histErr error
+	)
+	rows, rd := readLive(ctx, a, func(ctx context.Context) ([]conn.Queue, error) {
+		var wg sync.WaitGroup
 		wg.Go(func() { hist, histErr = a.conn.History(ctx, v.queue, v.days) })
 		qs, err := a.conn.Queues(ctx)
 		wg.Wait()
-		switch {
-		case err != nil && ctx.Err() != nil:
-			m.State = pages.DataChecking
-		case err != nil:
-			// Reachable at the last PING but failing now: shown failed
-			// here, in the badge and in the sidebar, as on the Overview.
-			m.State, m.Error, m.Health = pages.DataFailed, errText(err), components.HealthDown
-		default:
-			rows = qs
-			if v.queue != "" && (errors.Is(histErr, conn.ErrQueueNotFound) || !slices.ContainsFunc(rows, func(q conn.Queue) bool { return q.Name == v.queue })) {
-				// Deleted, or never there: all queues.
-				v.queue = ""
-				hist, histErr = a.conn.History(ctx, "", v.days)
-			}
-			m.Throughput = d.throughput(ctx, name, v, rows, hist, histErr)
+		return qs, err
+	})
+	m := pages.Queues{
+		Layout:  d.liveLayout(r, a, components.SectionQueues, rd),
+		Addr:    a.conn.Addr(),
+		Health:  healthView(a.conn.Health().State),
+		FormURL: d.url("c", name, "queues", "pause"),
+	}
+	if rd.down {
+		m.Health = components.HealthDown
+	}
+	if rd.state == pages.DataReady {
+		if v.queue != "" && (errors.Is(histErr, conn.ErrQueueNotFound) || !slices.ContainsFunc(rows, func(q conn.Queue) bool { return q.Name == v.queue })) {
+			// Deleted, or never there: all queues.
+			v.queue = ""
+			hist, histErr = a.conn.History(ctx, "", v.days)
 		}
+		m.Throughput = d.throughput(ctx, name, v, rows, hist, histErr)
 	}
-	// A poll that finds no data keeps the table the page already shows.
-	m.KeepTable = ans.poll && !ans.init && m.State != pages.DataReady
-
-	var override map[string]components.Health
-	if m.Health == components.HealthDown {
-		override = map[string]components.Health{name: components.HealthDown}
-	}
-	crumbs := []components.Crumb{{Text: name, URL: d.url("c", name)}}
-	m.Layout = d.layoutWith(r, a, components.SectionQueues, crumbs, d.visible(a.id), override)
-
+	m.Live = d.live(ans, pages.QueuesPageID, pages.QueuesPollID, rd, rd.state == pages.DataReady, v.values(), "c", name)
+	m.Live.BannerID = pages.ConnStateID
 	m.Next = d.queuesURL(name, v)
-	pq := v.values()
-	if m.State != pages.DataReady && !m.KeepTable {
-		pq.Set("poll", pollInit) // the page will have no data regions
-	}
-	m.PollURL = d.urlQuery(pq, "c", name)
 	d.queueRows(&m, name, v, rows)
 	d.queueActions(&m, a)
 	return m

@@ -207,6 +207,10 @@ templ entryHistory(h History, oob bool) {
 	</section>
 }
 
+templ historyFailed() {
+	Could not load enqueue history
+}
+
 templ entryDetails(m SchedulerEntry, oob bool) {
 	<section id={ EntryDetailsID } class="card detail-side" aria-labelledby="details-title" { components.OOB(oob)... }>
 		<div class="cardhead">
@@ -277,13 +281,7 @@ templ pageLink(id, url, label string) {
 templ historyTable(h History) {
 	switch h.State {
 		case DataFailed:
-			<div class="conn-error page-error">
-				<div class="conn-error-title">
-					@components.IconAlert("16")
-					Could not load enqueue history
-				</div>
-				<div class="mono conn-error-text">{ h.Error }</div>
-			</div>
+			@errorBox(historyFailed(), h.Error)
 		case DataChecking:
 			<p class="checking">Checking</p>
 		default:

@@ -255,7 +255,8 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - a hover tooltip per day (the SVG's native `<title>`) with the date, Processed, Failed and Failure rate; the same data is in a visually hidden table
 - **Chart rendering:** server-rendered SVG, with the data from `Inspector.History` (summed over the queues for "All queues").
 - **Unreachable connection:** the page shows "Connection failed" with the error in place of the table, and no chart. A read that does not finish within 5s shows "Checking" until a poll has it. A history read that misses it shows "Checking" in the chart; another history error shows "Could not load throughput" with the error.
-- **Polling** refreshes the table, the chart body, the badge and the Updated time, never the chart controls. When a poll finds the connection failing, the table (and the selection) stays and a banner above it shows "Connection failed" or "Checking".
+- **Errors:** a network error or timeout shows "Connection failed" and the connection down (badge and sidebar included). An error reply, such as `NOAUTH`, shows "Could not load queues" with the error, and the connection stays up.
+- **Polling** refreshes the table, the chart body, the badge and the Updated time, never the chart controls. When a poll finds the connection failing, the table (and the selection) stays and a banner above it shows why ("Connection failed", the error reply, or "Checking").
 
 ### 6.3 Queue `/c/{conn}/queues/{queue}?state=…`
 - **Header:**

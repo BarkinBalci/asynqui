@@ -74,9 +74,9 @@ type Queues struct {
 	Layout views.Layout
 	Addr   string
 	Health components.Health
-	State  DataState
-	// Error is the failure text when State is DataFailed.
-	Error string
+	// Live is the polling frame. A poll leaves the chart's controls alone
+	// (an open select stays open) and swaps only the chart body.
+	Live  Live
 	Rows  []QueueRow
 	Total QueueRow
 	Heads [NumQueueColumns]components.SortHead
@@ -89,19 +89,7 @@ type Queues struct {
 	Resume       components.Action
 	Delete       components.Action
 	DeleteDialog components.Dialog
-	// PollURL is the page URL the poll fetches, with the current state.
-	PollURL    string
-	Throughput Throughput
-
-	// Poll marks the answer to a poll: it leaves the chart's controls
-	// alone (an open select stays open) and swaps only the chart body.
-	Poll bool
-	// Init marks a poll from a page that has no data regions yet (it was
-	// rendered failed or checking): it gets every region.
-	Init bool
-	// KeepTable marks a poll that found no data while the page shows a
-	// table: the table, and the selection in it, stay; a banner says why.
-	KeepTable bool
+	Throughput   Throughput
 }
 
 // QueueRow is one queue in the table, or the Total row.

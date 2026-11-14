@@ -847,14 +847,28 @@ func TestInfoPage(t *testing.T) {
 }
 
 // TestInfraUnavailable: a connection known down, a failing read and a slow
-// one, on every page.
+// one, on every connection page.
 func TestInfraUnavailable(t *testing.T) {
-	paths := []struct{ path, region string }{
-		{"/c/%s/servers", "#servers-table"},
-		{"/c/%s/servers/" + srvA, "#server-body"},
-		{"/c/%s/schedulers", "#schedulers-table"},
-		{"/c/%s/schedulers/" + entryA, "#entry-body"},
-		{"/c/%s/info", "#info-cards"},
+	infraFail := func(c *fakeConns, err error) { c.infra.errs = map[string]error{"main": err} }
+	infraSlow := func(c *fakeConns) { c.infra.block = map[string]bool{"main": true} }
+	tasksFail := func(c *fakeConns, err error) { c.tasks.readErr = err }
+	tasksSlow := func(c *fakeConns) { c.tasks.block = true }
+	paths := []struct {
+		path, region string
+		fail         func(*fakeConns, error)
+		slow         func(*fakeConns)
+		// headless pages show no heading without data.
+		headless bool
+	}{
+		{"/c/%s", "#queues-table", func(c *fakeConns, err error) { c.queueErrs = map[string]error{"main": err} },
+			func(c *fakeConns) { c.block = map[string]bool{"main": true} }, false},
+		{"/c/%s/queues/default", "#task-card", tasksFail, tasksSlow, false},
+		{"/c/%s/queues/default/tasks/" + uuidTask, "#task-main", tasksFail, tasksSlow, true},
+		{"/c/%s/servers", "#servers-table", infraFail, infraSlow, false},
+		{"/c/%s/servers/" + srvA, "#server-body", infraFail, infraSlow, false},
+		{"/c/%s/schedulers", "#schedulers-table", infraFail, infraSlow, false},
+		{"/c/%s/schedulers/" + entryA, "#entry-body", infraFail, infraSlow, false},
+		{"/c/%s/info", "#info-cards", infraFail, infraSlow, false},
 	}
 	for _, p := range paths {
 		t.Run(p.path, func(t *testing.T) {
@@ -864,7 +878,7 @@ func TestInfraUnavailable(t *testing.T) {
 			if rec.Code != http.StatusOK || text(doc.Find(p.region+" .conn-error-text")) != "dial tcp 10.0.4.12:6380: i/o timeout" {
 				t.Errorf("down: %d %q", rec.Code, text(doc.Find(p.region)))
 			}
-			if doc.Find("main h1").Length() != 1 {
+			if doc.Find("main h1").Length() != 1 && !p.headless {
 				t.Error("no heading")
 			}
 			if got, _ := doc.Find("[data-poll]").Attr("hx-get"); !strings.Contains(got, "poll=init") {
@@ -877,7 +891,7 @@ func TestInfraUnavailable(t *testing.T) {
 
 			// A network error or timeout: down here and in the sidebar.
 			c := infraConns()
-			c.infra.errs = map[string]error{"main": unreachable("connection refused")}
+			p.fail(c, unreachable("connection refused"))
 			h, _ = newTestServer(t, testOpts{conns: c})
 			doc = parse(t, do(t, h, request{path: fmt.Sprintf(p.path, "main")}))
 			if got := text(doc.Find(p.region + " .conn-error-title")); got != "Connection failed" {
@@ -889,7 +903,7 @@ func TestInfraUnavailable(t *testing.T) {
 
 			// An error reply: the server is up, the read failed.
 			c = infraConns()
-			c.infra.errs = map[string]error{"main": errors.New("NOPERM User asynq-ui has no permissions to run the 'info' command")}
+			p.fail(c, errors.New("NOPERM User asynq-ui has no permissions to run the 'info' command"))
 			h, _ = newTestServer(t, testOpts{conns: c})
 			doc = parse(t, do(t, h, request{path: fmt.Sprintf(p.path, "main")}))
 			if got := text(doc.Find(p.region + " .conn-error-text")); !strings.HasPrefix(got, "NOPERM") {
@@ -903,7 +917,7 @@ func TestInfraUnavailable(t *testing.T) {
 			}
 
 			c = infraConns()
-			c.infra.block = map[string]bool{"main": true}
+			p.slow(c)
 			d, h, _ := newTestDeps(t, testOpts{conns: c})
 			d.pageBudget = 20 * time.Millisecond
 			doc = parse(t, do(t, h, request{path: fmt.Sprintf(p.path, "main")}))

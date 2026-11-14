@@ -10,16 +10,20 @@ import (
 
 // livePoll is a Live page's poll trigger. Its own hx-sync drops it while
 // another request of the page is in flight and lets a user request abort
-// it.
+// it. Without a PollURL the page has stopped polling.
 templ livePoll(l Live, oob bool) {
-	<div id={ l.PollID } data-poll hx-get={ l.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-sync={ "#" + l.PageID + ":abort" } hidden { components.OOB(oob)... }></div>
+	if l.PollURL == "" {
+		<div id={ l.PollID } hidden { components.OOB(oob)... }></div>
+	} else {
+		<div id={ l.PollID } data-poll hx-get={ l.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-sync={ "#" + l.PageID + ":abort" } hidden { components.OOB(oob)... }></div>
+	}
 }
 
 // liveBanner shows why a poll that kept the data has none; empty
 // otherwise. failed is the title of a read that failed with an error
 // reply (the connection is up).
 templ liveBanner(l Live, failed templ.Component, oob bool) {
-	<div id={ LiveStateID } class="state-banner" { components.OOB(oob)... }>
+	<div id={ bannerID(l) } class="state-banner" { components.OOB(oob)... }>
 		if l.Keep {
 			<div class="card">
 				@liveData(l, failed)
@@ -35,15 +39,9 @@ templ liveData(l Live, failed templ.Component) {
 	switch l.State {
 		case DataFailed:
 			if l.Down {
-				@connError(l.Error)
+				@errorBox(connFailed(), l.Error)
 			} else {
-				<div class="conn-error page-error">
-					<div class="conn-error-title">
-						@components.IconAlert("16")
-						@failed
-					</div>
-					<div class="mono conn-error-text">{ l.Error }</div>
-				</div>
+				@errorBox(failed, l.Error)
 			}
 		case DataChecking:
 			<p class="checking">Checking</p>
@@ -52,7 +50,33 @@ templ liveData(l Live, failed templ.Component) {
 	}
 }
 
-// Titles of a read that failed with an error reply.
+func bannerID(l Live) string {
+	if l.BannerID != "" {
+		return l.BannerID
+	}
+	return LiveStateID
+}
+
+// errorBox is a failed read: its title and the error text.
+templ errorBox(title templ.Component, msg string) {
+	<div class="conn-error page-error">
+		<div class="conn-error-title">
+			@components.IconAlert("16")
+			@title
+		</div>
+		<div class="mono conn-error-text">{ msg }</div>
+	</div>
+}
+
+// Titles of a failed read: one that could not reach the server, then
+// those that failed with an error reply.
+templ connFailed() {
+	Connection failed
+}
+
+templ queuesFailed() {
+	Could not load queues
+}
 
 templ serversFailed() {
 	Could not load servers

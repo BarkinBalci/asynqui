@@ -141,14 +141,10 @@ func VerbParam(v TaskVerb) string {
 type Queue struct {
 	Layout views.Layout
 	Name   string
-	// State is whether the queue was read. NotFound marks a queue the
-	// connection does not have.
-	State    DataState
-	Error    string
+	// Live is the polling frame: a poll leaves the card's controls alone.
+	Live Live
+	// NotFound marks a queue the connection does not have.
 	NotFound bool
-	// Down marks a failure to reach the server ("Connection failed");
-	// any other failure shows the read's own error.
-	Down bool
 
 	Paused bool
 	Stats  QueueStats
@@ -184,17 +180,9 @@ type Queue struct {
 	Pager         Pager
 	Sizes         SizePicker
 	// Next is the page's own URL, posted with actions.
-	Next    string
-	PollURL string
+	Next string
 	// Notice is the result of the action this answers, if any.
 	Notice *TaskNotice
-
-	// Poll, Init and KeepTable are as on the Connection page: a poll
-	// leaves the card's controls alone; Init is a poll from a page without
-	// data; KeepTable keeps the table of a page whose poll found no data.
-	Poll      bool
-	Init      bool
-	KeepTable bool
 }
 
 // QueueStats are the stat cards.

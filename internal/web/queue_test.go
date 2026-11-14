@@ -397,6 +397,8 @@ func TestQueueFragments(t *testing.T) {
 	}
 }
 
+// TestQueueUnavailable has the Queue page's own cases; see
+// TestInfraUnavailable for the ones every connection page shares.
 func TestQueueUnavailable(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		h, _ := newTestServer(t, adminOpts())
@@ -420,18 +422,6 @@ func TestQueueUnavailable(t *testing.T) {
 			t.Errorf("action = %q", rec.Body)
 		}
 	})
-	t.Run("connection down", func(t *testing.T) {
-		conns := defaultConns()
-		conns.queues["analytics"] = defaultQueues()
-		h, _ := newTestServer(t, testOpts{conns: conns})
-		doc := parse(t, do(t, h, request{path: "/c/analytics/queues/default"}))
-		if got := text(doc.Find("#task-card .conn-error")); !strings.Contains(got, "Connection failed") || !strings.Contains(got, "dial tcp") {
-			t.Errorf("down = %q", got)
-		}
-		if !strings.Contains(doc.Find("#queue-poll").AttrOr("hx-get", ""), "poll=init") {
-			t.Error("a page without data must poll with poll=init")
-		}
-	})
 	t.Run("poll keeps the table", func(t *testing.T) {
 		conns := defaultConns()
 		conns.tasks.readErr = errors.New("READONLY")
@@ -444,23 +434,6 @@ func TestQueueUnavailable(t *testing.T) {
 			t.Errorf("banner = %q", got)
 		}
 	})
-	t.Run("checking", func(t *testing.T) {
-		conns := defaultConns()
-		conns.tasks.block = true
-		_, h, _ := newTestDepsBudget(t, testOpts{conns: conns})
-		doc := parse(t, do(t, h, request{path: "/c/main/queues/default"}))
-		if got := text(doc.Find("#task-card")); got != "Checking" {
-			t.Errorf("checking = %q", got)
-		}
-	})
-}
-
-// newTestDepsBudget is newTestDeps with a short page budget.
-func newTestDepsBudget(t *testing.T, o testOpts) (*deps, http.Handler, *fakeConns) {
-	t.Helper()
-	d, h, c := newTestDeps(t, o)
-	d.pageBudget = 50e6 // 50ms
-	return d, h, c
 }
 
 func TestQueueRoles(t *testing.T) {

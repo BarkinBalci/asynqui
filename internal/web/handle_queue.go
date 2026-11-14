@@ -1,8 +1,8 @@
 package web
 
 import (
+	"cmp"
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -115,20 +115,13 @@ type queueAnswer struct {
 	notice *pages.TaskNotice
 }
 
-func queueAnswerFor(r *http.Request) queueAnswer {
-	if !isFragment(r) || r.Header.Get("HX-Trigger") != pages.QueuePollID {
-		return queueAnswer{}
-	}
-	return queueAnswer{answer: answer{poll: true, init: r.URL.Query().Get("poll") == pollInit}}
-}
-
 // handleQueue serves GET /c/{conn}/queues/{queue}, the Queue page. With
 // HX-Request (a poll, a tab, page or size change) it answers with
 // out-of-band swaps instead (pages.QueuePoll).
 func handleQueue(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
-		m := d.queueModel(r, a, r.PathValue("queue"), parseQueueView(r.URL.Query()), queueAnswerFor(r))
+		m := d.queueModel(r, a, r.PathValue("queue"), parseQueueView(r.URL.Query()), queueAnswer{answer: liveAnswer(r, pages.QueuePollID)})
 		status := http.StatusOK
 		if m.NotFound {
 			status = http.StatusNotFound
@@ -149,89 +142,85 @@ func handleQueue(d *deps) http.Handler {
 	})
 }
 
-// queueModel reads the queue's counters and the tab's tasks, in parallel
-// and within the page budget, and builds the page model for state v.
-func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, ans queueAnswer) pages.Queue {
-	name, health := a.conn.Name(), a.conn.Health()
-	m := pages.Queue{Name: queue, Poll: ans.poll, Init: ans.init, Notice: ans.notice}
+// queueData is what the Queue page reads: the queue's counters, the tab's
+// tasks or groups, and the page it shows.
+type queueData struct {
+	qi     conn.QueueInfo
+	tasks  []conn.Task
+	groups []conn.Group
+	page   int
+}
 
-	var (
-		qi     conn.QueueInfo
-		tasks  []conn.Task
-		groups []conn.Group
-		// total is the number of tasks the view pages over: the state's,
-		// or the group's.
-		total int
-	)
-	override := map[string]components.Health(nil)
-	switch health.State {
-	case conn.StateDown:
-		m.State, m.Error, m.Down = pages.DataFailed, errText(health.Err), true
-	default:
-		ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
-		defer cancel()
-		var (
-			listErr, groupsErr error
-			wg                 sync.WaitGroup
-		)
-		list := func(page int) {
-			switch {
-			case v.groupList():
-			case v.state == conn.TaskAggregating:
-				tasks, listErr = a.conn.ListGroupTasks(ctx, queue, v.group, page, v.size)
-			default:
-				tasks, listErr = a.conn.ListTasks(ctx, queue, v.state, page, v.size, v.desc)
-			}
-		}
-		wg.Go(func() { list(v.page) })
-		if v.state == conn.TaskAggregating {
-			// The group list, or the group's size for the pager.
-			wg.Go(func() { groups, groupsErr = a.conn.Groups(ctx, queue) })
-		}
-		var err error
-		qi, err = a.conn.QueueInfo(ctx, queue)
-		wg.Wait()
-		total = qi.Count(v.state)
-		if v.state == conn.TaskAggregating && !v.groupList() {
-			total = 0
-			for _, g := range groups {
-				if g.Name == v.group {
-					total = g.Size
-				}
-			}
-		}
-		if err == nil && listErr == nil && groupsErr == nil && !v.groupList() && len(tasks) == 0 && v.page > 1 {
-			// Past the end (tasks moved on since the link was made, or a
-			// made-up page): the last page, or the first when there are
-			// none.
-			v.page = 1
-			if total > 0 {
-				v.page = (total + v.size - 1) / v.size
-				list(v.page)
-			}
-		}
-		err = firstErr(err, listErr, groupsErr)
-		switch {
-		case errors.Is(err, conn.ErrQueueNotFound):
-			m.NotFound = true
-		case err != nil && ctx.Err() != nil:
-			m.State = pages.DataChecking
-		case err != nil:
-			// Only a server that cannot be reached is down; an error
-			// reply (NOPERM, LOADING) shows as itself.
-			m.State, m.Error, m.Down = pages.DataFailed, errText(err), conn.Unreachable(err)
-			if m.Down {
-				override = map[string]components.Health{name: components.HealthDown}
-			}
+// total is the number of tasks view v pages over: the state's, or the
+// group's.
+func (q queueData) total(v queueView) int {
+	if v.state != conn.TaskAggregating || v.groupList() {
+		return q.qi.Count(v.state)
+	}
+	for _, g := range q.groups {
+		if g.Name == v.group {
+			return g.Size
 		}
 	}
-	m.KeepTable = ans.poll && !ans.init && m.State != pages.DataReady
+	return 0
+}
 
-	crumbs := []components.Crumb{{Text: name, URL: d.url("c", name)}, {Text: queue}}
-	m.Layout = d.layoutWith(r, a, components.SectionQueues, crumbs, d.visible(a.id), override)
+// readQueue reads the queue's counters and the tab's tasks (or groups) in
+// parallel. A page past the end (tasks moved on since the link was made,
+// or a made-up page) reads the last page instead, or the first when there
+// are none.
+func readQueue(ctx context.Context, c Conn, queue string, v queueView) (queueData, error) {
+	q := queueData{page: v.page}
+	var listErr, groupsErr error
+	list := func() {
+		switch {
+		case v.groupList():
+		case v.state == conn.TaskAggregating:
+			q.tasks, listErr = c.ListGroupTasks(ctx, queue, v.group, q.page, v.size)
+		default:
+			q.tasks, listErr = c.ListTasks(ctx, queue, v.state, q.page, v.size, v.desc)
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Go(list)
+	if v.state == conn.TaskAggregating {
+		// The group list, or the group's size for the pager.
+		wg.Go(func() { q.groups, groupsErr = c.Groups(ctx, queue) })
+	}
+	var err error
+	q.qi, err = c.QueueInfo(ctx, queue)
+	wg.Wait()
+	if err := cmp.Or(err, listErr, groupsErr); err != nil {
+		return q, err
+	}
+	if !v.groupList() && len(q.tasks) == 0 && q.page > 1 {
+		q.page = 1
+		if total := q.total(v); total > 0 {
+			q.page = (total + v.size - 1) / v.size
+			list()
+		}
+	}
+	return q, listErr
+}
+
+// queueModel reads the queue within the page budget and builds the page
+// model for state v.
+func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, ans queueAnswer) pages.Queue {
+	name := a.conn.Name()
+	ctx, cancel := d.pageContext(r.Context())
+	defer cancel()
+	q, rd := readLive(ctx, a, func(ctx context.Context) (queueData, error) { return readQueue(ctx, a.conn, queue, v) })
+	m := pages.Queue{Name: queue, Notice: ans.notice, NotFound: missing(&rd, conn.ErrQueueNotFound)}
+	m.Layout = d.liveLayout(r, a, components.SectionQueues, rd, components.Crumb{Text: queue})
 	if m.NotFound {
 		return m
 	}
+	if rd.state == pages.DataReady {
+		v.page = q.page
+	}
+	m.Live = d.live(ans.answer, pages.QueuePageID, pages.QueuePollID, rd, rd.state == pages.DataReady, v.values(), "c", name, "queues", queue)
+	m.Live.BannerID = pages.QueueBannerID
+	qi, groups, tasks, total := q.qi, q.groups, q.tasks, q.total(v)
 
 	m.Tab = pages.TaskState(v.state)
 	m.Group = v.group
@@ -240,11 +229,6 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 	m.FormURL = d.url("c", name, "queues", queue, "tasks", "archive")
 	m.FindURL = d.url("c", name, "queues", queue, "find")
 	m.Find = pages.Find{Action: m.FindURL, Queue: queue}
-	pq := v.values()
-	if m.State != pages.DataReady && !m.KeepTable {
-		pq.Set("poll", pollInit) // the page will have no data regions
-	}
-	m.PollURL = d.urlQuery(pq, "c", name, "queues", queue)
 
 	m.Paused = qi.Paused
 	m.Stats = pages.QueueStats{
@@ -296,16 +280,6 @@ func (d *deps) queueModel(r *http.Request, a access, queue string, v queueView, 
 	d.taskActions(&m, a, queue, v)
 	d.pager(&m, name, queue, v, len(tasks))
 	return m
-}
-
-// firstErr is the first non-nil error.
-func firstErr(errs ...error) error {
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (d *deps) taskRows(m *pages.Queue, name, queue string, tasks []conn.Task, fresh bool) {

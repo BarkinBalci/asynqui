@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"net/http"
 	"net/url"
@@ -13,10 +14,22 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// The read-only connection pages (Servers, Server detail, Schedulers,
-// Scheduler entry, Redis info) share one request and polling scheme,
-// pages.Live: a hidden poll element, out-of-band answers, and a banner
-// when a poll finds no data while the page shows some.
+// The connection pages (Connection, Queue, Task, Servers, Server detail,
+// Schedulers, Scheduler entry, Redis info) share one request and polling
+// scheme, pages.Live: a hidden poll element, out-of-band answers, and a
+// banner when a poll finds no data while the page shows some.
+
+// pollInit is the poll URL's ?poll= value for a page without data
+// regions: the answer then renders every region.
+const pollInit = "init"
+
+// answer is what a Live page request is answered with.
+type answer struct {
+	// poll is a poll: the page's controls are left alone.
+	poll bool
+	// init is a poll from a page without data regions.
+	init bool
+}
 
 // liveAnswer tells a poll of the page whose poll element is pollID
 // (htmx names it in HX-Trigger) from a user request.
@@ -39,6 +52,8 @@ type liveRead struct {
 	// could not reach it now: the sidebar shows it down, as the Overview
 	// does.
 	down bool
+	// cause is the read's error, if any.
+	cause error
 }
 
 // pageContext bounds a Live page's reads by the page budget. Pages with
@@ -58,12 +73,25 @@ func readLive[T any](ctx context.Context, a access, fetch func(ctx context.Conte
 	v, err := fetch(ctx)
 	switch {
 	case err != nil && ctx.Err() != nil:
-		return zero, liveRead{state: pages.DataChecking}
+		return zero, liveRead{state: pages.DataChecking, cause: err}
 	case err != nil:
 		down := conn.Unreachable(err)
-		return zero, liveRead{state: pages.DataFailed, err: errText(err), unreachable: down, down: down}
+		return zero, liveRead{state: pages.DataFailed, err: errText(err), unreachable: down, down: down, cause: err}
 	}
 	return v, liveRead{state: pages.DataReady}
+}
+
+// missing reports whether the read found that its item does not exist
+// (its error is one of targets). That is an answer, not a failed read, so
+// rd becomes ready: the page shows "not found".
+func missing(rd *liveRead, targets ...error) bool {
+	for _, t := range targets {
+		if errors.Is(rd.cause, t) {
+			*rd = liveRead{state: pages.DataReady}
+			return true
+		}
+	}
+	return false
 }
 
 // live builds a Live page's frame. regions reports whether the page has

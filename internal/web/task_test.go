@@ -665,43 +665,6 @@ func flashOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return ""
 }
 
-// Only a server that cannot be reached shows as down; an error reply is
-// shown as the read's own error, and the connection stays up.
-func TestTaskPagesReadErrors(t *testing.T) {
-	tests := []struct {
-		name  string
-		err   error
-		title string
-		down  bool
-	}{
-		{"error reply", errors.New("NOPERM this user has no permissions"), "", false},
-		{"unreachable", unreachable("i/o timeout"), "Connection failed", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			conns := defaultConns()
-			conns.tasks.readErr = tt.err
-			h, _ := newTestServer(t, testOpts{conns: conns})
-			for path, title := range map[string]string{"/c/main/queues/default": "Could not load the queue", uuidPath: "Could not load the task"} {
-				doc := parse(t, do(t, h, request{path: path}))
-				want := title
-				if tt.down {
-					want = tt.title
-				}
-				if got := text(doc.Find(".conn-error-title")); got != want {
-					t.Errorf("%s: title = %q, want %q", path, got, want)
-				}
-				if !strings.Contains(text(doc.Find(".conn-error-text")), tt.err.Error()) {
-					t.Errorf("%s: no error text", path)
-				}
-				if got := doc.Find("#nav-main .dot-down").Length() == 1; got != tt.down {
-					t.Errorf("%s: sidebar down = %v", path, got)
-				}
-			}
-		})
-	}
-}
-
 func TestTaskBackLinkAndCrumb(t *testing.T) {
 	h, _ := newTestServer(t, adminOpts())
 	doc := parse(t, do(t, h, request{path: uuidPath}))

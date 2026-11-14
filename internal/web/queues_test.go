@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/go-cmp/cmp"
@@ -571,18 +570,14 @@ func TestQueueActionsCSRF(t *testing.T) {
 	}
 }
 
+// TestQueuesUnavailable has the Connection page's own cases; see
+// TestInfraUnavailable for the ones every connection page shares.
 func TestQueuesUnavailable(t *testing.T) {
 	t.Run("connection down", func(t *testing.T) {
 		h, _ := newTestServer(t, testOpts{})
 		doc := parse(t, do(t, h, request{path: "/c/analytics"}))
 		if doc.Find("aside.side").Length() != 1 || text(doc.Find("main h1")) != "Queues" {
 			t.Fatal("not inside the layout")
-		}
-		if got := text(doc.Find("#queues-table .conn-error-title")); got != "Connection failed" {
-			t.Errorf("error title = %q", got)
-		}
-		if got := text(doc.Find("#queues-table .conn-error-text")); got != "dial tcp 10.0.4.12:6380: i/o timeout" {
-			t.Errorf("error = %q", got)
 		}
 		if text(doc.Find("#conn-health")) != "Unreachable" || doc.Find("#queues").Length() != 0 {
 			t.Error("badge or table wrong")
@@ -591,26 +586,25 @@ func TestQueuesUnavailable(t *testing.T) {
 			t.Error("chart shown without data")
 		}
 	})
-	t.Run("read fails: down here and in the sidebar", func(t *testing.T) {
+	t.Run("error reply: inline, the connection stays up", func(t *testing.T) {
 		conns := defaultConns()
 		conns.queueErrs = map[string]error{"main": errors.New("NOAUTH Authentication required.")} //nolint:revive // Redis's own text
 		h, _ := newTestServer(t, testOpts{conns: conns})
 		doc := parse(t, do(t, h, request{path: "/c/main"}))
-		if got := text(doc.Find("#queues-table .conn-error-text")); got != "NOAUTH Authentication required." {
-			t.Errorf("error = %q", got)
+		if title, msg := text(doc.Find("#queues-table .conn-error-title")), text(doc.Find("#queues-table .conn-error-text")); title != "Could not load queues" ||
+			msg != "NOAUTH Authentication required." {
+			t.Errorf("error = %q %q", title, msg)
 		}
-		if doc.Find("#nav-main .dot-down").Length() != 1 || text(doc.Find("#conn-health")) != "Unreachable" {
-			t.Error("sidebar or badge not down")
+		if doc.Find("#nav-main .dot-down").Length() != 0 || text(doc.Find("#conn-health")) == "Unreachable" {
+			t.Error("an error reply shows the connection down")
 		}
 	})
-	t.Run("slow read: checking", func(t *testing.T) {
+	t.Run("unreachable: the badge is down", func(t *testing.T) {
 		conns := defaultConns()
-		conns.block = map[string]bool{"main": true}
-		d, h, _ := newTestDeps(t, testOpts{conns: conns})
-		d.pageBudget = 20 * time.Millisecond
-		doc := parse(t, do(t, h, request{path: "/c/main"}))
-		if got := text(doc.Find("#queues-table .checking")); got != "Checking" {
-			t.Errorf("checking = %q", got)
+		conns.queueErrs = map[string]error{"main": unreachable("connection refused")}
+		h, _ := newTestServer(t, testOpts{conns: conns})
+		if got := text(parse(t, do(t, h, request{path: "/c/main"})).Find("#conn-health")); got != "Unreachable" {
+			t.Errorf("badge = %q", got)
 		}
 	})
 	t.Run("no queues", func(t *testing.T) {

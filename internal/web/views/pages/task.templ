@@ -19,8 +19,8 @@ import (
 templ TaskPage(m Task) {
 	@views.Page(m.Layout, lastCrumb(m.Layout)) {
 		<div id={ TaskPageID } class="content-region" hx-sync="this:queue last">
-			@taskPoll(m, false)
-			@taskBanner(m, false)
+			@livePoll(m.Live, false)
+			@liveBanner(m.Live, taskFailed(), false)
 			@taskMain(m, false)
 		</div>
 	}
@@ -29,11 +29,11 @@ templ TaskPage(m Task) {
 // TaskPoll answers a poll, or an action posted with htmx (which gets
 // every region, actions included).
 templ TaskPoll(m Task) {
-	@taskPoll(m, true)
-	@taskBanner(m, true)
-	if m.NotFound || !m.Poll || m.Init {
+	@livePoll(m.Live, true)
+	@liveBanner(m.Live, taskFailed(), true)
+	if m.NotFound || !m.Live.Poll || m.Live.Init {
 		@taskMain(m, true)
-	} else if !m.KeepPage {
+	} else if !m.Live.Keep {
 		if m.Changed {
 			@taskBadge(m, true)
 			@taskError(m, true)
@@ -58,44 +58,16 @@ templ TaskActionResult(m Task, failures []TaskFailure) {
 	}
 }
 
-// taskPoll stops polling once the task is gone.
-templ taskPoll(m Task, oob bool) {
-	if m.NotFound {
-		<div id={ TaskPollID } hidden { components.OOB(oob)... }></div>
-	} else {
-		<div id={ TaskPollID } data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-sync={ "#" + TaskPageID + ":abort" } hidden { components.OOB(oob)... }></div>
-	}
-}
-
-templ taskBanner(m Task, oob bool) {
-	<div id={ TaskBannerID } class="state-banner" { components.OOB(oob)... }>
-		if m.KeepPage {
-			<div class="card">
-				switch m.State {
-					case DataFailed:
-						@readError(m.Down, m.Error, taskFailed())
-					default:
-						<p class="checking">Checking</p>
-				}
-			</div>
-		}
-	</div>
-}
-
 templ taskMain(m Task, oob bool) {
 	<div id={ TaskMainID } class="content-region" { components.OOB(oob)... }>
-		switch {
+		switch  {
 			case m.NotFound:
 				<div class="page-head">
 					<h1 class="h1">Task not found</h1>
 				</div>
-			case m.State == DataFailed:
+			case m.Live.State != DataReady:
 				<section class="card">
-					@readError(m.Down, m.Error, taskFailed())
-				</section>
-			case m.State == DataChecking:
-				<section class="card">
-					<p class="checking">Checking</p>
+					@liveData(m.Live, taskFailed())
 				</section>
 			default:
 				<a id="task-back" class="back-link" href={ templ.SafeURL(m.TabURL) }>

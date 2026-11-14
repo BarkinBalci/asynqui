@@ -25,7 +25,7 @@ templ QueuePage(m Queue) {
 			@queueNotFound(m, false)
 		} else {
 			<div id={ QueuePageID } class="content-region" hx-sync="this:queue last">
-				@queuePoll(m, false)
+				@livePoll(m.Live, false)
 				<div class="page-head queue-head">
 					<div class="head-row">
 						<h1 class="h1"><bdi>{ m.Name }</bdi></h1>
@@ -40,7 +40,7 @@ templ QueuePage(m Queue) {
 					</div>
 				</div>
 				@findDialog(m.Find)
-				@queueBanner(m, false)
+				@liveBanner(m.Live, queueFailed(), false)
 				@queueStats(m, false)
 				@taskCard(m, false)
 			</div>
@@ -75,14 +75,14 @@ templ QueuePoll(m Queue) {
 }
 
 templ queueLive(m Queue) {
-	@queuePoll(m, true)
+	@livePoll(m.Live, true)
 	@queueBadge(m, true)
 	@queueToggle(m, true)
-	@queueBanner(m, true)
+	@liveBanner(m.Live, queueFailed(), true)
 	@queueStats(m, true)
-	if !m.Poll || m.Init {
+	if !m.Live.Poll || m.Live.Init {
 		@taskCard(m, true)
-	} else if !m.KeepTable {
+	} else if !m.Live.Keep {
 		for _, t := range m.Tabs {
 			@tabCount(t, true)
 		}
@@ -108,13 +108,9 @@ templ QueueActionResult(m Queue, queueFailures []ActionFailure, taskFailures []T
 	}
 }
 
-templ queuePoll(m Queue, oob bool) {
-	<div id={ QueuePollID } data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-sync={ "#" + QueuePageID + ":abort" } hidden { components.OOB(oob)... }></div>
-}
-
 templ queueBadge(m Queue, oob bool) {
 	<span id={ QueueBadgeID } { components.OOB(oob)... }>
-		if m.State == DataReady {
+		if m.Live.State == DataReady {
 			@components.QueueStateBadge(m.Paused)
 		}
 	</span>
@@ -125,7 +121,7 @@ templ queueBadge(m Queue, oob bool) {
 // page.
 templ queueToggle(m Queue, oob bool) {
 	<span id={ QueueToggleID } { components.OOB(oob)... }>
-		if m.State == DataReady {
+		if m.Live.State == DataReady {
 			<form class="inline-form" method="post" action={ templ.SafeURL(m.Toggle.URL) } hx-post={ m.Toggle.URL } hx-swap="none">
 				<input type="hidden" name="queue" value={ m.Toggle.Queue }/>
 				<input type="hidden" name="next" value={ m.Toggle.Next }/>
@@ -154,25 +150,9 @@ templ toggleLabel(paused bool) {
 	}
 }
 
-// queueBanner is shown when a poll finds no data but keeps the page.
-templ queueBanner(m Queue, oob bool) {
-	<div id={ QueueBannerID } class="state-banner" { components.OOB(oob)... }>
-		if m.KeepTable {
-			<div class="card">
-				switch m.State {
-					case DataFailed:
-						@readError(m.Down, m.Error, queueFailed())
-					default:
-						<p class="checking">Checking</p>
-				}
-			</div>
-		}
-	</div>
-}
-
 templ queueStats(m Queue, oob bool) {
 	<section id={ QueueStatsID } class="kpis" aria-label="Queue stats" { components.OOB(oob)... }>
-		if m.State == DataReady {
+		if m.Live.State == DataReady {
 			@kpi(format.Number(m.Stats.Size), false) {
 				Size
 			}
@@ -211,88 +191,83 @@ templ kpi(value string, bad bool) {
 // dialogs. User requests replace it whole.
 templ taskCard(m Queue, oob bool) {
 	<section id={ TaskCardID } class="card tbl-card" aria-label="Tasks" { components.OOB(oob)... }>
-		switch m.State {
-			case DataFailed:
-				@readError(m.Down, m.Error, queueFailed())
-			case DataChecking:
-				<p class="checking">Checking</p>
-			default:
-				<nav class="tabs" aria-label="Task states">
-					for _, t := range m.Tabs {
-						<a id={ TabID(t.State) } class={ "tab", templ.KV("on", t.On) } href={ templ.SafeURL(t.URL) } hx-get={ t.URL } hx-swap="none" hx-push-url="true" { currentAttr(t.On)... }>
-							{ stateText(t.State) + " " }
-							@tabCount(t, false)
-						</a>
-					}
-				</nav>
-				if m.Notice != nil {
-					<div class="notice" role="status">
-						@noticeText(*m.Notice)
-					</div>
+		@liveData(m.Live, queueFailed()) {
+			<nav class="tabs" aria-label="Task states">
+				for _, t := range m.Tabs {
+					<a id={ TabID(t.State) } class={ "tab", templ.KV("on", t.On) } href={ templ.SafeURL(t.URL) } hx-get={ t.URL } hx-swap="none" hx-push-url="true" { currentAttr(t.On)... }>
+						{ stateText(t.State) + " " }
+						@tabCount(t, false)
+					</a>
 				}
-				<form id={ TasksFormID } method="post" action={ templ.SafeURL(m.FormURL) }></form>
-				if m.groupList() {
-					<div hx-sync={ "#" + QueuePageID + ":queue all" }>
-						@components.SelectionToolbar(TasksFormID, nil) {
-							for _, b := range m.Actions {
-								@verbButton(b)
-							}
+			</nav>
+			if m.Notice != nil {
+				<div class="notice" role="status">
+					@noticeText(*m.Notice)
+				</div>
+			}
+			<form id={ TasksFormID } method="post" action={ templ.SafeURL(m.FormURL) }></form>
+			if m.groupList() {
+				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+					@components.SelectionToolbar(TasksFormID, nil) {
+						for _, b := range m.Actions {
+							@verbButton(b)
 						}
-					</div>
-					@groupsTable(m, false)
-					<div hx-sync={ "#" + QueuePageID + ":queue all" }>
-						for _, d := range m.AllDialogs {
-							@components.ConfirmDialog(d.Dialog, groupsTitle(d.Verb), allLabel(d.Verb)) {
-								<ul class="dlg-list mono" data-sel-names></ul>
-								if d.Verb == TaskArchive {
-									@archiveWarning()
-								}
-							}
-						}
-					</div>
-				} else {
-					if m.Group != "" {
-						<div class="group-nav">
-							<a id="group-back" href={ templ.SafeURL(m.GroupsURL) } hx-get={ m.GroupsURL } hx-swap="none" hx-push-url="true">Groups</a>
-							<span class="muted" aria-hidden="true">/</span>
-							<span class="mono"><bdi>{ format.VisibleID(m.Group) }</bdi></span>
-						</div>
 					}
-					<div hx-sync={ "#" + QueuePageID + ":queue all" }>
-						@components.SelectionToolbar(TasksFormID, nil) {
-							<input id={ TasksAllID } type="hidden" form={ TasksFormID } name="all" value="" data-everything={ TasksFormID }/>
-							for _, b := range m.Actions {
-								@verbButton(b)
-							}
-						}
-					</div>
-					@tasksBanner(m, false)
-					@tasksTable(m, false)
-					<div class="tbl-foot">
-						@sizePicker(m.Sizes)
-						@tasksPager(m.Pager, false)
-					</div>
-					<div hx-sync={ "#" + QueuePageID + ":queue all" }>
-						if m.ArchiveDialog.ID != "" {
-							@components.ConfirmDialog(m.ArchiveDialog, archiveTasksTitle(), verbLabel(TaskArchive)) {
-								<ul class="dlg-list mono" data-sel-names></ul>
+				</div>
+				@groupsTable(m, false)
+				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+					for _, d := range m.AllDialogs {
+						@components.ConfirmDialog(d.Dialog, groupsTitle(d.Verb), allLabel(d.Verb)) {
+							<ul class="dlg-list mono" data-sel-names></ul>
+							if d.Verb == TaskArchive {
 								@archiveWarning()
 							}
 						}
-						if m.DeleteDialog.ID != "" {
-							@components.ConfirmDialog(m.DeleteDialog, deleteTasksTitle(), verbLabel(TaskDelete)) {
-								<ul class="dlg-list mono" data-sel-names></ul>
-							}
-						}
-						for _, d := range m.AllDialogs {
-							@components.ConfirmDialog(d.Dialog, allTitle(d.Verb, m.Tab, m.Group, m.Total), allLabel(d.Verb)) {
-								if d.Verb == TaskArchive {
-									@archiveWarning()
-								}
-							}
-						}
+					}
+				</div>
+			} else {
+				if m.Group != "" {
+					<div class="group-nav">
+						<a id="group-back" href={ templ.SafeURL(m.GroupsURL) } hx-get={ m.GroupsURL } hx-swap="none" hx-push-url="true">Groups</a>
+						<span class="muted" aria-hidden="true">/</span>
+						<span class="mono"><bdi>{ format.VisibleID(m.Group) }</bdi></span>
 					</div>
 				}
+				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+					@components.SelectionToolbar(TasksFormID, nil) {
+						<input id={ TasksAllID } type="hidden" form={ TasksFormID } name="all" value="" data-everything={ TasksFormID }/>
+						for _, b := range m.Actions {
+							@verbButton(b)
+						}
+					}
+				</div>
+				@tasksBanner(m, false)
+				@tasksTable(m, false)
+				<div class="tbl-foot">
+					@sizePicker(m.Sizes)
+					@tasksPager(m.Pager, false)
+				</div>
+				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+					if m.ArchiveDialog.ID != "" {
+						@components.ConfirmDialog(m.ArchiveDialog, archiveTasksTitle(), verbLabel(TaskArchive)) {
+							<ul class="dlg-list mono" data-sel-names></ul>
+							@archiveWarning()
+						}
+					}
+					if m.DeleteDialog.ID != "" {
+						@components.ConfirmDialog(m.DeleteDialog, deleteTasksTitle(), verbLabel(TaskDelete)) {
+							<ul class="dlg-list mono" data-sel-names></ul>
+						}
+					}
+					for _, d := range m.AllDialogs {
+						@components.ConfirmDialog(d.Dialog, allTitle(d.Verb, m.Tab, m.Group, m.Total), allLabel(d.Verb)) {
+							if d.Verb == TaskArchive {
+								@archiveWarning()
+							}
+						}
+					}
+				</div>
+			}
 		}
 	</section>
 }
@@ -309,7 +284,7 @@ templ tabCount(t Tab, oob bool) {
 }
 
 templ verbButton(b TaskActionButton) {
-	switch {
+	switch  {
 		case b.All && b.Verb == TaskRun:
 			@components.ActionButton(b.Action, components.IconRun("14"), allLabelText(b.Verb))
 		case b.All && b.Verb == TaskArchive:
@@ -476,7 +451,7 @@ templ stateCells(s TaskState, r TaskRow) {
 				@optTimeAbs(r.Started)
 			</td>
 			<td class="num">
-				switch {
+				switch  {
 					case r.Started.IsZero():
 						—
 					case r.RunningFor < time.Second:
@@ -856,7 +831,7 @@ templ FindBody(f Find, cancelURL string) {
 			<p id="find-miss" class="find-miss" role="status">Task not found</p>
 		}
 		if f.Failed != "" {
-			@readError(f.Down, f.Failed, findFailed())
+			@liveData(Live{State: DataFailed, Error: f.Failed, Down: f.Down}, findFailed())
 		}
 		<div class="dlgacts">
 			if cancelURL != "" {
@@ -874,23 +849,6 @@ func missedAttrs(missed bool) templ.Attributes {
 		return templ.Attributes{"aria-invalid": "true", "aria-describedby": "find-miss"}
 	}
 	return nil
-}
-
-// readError is why a page has no data: "Connection failed" when the
-// server could not be reached, failed (with the error) when it answered
-// with an error, such as NOPERM or LOADING.
-templ readError(down bool, msg string, failed templ.Component) {
-	if down {
-		@connError(msg)
-	} else {
-		<div class="conn-error page-error">
-			<div class="conn-error-title">
-				@components.IconAlert("16")
-				@failed
-			</div>
-			<div class="mono conn-error-text">{ msg }</div>
-		</div>
-	}
 }
 
 templ queueFailed() {
@@ -971,7 +929,7 @@ templ ConfirmTasksPage(m ConfirmTasks) {
 
 // ConfirmTitle is the confirmation page's title and last breadcrumb.
 templ confirmTitle(m ConfirmTasks) {
-	switch {
+	switch  {
 		case len(m.Groups) == 1:
 			{ allLabelText(m.Verb) + " " + scopeTasks(StateAggregating, m.Groups[0], 0) }
 		case len(m.Groups) > 1:

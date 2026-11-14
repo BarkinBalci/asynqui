@@ -21,7 +21,7 @@ import (
 templ QueuesPage(m Queues) {
 	@views.Page(m.Layout, lastCrumb(m.Layout)) {
 		<div id={ QueuesPageID } class="content-region" hx-sync="this:queue last">
-			@queuesPoll(m, false)
+			@livePoll(m.Live, false)
 			<div class="page-head">
 				<div class="head-title">
 					<h1 class="h1">
@@ -31,7 +31,7 @@ templ QueuesPage(m Queues) {
 				</div>
 				@connHealth(m.Health, false)
 			</div>
-			@connState(m, false)
+			@liveBanner(m.Live, queuesFailed(), false)
 			<section class="card tbl-card" aria-label="Queues">
 				<form id={ QueuesFormID } method="post" action={ templ.SafeURL(m.FormURL) }></form>
 				<div hx-sync={ "#" + QueuesPageID + ":queue all" }>
@@ -58,15 +58,15 @@ templ QueuesPage(m Queues) {
 // controls alone and swaps only the chart body, and when it finds no data
 // while the page shows a table it keeps the table and shows a banner.
 templ QueuesPoll(m Queues) {
-	@queuesPoll(m, true)
+	@livePoll(m.Live, true)
 	@connHealth(m.Health, true)
-	@connState(m, true)
-	if !m.KeepTable {
+	@liveBanner(m.Live, queuesFailed(), true)
+	if !m.Live.Keep {
 		@queuesTable(m, true)
 	}
-	if !m.Poll || m.Init {
+	if !m.Live.Poll || m.Live.Init {
 		@throughputCard(m.Throughput, true)
-	} else if m.State == DataReady {
+	} else if m.Live.State == DataReady {
 		@throughputBody(m.Throughput, true)
 	}
 	@components.TimeID(components.UpdatedID, m.Layout.TopBar.UpdatedAt, true)
@@ -127,151 +127,113 @@ templ deleteLabel() {
 	Delete
 }
 
-// queuesPoll is the poll trigger. Its own hx-sync drops it while another
-// request of the page is in flight and lets a user request abort it.
-templ queuesPoll(m Queues, oob bool) {
-	<div id={ QueuesPollID } data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-sync={ "#" + QueuesPageID + ":abort" } hidden { components.OOB(oob)... }></div>
-}
-
 templ connHealth(h components.Health, oob bool) {
 	<span id={ ConnHealthID } { components.OOB(oob)... }>
 		@components.HealthBadge(h)
 	</span>
 }
 
-// connState is the banner a poll shows when it finds no data but keeps
-// the table; empty otherwise.
-templ connState(m Queues, oob bool) {
-	<div id={ ConnStateID } class="state-banner" { components.OOB(oob)... }>
-		if m.KeepTable {
-			<div class="card">
-				switch m.State {
-					case DataFailed:
-						@connError(m.Error)
-					default:
-						<p class="checking">Checking</p>
-				}
-			</div>
-		}
-	</div>
-}
-
 templ queuesTable(m Queues, oob bool) {
 	<div id={ QueuesTableID } { components.OOB(oob)... }>
 		<input type="hidden" form={ QueuesFormID } name="next" value={ m.Next }/>
-		switch m.State {
-			case DataFailed:
-				@connError(m.Error)
-			case DataChecking:
-				<p class="checking">Checking</p>
-			default:
-				@components.Table("queues") {
-					<thead>
-						<tr>
-							@components.SelectAllHeader(QueuesSelectAll, QueuesFormID) {
-								Select all queues
-							}
-							@components.SortHeader(m.Heads[ColName]) {
-								Queue
-							}
-							@components.SortHeader(m.Heads[ColState]) {
-								State
-							}
-							@components.SortHeader(m.Heads[ColSize]) {
-								Size
-							}
-							@components.SortHeader(m.Heads[ColPending]) {
-								Pending
-							}
-							@components.SortHeader(m.Heads[ColActive]) {
-								Active
-							}
-							@components.SortHeader(m.Heads[ColScheduled]) {
-								Scheduled
-							}
-							@components.SortHeader(m.Heads[ColRetry]) {
-								Retry
-							}
-							@components.SortHeader(m.Heads[ColArchived]) {
-								Archived
-							}
-							@components.SortHeader(m.Heads[ColLatency]) {
-								Latency
-							}
-							@components.SortHeader(m.Heads[ColMemory]) {
-								Memory
-							}
-							@components.SortHeader(m.Heads[ColProcessed]) {
-								Processed today
-							}
-							@components.SortHeader(m.Heads[ColFailed]) {
-								Failed today
-							}
-						</tr>
-					</thead>
-					<tbody id={ QueuesRowsID }>
-						if len(m.Rows) == 0 {
-							@components.EmptyRow(int(NumQueueColumns) + 1) {
-								No queues
-							}
+		@liveData(m.Live, queuesFailed()) {
+			@components.Table("queues") {
+				<thead>
+					<tr>
+						@components.SelectAllHeader(QueuesSelectAll, QueuesFormID) {
+							Select all queues
 						}
-						for _, r := range m.Rows {
-							<tr data-state={ queueState(r.Paused) } data-empty?={ r.Size == 0 } data-filter-text={ r.Name }>
-								@components.SelectCell(r.Select) {
-									Select queue { format.VisibleID(r.Name) }
-								}
-								<td><a id={ r.LinkID } class="row-link" href={ templ.SafeURL(r.URL) }>{ r.Name }</a></td>
-								<td>
-									@components.QueueStateBadge(r.Paused)
-								</td>
-								<td class="num strong">{ format.Number(r.Size) }</td>
-								<td class="num">{ format.Number(r.Pending) }</td>
-								<td class="num">{ format.Number(r.Active) }</td>
-								<td class="num">{ format.Number(r.Scheduled) }</td>
-								<td class={ "num", templ.KV("c-retry", r.Retry > 0) }>{ format.Number(r.Retry) }</td>
-								<td class={ "num", templ.KV("c-archived", r.Archived > 0) }>{ format.Number(r.Archived) }</td>
-								if r.Paused {
-									<td class="num">—</td>
-								} else {
-									<td class={ "num", templ.KV("c-failed", r.LatencyHigh) }>{ format.Latency(r.Latency) }</td>
-								}
-								<td class="num">{ format.Bytes(r.Memory) }</td>
-								<td class="num">{ format.Number(r.Processed) }</td>
-								<td class={ "num", templ.KV("c-failed", r.Failed > 0) }>{ format.Number(r.Failed) }</td>
-							</tr>
+						@components.SortHeader(m.Heads[ColName]) {
+							Queue
 						}
-					</tbody>
-					if len(m.Rows) > 0 {
-						<tfoot>
-							<tr>
-								<td></td>
-								<th scope="row">Total</th>
-								<td></td>
-								<td class="num">{ format.Number(m.Total.Size) }</td>
-								<td class="num">{ format.Number(m.Total.Pending) }</td>
-								<td class="num">{ format.Number(m.Total.Active) }</td>
-								<td class="num">{ format.Number(m.Total.Scheduled) }</td>
-								<td class="num">{ format.Number(m.Total.Retry) }</td>
-								<td class="num">{ format.Number(m.Total.Archived) }</td>
-								<td class="num">—</td>
-								<td class="num">{ format.Bytes(m.Total.Memory) }</td>
-								<td class="num">{ format.Number(m.Total.Processed) }</td>
-								<td class={ "num", templ.KV("c-failed", m.Total.Failed > 0) }>{ format.Number(m.Total.Failed) }</td>
-							</tr>
-						</tfoot>
+						@components.SortHeader(m.Heads[ColState]) {
+							State
+						}
+						@components.SortHeader(m.Heads[ColSize]) {
+							Size
+						}
+						@components.SortHeader(m.Heads[ColPending]) {
+							Pending
+						}
+						@components.SortHeader(m.Heads[ColActive]) {
+							Active
+						}
+						@components.SortHeader(m.Heads[ColScheduled]) {
+							Scheduled
+						}
+						@components.SortHeader(m.Heads[ColRetry]) {
+							Retry
+						}
+						@components.SortHeader(m.Heads[ColArchived]) {
+							Archived
+						}
+						@components.SortHeader(m.Heads[ColLatency]) {
+							Latency
+						}
+						@components.SortHeader(m.Heads[ColMemory]) {
+							Memory
+						}
+						@components.SortHeader(m.Heads[ColProcessed]) {
+							Processed today
+						}
+						@components.SortHeader(m.Heads[ColFailed]) {
+							Failed today
+						}
+					</tr>
+				</thead>
+				<tbody id={ QueuesRowsID }>
+					if len(m.Rows) == 0 {
+						@components.EmptyRow(int(NumQueueColumns) + 1) {
+							No queues
+						}
 					}
+					for _, r := range m.Rows {
+						<tr data-state={ queueState(r.Paused) } data-empty?={ r.Size == 0 } data-filter-text={ r.Name }>
+							@components.SelectCell(r.Select) {
+								Select queue { format.VisibleID(r.Name) }
+							}
+							<td><a id={ r.LinkID } class="row-link" href={ templ.SafeURL(r.URL) }>{ r.Name }</a></td>
+							<td>
+								@components.QueueStateBadge(r.Paused)
+							</td>
+							<td class="num strong">{ format.Number(r.Size) }</td>
+							<td class="num">{ format.Number(r.Pending) }</td>
+							<td class="num">{ format.Number(r.Active) }</td>
+							<td class="num">{ format.Number(r.Scheduled) }</td>
+							<td class={ "num", templ.KV("c-retry", r.Retry > 0) }>{ format.Number(r.Retry) }</td>
+							<td class={ "num", templ.KV("c-archived", r.Archived > 0) }>{ format.Number(r.Archived) }</td>
+							if r.Paused {
+								<td class="num">—</td>
+							} else {
+								<td class={ "num", templ.KV("c-failed", r.LatencyHigh) }>{ format.Latency(r.Latency) }</td>
+							}
+							<td class="num">{ format.Bytes(r.Memory) }</td>
+							<td class="num">{ format.Number(r.Processed) }</td>
+							<td class={ "num", templ.KV("c-failed", r.Failed > 0) }>{ format.Number(r.Failed) }</td>
+						</tr>
+					}
+				</tbody>
+				if len(m.Rows) > 0 {
+					<tfoot>
+						<tr>
+							<td></td>
+							<th scope="row">Total</th>
+							<td></td>
+							<td class="num">{ format.Number(m.Total.Size) }</td>
+							<td class="num">{ format.Number(m.Total.Pending) }</td>
+							<td class="num">{ format.Number(m.Total.Active) }</td>
+							<td class="num">{ format.Number(m.Total.Scheduled) }</td>
+							<td class="num">{ format.Number(m.Total.Retry) }</td>
+							<td class="num">{ format.Number(m.Total.Archived) }</td>
+							<td class="num">—</td>
+							<td class="num">{ format.Bytes(m.Total.Memory) }</td>
+							<td class="num">{ format.Number(m.Total.Processed) }</td>
+							<td class={ "num", templ.KV("c-failed", m.Total.Failed > 0) }>{ format.Number(m.Total.Failed) }</td>
+						</tr>
+					</tfoot>
 				}
+			}
 		}
-	</div>
-}
-
-templ connError(msg string) {
-	<div class="conn-error page-error">
-		<div class="conn-error-title">
-			@components.IconAlert("16")
-			Connection failed
-		</div>
-		<div class="mono conn-error-text">{ msg }</div>
 	</div>
 }
 
@@ -330,17 +292,15 @@ templ throughputBody(t Throughput, oob bool) {
 			case DataChecking:
 				<p class="checking">Checking</p>
 			case DataFailed:
-				<div class="conn-error page-error">
-					<div class="conn-error-title">
-						@components.IconAlert("16")
-						Could not load throughput
-					</div>
-					<div class="mono conn-error-text">{ t.Error }</div>
-				</div>
+				@errorBox(throughputFailed(), t.Error)
 			default:
 				@components.ThroughputChart(t.Chart)
 		}
 	</div>
+}
+
+templ throughputFailed() {
+	Could not load throughput
 }
 
 func onClass(on bool) templ.Attributes {

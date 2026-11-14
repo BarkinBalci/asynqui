@@ -27,7 +27,7 @@ func renderDoc(t *testing.T, m Queues) *goquery.Document {
 func text(s *goquery.Selection) string { return strings.Join(strings.Fields(s.Text()), " ") }
 
 func tableModel() Queues {
-	m := Queues{Health: components.HealthUp, Next: "/c/main", PollURL: "/c/main", Throughput: Throughput{Show: false}}
+	m := Queues{Health: components.HealthUp, Next: "/c/main", Live: Live{PollURL: "/c/main"}, Throughput: Throughput{Show: false}}
 	for c := range NumQueueColumns {
 		m.Heads[c] = components.SortHead{ID: "sort-" + string(rune('a'+c)), URL: "/c/main?x", Num: c >= ColSize}
 	}

@@ -51,11 +51,11 @@ type taskAnswer struct {
 }
 
 func taskAnswerFor(r *http.Request) taskAnswer {
-	if !isFragment(r) || r.Header.Get("HX-Trigger") != pages.TaskPollID {
-		return taskAnswer{}
+	ans := taskAnswer{answer: liveAnswer(r, pages.TaskPollID)}
+	if ans.poll {
+		ans.seen = r.URL.Query().Get("seen")
 	}
-	q := r.URL.Query()
-	return taskAnswer{answer: answer{poll: true, init: q.Get("poll") == pollInit}, seen: q.Get("seen")}
+	return ans
 }
 
 // handleTask serves GET /c/{conn}/queues/{queue}/tasks/{id}, the Task
@@ -83,39 +83,16 @@ func handleTask(d *deps) http.Handler {
 
 // taskModel reads the task within the page budget and builds the page.
 func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView, ans taskAnswer) pages.Task {
-	name, health := a.conn.Name(), a.conn.Health()
-	m := pages.Task{Queue: queue, ID: id, Poll: ans.poll, Init: ans.init}
-	var (
-		t        conn.Task
-		override map[string]components.Health
-	)
-	switch health.State {
-	case conn.StateDown:
-		m.State, m.Error, m.Down = pages.DataFailed, errText(health.Err), true
-	default:
-		ctx, cancel := context.WithTimeout(r.Context(), d.pageBudget)
-		defer cancel()
-		var err error
-		t, err = a.conn.Task(ctx, queue, id)
-		switch {
-		case errors.Is(err, conn.ErrTaskNotFound), errors.Is(err, conn.ErrQueueNotFound):
-			m.NotFound = true
-		case err != nil && ctx.Err() != nil:
-			m.State = pages.DataChecking
-		case err != nil:
-			// Only a server that cannot be reached is down; an error
-			// reply (NOPERM, LOADING) shows as itself.
-			m.State, m.Error, m.Down = pages.DataFailed, errText(err), conn.Unreachable(err)
-			if m.Down {
-				override = map[string]components.Health{name: components.HealthDown}
-			}
-		}
-	}
-	m.KeepPage = ans.poll && !ans.init && !m.NotFound && m.State != pages.DataReady
+	name := a.conn.Name()
+	ctx, cancel := d.pageContext(r.Context())
+	defer cancel()
+	t, rd := readLive(ctx, a, func(ctx context.Context) (conn.Task, error) { return a.conn.Task(ctx, queue, id) })
+	m := pages.Task{Queue: queue, ID: id, NotFound: missing(&rd, conn.ErrTaskNotFound, conn.ErrQueueNotFound)}
+	found := rd.state == pages.DataReady && !m.NotFound
 
 	queueURL := d.url("c", name, "queues", queue)
-	crumbs := []components.Crumb{{Text: name, URL: d.url("c", name)}, {Text: queue, URL: queueURL}}
-	if m.State == pages.DataReady && !m.NotFound {
+	crumbs := []components.Crumb{{Text: queue, URL: queueURL}}
+	if found {
 		tv := tabView(t.State, pageSizes()[0])
 		if t.State == conn.TaskAggregating {
 			tv.group = t.Group
@@ -125,21 +102,23 @@ func (d *deps) taskModel(r *http.Request, a access, queue, id string, v taskView
 		crumbs = append(crumbs, components.Crumb{Label: pages.StateName(pages.TaskState(t.State)), URL: tab})
 	}
 	crumbs = append(crumbs, components.Crumb{Text: format.ShortID(format.VisibleID(id)), Mono: true, Title: id})
-	m.Layout = d.layoutWith(r, a, components.SectionQueues, crumbs, d.visible(a.id), override)
+	m.Layout = d.liveLayout(r, a, components.SectionQueues, rd, crumbs...)
 	m.QueueURL = queueURL
 
 	pq := v.values()
-	if m.State != pages.DataReady && !m.KeepPage {
-		pq.Set("poll", pollInit)
-	}
-	if m.State != pages.DataReady || m.NotFound {
-		m.PollURL = d.urlQuery(pq, "c", name, "queues", queue, "tasks", id)
-		return m
-	}
 	state := pages.StateParam(pages.TaskState(t.State))
 	seen := state + "." + taskVersion(t)
-	pq.Set("seen", seen)
-	m.PollURL = d.urlQuery(pq, "c", name, "queues", queue, "tasks", id)
+	if found {
+		pq.Set("seen", seen)
+	}
+	m.Live = d.live(ans.answer, pages.TaskPageID, pages.TaskPollID, rd, found, pq, "c", name, "queues", queue, "tasks", id)
+	m.Live.BannerID = pages.TaskBannerID
+	if m.NotFound {
+		m.Live.PollURL = "" // the task is gone: stop polling
+	}
+	if !found {
+		return m
+	}
 	seenState, _, _ := strings.Cut(ans.seen, ".")
 	m.Changed = ans.poll && ans.seen != seen
 	m.StateChanged = ans.poll && seenState != state
