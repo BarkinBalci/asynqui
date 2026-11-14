@@ -679,6 +679,16 @@ func TestTaskCacheKeys(t *testing.T) {
 	}
 }
 
+// A failed group read names the queue and the group.
+func TestGroupTasksError(t *testing.T) {
+	f := newFakeTasks()
+	f.err = errors.New("boom")
+	c := taskConn(t, f, "emails")
+	if _, err := c.ListGroupTasks(t.Context(), "emails", "a", 1, 20); err == nil || err.Error() != "list tasks of emails group a: boom" {
+		t.Errorf("err = %v", err)
+	}
+}
+
 func TestGroupTasks(t *testing.T) {
 	agg := func(id, group string) *asynq.TaskInfo {
 		info := ti("emails", id, asynq.TaskStateAggregating)

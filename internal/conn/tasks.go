@@ -243,7 +243,7 @@ func (c *Conn) ListTasks(ctx context.Context, queue string, state TaskState, pag
 		case TaskActive:
 			return c.listActive(ctx, queue, page, size)
 		case TaskPending:
-			return c.listInspector(queue, page, size, c.tasks.ListPendingTasks)
+			return c.listInspector(queue, queue, page, size, c.tasks.ListPendingTasks)
 		}
 		if err := c.checkQueue(queue); err != nil {
 			return nil, err
@@ -256,11 +256,12 @@ func (c *Conn) ListTasks(ctx context.Context, queue string, state TaskState, pag
 	})
 }
 
-// listInspector is one page of tasks from an Inspector list method.
-func (c *Conn) listInspector(queue string, page, size int, list func(string, ...asynq.ListOption) ([]*asynq.TaskInfo, error)) ([]Task, error) {
+// listInspector is one page of tasks from an Inspector list method. what
+// names the list in an error: the queue, or a queue's group.
+func (c *Conn) listInspector(what, queue string, page, size int, list func(string, ...asynq.ListOption) ([]*asynq.TaskInfo, error)) ([]Task, error) {
 	infos, err := list(queue, asynq.PageSize(size), asynq.Page(page))
 	if err != nil {
-		return nil, fmt.Errorf("list tasks of %s: %w", queue, taskErr(err))
+		return nil, fmt.Errorf("list tasks of %s: %w", what, taskErr(err))
 	}
 	out := make([]Task, len(infos))
 	for i, ti := range infos {
@@ -272,7 +273,7 @@ func (c *Conn) listInspector(queue string, page, size int, list func(string, ...
 // listActive is one page of the queue's active tasks, from the Inspector,
 // with each task's start from the servers' worker lists.
 func (c *Conn) listActive(ctx context.Context, queue string, page, size int) ([]Task, error) {
-	out, err := c.listInspector(queue, page, size, c.tasks.ListActiveTasks)
+	out, err := c.listInspector(queue, queue, page, size, c.tasks.ListActiveTasks)
 	if err != nil || len(out) == 0 {
 		return out, err
 	}
@@ -372,7 +373,7 @@ func (c *Conn) ListGroupTasks(ctx context.Context, queue, group string, page, si
 		if err := c.checkQueue(queue); err != nil {
 			return nil, err
 		}
-		return c.listInspector(queue, page, size, func(q string, opts ...asynq.ListOption) ([]*asynq.TaskInfo, error) {
+		return c.listInspector(queue+" group "+group, queue, page, size, func(q string, opts ...asynq.ListOption) ([]*asynq.TaskInfo, error) {
 			return c.tasks.ListAggregatingTasks(q, group, opts...)
 		})
 	})
