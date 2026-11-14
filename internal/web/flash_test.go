@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/BarkinBalci/asynqui/internal/config"
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
@@ -28,26 +29,21 @@ func roundTrip(t *testing.T, d *deps, f pages.Flash, tamper func(string) string)
 	return d.takeFlash(httptest.NewRecorder(), r, "main")
 }
 
-func TestFlashSigned(t *testing.T) {
-	d, _, _ := newTestDeps(t, testOpts{})
-	d.flashCodec = newFlashCodec([]byte(strings.Repeat("k", 32)))
+func TestFlashRoundTrip(t *testing.T) {
+	d, _, _ := newTestDeps(t, testOpts{provider: config.ProviderBasic})
 	f := pages.Flash{Notice: &pages.TaskNotice{Verb: pages.TaskArchive, Count: 3},
 		TaskFailures: []pages.TaskFailure{{Verb: pages.TaskRun, ID: "p1", Detail: "boom"}}}
 	got, ok := roundTrip(t, d, f, nil)
 	if !ok || got.Notice == nil || got.Notice.Count != 3 || len(got.TaskFailures) != 1 || got.TaskFailures[0].Detail != "boom" {
-		t.Errorf("signed round trip = %+v, %v", got, ok)
+		t.Errorf("round trip = %+v, %v", got, ok)
 	}
-	// A forged cookie (plain base64, or the signed one altered) is ignored.
-	forged := base64.RawURLEncoding.EncodeToString([]byte(`[{"v":2,"k":0,"a":true,"n":999}]`))
-	if _, ok := roundTrip(t, d, f, func(string) string { return forged }); ok {
-		t.Error("unsigned cookie accepted")
-	}
-	if _, ok := roundTrip(t, d, f, func(v string) string { return v[:len(v)-2] + "xx" }); ok {
-		t.Error("altered cookie accepted")
+	// Plain base64 JSON, signed or not by session keys.
+	if _, ok := roundTrip(t, d, f, func(v string) string { return v + "!" }); ok {
+		t.Error("malformed cookie accepted")
 	}
 }
 
-func TestFlashUnsignedBounds(t *testing.T) {
+func TestFlashBounds(t *testing.T) {
 	d, _, _ := newTestDeps(t, testOpts{})
 	enc := func(s string) func(string) string {
 		return func(string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }

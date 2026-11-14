@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"unicode/utf8"
 
-	"github.com/gorilla/securecookie"
-
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
@@ -15,47 +13,18 @@ import (
 // across its redirect (post, redirect, get), so the page can show them as
 // toasts and a reload never posts again. It lives for a minute, is scoped
 // to the connection's page and is read once. It holds display data only
-// (queue and task names, counts and error text, which templ escapes).
-// With session keys configured it is signed with the session hash key
-// (securecookie, which binds the MAC to the cookie name and a timestamp);
-// without them (auth none) it is plain base64 JSON, bounded and
-// validated, so a forged one can only show a toast.
+// (queue and task names, counts and error text, which templ escapes). It
+// is plain base64 JSON, not signed: it is bounded and validated, so a
+// forged one can only show a toast.
 const (
 	flashCookie   = "asynqui_flash"
 	flashMaxAge   = 60
 	flashMaxItems = 20
 	flashMaxBytes = 3000 // encoded, well under the 4 KB cookie limit
 	flashMaxText  = 300  // per error text
-	// flashMaxCount bounds a notice's count from an unsigned cookie.
+	// flashMaxCount bounds a notice's count.
 	flashMaxCount = 1 << 40
 )
-
-// newFlashCodec signs the flash cookie with hashKey; nil without one.
-func newFlashCodec(hashKey []byte) *securecookie.SecureCookie {
-	if len(hashKey) == 0 {
-		return nil
-	}
-	c := securecookie.New(hashKey, nil)
-	c.SetSerializer(securecookie.NopEncoder{})
-	c.MaxAge(flashMaxAge)
-	return c
-}
-
-func (d *deps) encodeFlash(b []byte) (string, error) {
-	if d.flashCodec != nil {
-		return d.flashCodec.Encode(flashCookie, b)
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func (d *deps) decodeFlash(v string) ([]byte, error) {
-	if d.flashCodec != nil {
-		var b []byte
-		err := d.flashCodec.Decode(flashCookie, v, &b)
-		return b, err
-	}
-	return base64.RawURLEncoding.DecodeString(v)
-}
 
 // flashItem is one failure, or the result notice of a task action, with
 // short keys to keep the cookie small. A queue action failure has Q; a
@@ -103,7 +72,7 @@ func (d *deps) setFlashAll(w http.ResponseWriter, conn string, f pages.Flash) {
 		if err != nil {
 			return
 		}
-		if v, err := d.encodeFlash(b); err == nil && len(v) <= flashMaxBytes {
+		if v := base64.RawURLEncoding.EncodeToString(b); len(v) <= flashMaxBytes {
 			http.SetCookie(w, d.flash(conn, v, flashMaxAge))
 			return
 		}
@@ -135,7 +104,7 @@ func (d *deps) takeFlash(w http.ResponseWriter, r *http.Request, conn string) (p
 	if len(c.Value) > flashMaxBytes {
 		return out, false
 	}
-	b, err := d.decodeFlash(c.Value)
+	b, err := base64.RawURLEncoding.DecodeString(c.Value)
 	if err != nil {
 		return out, false
 	}
