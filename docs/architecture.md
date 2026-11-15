@@ -95,7 +95,7 @@ Startup and precedence rules are in [configuration.md](configuration.md#startup)
 
 ## Frontend conventions
 
-- **Views:** `views/layout.templ` is the page shell. `views/components/` holds shared pieces that map 1:1 to the style guide. `views/pages/` has one file per page, each taking one view-model struct.
+- **Views:** `views/layout.templ` is the page shell. `views/components/` holds the shared pieces. `views/pages/` has one file per page, each taking one view-model struct.
 - **htmx config** (set in `app.js` before any request): `allowEval = false`, `includeIndicatorStyles = false` (it would inject an inline `<style>`). No `hx-on` or `js:` attributes.
 - **Polling timers:** trigger filters such as `every 5s [document.visibilityState === 'visible']` need eval, so `app.js` owns the timers: it skips ticks while the tab is hidden and fires one refresh when it becomes visible. With "Off" no timer runs.
 - **Polling (`pages.Live`):** every connection page has a `*-page` wrapper that is the `hx-sync` scope of its requests, and a hidden `*-poll` element that polls with `hx-swap="none"` and `hx-sync="#…-page:abort"`, so a poll yields to any user request. The server tells a poll by `HX-Trigger`. Its answer replaces, out of band by id, the poll element itself, the data regions, the state banner, the Updated time and the sidebar list. User requests (sort, tab, page, range) use `this:queue last`, actions `queue all`. The Overview grid follows the same out-of-band scheme.
