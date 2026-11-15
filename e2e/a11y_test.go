@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	playwright "github.com/mxschmitt/playwright-go"
 )
 
 // axeFile is axe-core, vendored (testdata/axe-core-4.14.0, MPL-2.0) so
@@ -51,8 +53,9 @@ func testAccessibility(t *testing.T, h *harness) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p := h.newPage(t, h.open, pageOpts{})
 	for _, theme := range []string{"light", "dark"} {
-		p := h.newPage(t, h.open, pageOpts{cookies: map[string]string{"asynqui_theme": theme}})
+		p.ok(p.ctx.AddCookies([]playwright.OptionalCookie{{Name: "asynqui_theme", Value: theme, URL: new(h.open.url)}}), "theme cookie")
 		for _, pg := range a11yPages(h) {
 			p.open(pg.path)
 			time.Sleep(200 * time.Millisecond) // app.js renders times, reveals copy buttons
@@ -116,9 +119,8 @@ func testNoCSPViolations(t *testing.T, h *harness) {
 	p.ok(p.Locator("#queues-delete-cancel").Click(), "cancel")
 
 	// The login page, on the basic instance.
-	lp := h.newPage(t, h.basic, pageOpts{})
-	lp.open("/login")
-	lp.ok(lp.expect.Locator(lp.Locator("#login-username")).ToBeFocused(), "username autofocus")
+	p.open(h.basic.url + "/login")
+	p.ok(p.expect.Locator(p.Locator("#login-username")).ToBeFocused(), "username autofocus")
 }
 
 func firstServerID(t *testing.T, h *harness) string {

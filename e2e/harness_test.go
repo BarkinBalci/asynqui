@@ -38,6 +38,8 @@ type harness struct {
 	open, basic *instance
 	browser     playwright.Browser
 	fx          fixture
+	// results is where this test's videos and traces go.
+	results string
 }
 
 // instance is one running asynqui process.
@@ -45,11 +47,18 @@ type instance struct {
 	url string
 }
 
-// newHarness starts Redis, seeds the fixture, builds and starts asynqui
-// twice and launches Chromium. Everything stops when t's cleanups run.
+// newHarness empties the test's results directory, starts Redis, seeds
+// the fixture, builds and starts asynqui twice and launches Chromium.
+// Everything stops when t's cleanups run.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{}
+	h := &harness{results: filepath.Join(resultsDir, t.Name())}
+	if err := os.RemoveAll(h.results); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(h.results, 0o750); err != nil {
+		t.Fatal(err)
+	}
 	redisAddr := startRedis(t)
 	start := time.Now()
 	h.fx = seedFixture(t, redisAddr)

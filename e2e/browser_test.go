@@ -86,12 +86,17 @@ const recordCSP = `document.addEventListener("securitypolicyviolation", function
 		" at " + e.sourceFile + ":" + e.lineNumber);
 });`
 
+// newPage opens a tab in a new browser context, which records a video
+// and a trace (see record).
 func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 	t.Helper()
+	videos := t.TempDir()
 	opts := playwright.BrowserNewContextOptions{
 		BaseURL:     new(inst.url),
 		Locale:      new("en-US"),
 		Permissions: o.permissions,
+		Viewport:    viewport(),
+		RecordVideo: &playwright.RecordVideo{Dir: new(videos), Size: viewport()},
 	}
 	if o.timezone != "" {
 		opts.TimezoneId = new(o.timezone)
@@ -117,6 +122,7 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.record(t, bctx, pg)
 	pg.SetDefaultTimeout(10000)
 	p := &page{Page: pg, t: t, ctx: bctx, expect: playwright.NewPlaywrightAssertions(5000)}
 	pg.OnConsole(func(m playwright.ConsoleMessage) {

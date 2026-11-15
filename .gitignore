@@ -11,3 +11,4 @@ coverage.*
 .vscode/
 .claude/
 .task/
+/e2e/test-results/
