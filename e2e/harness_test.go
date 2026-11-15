@@ -104,14 +104,13 @@ func startRedis(t *testing.T) string {
 	return addr
 }
 
-// buildApp builds cmd/asynqui into a temporary directory. It stamps
-// main.version with the output of git describe without its "v", so a
-// checkout at a release tag reports that release.
+// buildApp builds cmd/asynqui into a temporary directory and stamps
+// main.version with appVersion.
 func buildApp(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "asynqui")
 	args := []string{"build", "-o", bin}
-	if v := describeVersion(t); v != "" {
+	if v := appVersion(t); v != "" {
 		args = append(args, "-ldflags", "-X main.version="+v)
 	}
 	cmd := exec.CommandContext(t.Context(), "go", append(args, "./cmd/asynqui")...)
@@ -122,11 +121,15 @@ func buildApp(t *testing.T) string {
 	return bin
 }
 
-// describeVersion returns the output of git describe for the checkout
-// without its "v", or "" outside git or without a reachable tag.
-func describeVersion(t *testing.T) string {
+// appVersion returns ASYNQUI_E2E_VERSION if set. Otherwise it returns the
+// output of git describe without its "v", so a checkout at a release tag
+// reports that release, or "" outside git or without a reachable tag.
+func appVersion(t *testing.T) string {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "git", "describe", "--tags", "--dirty")
+	if v := os.Getenv("ASYNQUI_E2E_VERSION"); v != "" {
+		return v
+	}
+	cmd := exec.CommandContext(t.Context(), "git", "describe", "--tags")
 	cmd.Dir = ".."
 	out, err := cmd.Output()
 	if err != nil {

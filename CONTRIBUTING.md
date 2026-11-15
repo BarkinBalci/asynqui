@@ -72,6 +72,7 @@ The browser tests are in `e2e/`, behind the `e2e` build tag, so `go test ./...` 
 |---|---|
 | `ASYNQUI_E2E_REDIS=host:port` | The Redis to use. If unset, testcontainers starts one in Docker. |
 | `ASYNQUI_E2E_HEADED=1` | Shows the browser |
+| `ASYNQUI_E2E_VERSION=x` | The version the build reports, instead of the `git describe` output |
 
 Each run leaves a video per test in `e2e/test-results/`, and a `.trace.zip` for each failed test. CI uploads the directory as the `e2e-test-results` artifact. Open a trace with `go run github.com/mxschmitt/playwright-go/cmd/playwright show-trace <file>.trace.zip` or on [trace.playwright.dev](https://trace.playwright.dev).
 
@@ -79,4 +80,4 @@ axe-core is vendored in `e2e/testdata`. To upgrade it, replace the directory wit
 
 ## Version stamping
 
-`task build` stamps `main.version` with the output of `git describe`. Set `VERSION=x` to override it. Release builds stamp the tag without its `v`. The browser tests stamp it with the output of `git describe` without its `v`, so at a release tag they show that release. A build without a stamped version reports the module version that the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none, as with `go run`.
+`task build` stamps `main.version` with the output of `git describe`. Set `VERSION=x` to override it. Release builds stamp the tag without its `v`. The browser tests stamp the output of `git describe` without its `v`, or `ASYNQUI_E2E_VERSION` if set. `VERSION=x task screenshots` and `VERSION=x task demo-gif` set it to `x`. A build without a stamped version reports the module version that the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none, as with `go run`.

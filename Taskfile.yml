@@ -45,13 +45,13 @@ tasks:
     desc: Regenerate docs/images/demo.gif (see CONTRIBUTING.md)
     env:
       ASYNQUI_E2E_GIF: RunRetries
-    cmd: go test -tags e2e -count=1 -run '^TestBrowser$/^RunRetries$' ./e2e/
+    cmd: ASYNQUI_E2E_VERSION="${VERSION:-}" go test -tags e2e -count=1 -run '^TestBrowser$/^RunRetries$' ./e2e/
 
   screenshots:
     desc: Regenerate the README screenshots in docs/images (see CONTRIBUTING.md)
     env:
       ASYNQUI_E2E_SCREENSHOTS: '1'
-    cmd: go test -tags e2e -count=1 -run '^TestBrowser$/^Accessibility$' ./e2e/
+    cmd: ASYNQUI_E2E_VERSION="${VERSION:-}" go test -tags e2e -count=1 -run '^TestBrowser$/^Accessibility$' ./e2e/
 
   demo:
     desc: Serve asynqui on a Redis seeded with the e2e fixture, flushing DBs 0-2 (see CONTRIBUTING.md)
