@@ -9,14 +9,13 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/config"
 )
 
-// options are the command-line settings. Precedence is flag > env > config
-// file > default; overrides holds only what a flag or env var set, and
-// config.Load applies it over the file.
+// options are the command-line settings. overrides holds only what a flag or
+// env var set.
 type options struct {
 	configPath string
 	overrides  config.Overrides
 	help       bool
-	version    bool // print the version and exit
+	version    bool
 }
 
 // usageError reports a command-line error that the flag package has already
@@ -27,8 +26,7 @@ func (e usageError) Error() string { return e.err.Error() }
 func (e usageError) Unwrap() error { return e.err }
 
 // parseFlags reads args (args[0] is the program name) and the ASYNQUI_*
-// environment variables. An explicitly set flag beats its env var; an env var
-// that is set but empty counts as unset.
+// environment variables. An env var that is set but empty counts as unset.
 func parseFlags(args []string, lookupEnv func(string) (string, bool), stderr io.Writer) (options, error) {
 	if len(args) == 0 {
 		return options{}, errors.New("args must start with the program name")
@@ -56,8 +54,6 @@ func parseFlags(args []string, lookupEnv func(string) (string, bool), stderr io.
 
 	set := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	// explicit returns the flag's value if it was set, else its env var if
-	// set and non-empty, else "".
 	explicit := func(name, value, env string) string {
 		if set[name] {
 			return value

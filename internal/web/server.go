@@ -24,8 +24,7 @@ const (
 )
 
 // defaultSummaryBudget bounds how long the Overview waits for connection
-// summaries. Cards that miss it render as "Checking"; their fetches go on
-// in conn's cache, so the next poll usually has them.
+// summaries; cards that miss it render as "Checking".
 const defaultSummaryBudget = 1500 * time.Millisecond
 
 // UpdateSource reports a release newer than the running version: its tag,
@@ -35,8 +34,7 @@ type UpdateSource interface {
 	Latest() (version string, ok bool)
 }
 
-// Deps are the dependencies of NewServer. Every field is required except
-// Version, Updates, Now, SummaryBudget and PageBudget.
+// Deps are the dependencies of NewServer. The fields up to Ready are required.
 type Deps struct {
 	Logger *slog.Logger
 	Config *config.Config
@@ -52,10 +50,10 @@ type Deps struct {
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 	// SummaryBudget bounds the Overview's wait for summaries. Zero means
-	// 1.5s.
+	// defaultSummaryBudget.
 	SummaryBudget time.Duration
 	// PageBudget bounds a connection page's wait for its data. Zero means
-	// 5s.
+	// defaultPageBudget.
 	PageBudget time.Duration
 }
 

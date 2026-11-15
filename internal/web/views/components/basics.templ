@@ -95,8 +95,7 @@ templ CrumbLabel(c Crumb) {
 	}
 }
 
-// OOB marks an element for an htmx out-of-band swap by id; pages use it
-// too.
+// OOB marks an element for an htmx out-of-band swap by id.
 func OOB(oob bool) templ.Attributes {
 	if oob {
 		return templ.Attributes{"hx-swap-oob": "true"}

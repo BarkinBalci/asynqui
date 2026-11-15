@@ -2,19 +2,14 @@ package conn
 
 // Direct reads of asynq's own Redis keys.
 //
-// This file is the one place asynqui assumes asynq's key layout. The
-// Inspector cannot list a state in reverse, so the scheduled, retry,
-// archived and completed tables' time sort reads one page of IDs straight
-// from the state's sorted set, in the requested order, and then hydrates
-// each ID with the public Inspector.GetTaskInfo. Only plain, read-only
-// range reads are allowed here: no writes, no Lua, no scans, no
-// client-side sorting. Pending and active tasks are listed through the
-// Inspector only.
+// This file is the one place asynqui assumes asynq's key layout, for the
+// time sort of the scheduled, retry, archived and completed tables: one
+// range read of a page of IDs, each then hydrated with the public
+// Inspector.GetTaskInfo. Only plain read-only range reads belong here: no
+// writes, Lua, scans or client-side sorting.
 //
-// Checked against hibiken/asynq v0.26.0 (the version in go.mod),
-// internal/base/base.go and internal/rdb. TestIntegrationKeys pins every
-// key and score below against that version: schedule, retry, archive and
-// complete real tasks, then compare the raw reads. Re-check both when
+// Checked against hibiken/asynq v0.26.0 internal/base and internal/rdb.
+// TestIntegrationKeys pins every key and score below; re-check both when
 // bumping asynq.
 //
 // Keys read (sorted sets, ZRANGE / ZREVRANGE ... WITHSCORES), for queue q:

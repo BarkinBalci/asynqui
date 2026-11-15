@@ -4,22 +4,20 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
-// ConnectionSource lists the configured connections in config order:
-// conn's Registry, or a fake in tests.
+// ConnectionSource lists the configured connections in config order.
 type ConnectionSource interface {
 	Connections() []Conn
 }
 
-// Conn is one connection as the web layer uses it: a *conn.Conn, or a fake
-// in tests. Each area declares its reads and actions next to its handlers.
+// Conn is one connection as the web layer uses it. Each area declares its
+// reads and actions next to its handlers.
 type Conn interface {
 	Name() string
 	// Addr is the display address, "host:port/db".
 	Addr() string
 	// Health is the cached result of the last health check; no I/O.
 	Health() conn.Health
-	// Backend is the server software detected so far: the info page is
-	// titled "Valkey info" for Valkey.
+	// Backend is the server software detected so far.
 	Backend() (conn.Backend, bool)
 	OverviewSource
 	QueueSource

@@ -36,11 +36,6 @@ type oidcProvider struct {
 
 // newOIDC runs discovery against the issuer, so it fails at startup when the
 // IdP is unreachable or misconfigured. The scopes always include openid.
-// The username claim is Identity.Name; for "email", email_verified must be
-// true (the boolean, or the string "true" as Amazon Cognito sends it). The
-// groups claim, a string array or a single string, is read from the ID
-// token, falling back to the userinfo endpoint. An *http.Client in ctx
-// talks to the IdP (see New).
 func newOIDC(ctx context.Context, o config.OIDC, logger *slog.Logger, now func() time.Time) (*oidcProvider, error) {
 	client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client)
 	if !ok {
@@ -104,8 +99,8 @@ func failCallback(status int, err error) error {
 }
 
 // callback validates the flow cookie and state, exchanges the code with the
-// PKCE verifier, verifies the ID token (signature, issuer, audience, expiry)
-// and its nonce, and returns the identity and post-login path.
+// PKCE verifier, verifies the ID token and its nonce, and returns the identity
+// and post-login path.
 func (p *oidcProvider) callback(w http.ResponseWriter, r *http.Request, jar *cookieJar) (Identity, string, error) {
 	f, err := jar.readFlow(r)
 	if err != nil {

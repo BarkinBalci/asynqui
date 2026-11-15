@@ -31,11 +31,9 @@ const (
 	SortDesc
 )
 
-// SortHead is one sortable column header. Its link applies the column's
-// sort (toggling the direction when it is already the sort column) and
-// keeps the page's other query parameters. Without JS it is a plain link;
-// with htmx it fetches the page's poll answer (hx-swap none, out-of-band
-// swaps by id) and pushes the URL.
+// SortHead is one sortable column header. Its link applies the column's sort,
+// toggling the direction when it is already the sort column, and keeps the
+// page's other query parameters.
 type SortHead struct {
 	// ID is the link's id: it is focusable inside a polled region.
 	ID  string
@@ -45,12 +43,10 @@ type SortHead struct {
 	Num bool
 }
 
-// RowSelect is a row's selection checkbox. It belongs to the form with id
-// Form (by the form attribute, so the table need not sit inside the form)
-// and submits Name=Value when checked. It carries hx-preserve: polls and
-// sorts replace the table, and htmx keeps this element, checked state
-// included, as long as the new table has a checkbox with the same ID. The
-// server stays stateless.
+// RowSelect is a row's selection checkbox. It belongs to the form with id Form
+// by the form attribute and submits Name=Value when checked. It carries
+// hx-preserve, so its checked state survives a swap as long as the new table
+// has a checkbox with the same ID.
 type RowSelect struct {
 	ID    string
 	Form  string
@@ -99,19 +95,18 @@ type Action struct {
 	Flag    string
 	Blocked string
 	Danger  bool
-	// Primary is the accent button; Large the 38px one (header actions)
-	// instead of the 32px toolbar size.
+	// Primary is the accent button; Large the header-action size.
 	Primary bool
 	Large   bool
 	// Confirm is the id of the ConfirmDialog that asks first. Without JS
 	// the button posts directly and the server answers with a
 	// confirmation page.
 	Confirm string
-	// ConfirmAll is the id of the ConfirmDialog app.js opens instead while
-	// the selection is "all N" of a state (Gmail-style select all).
+	// ConfirmAll is the id of the ConfirmDialog app.js opens instead while the
+	// selection is "all N" of a state.
 	ConfirmAll string
 	// Conn, when set, names the connection in the disabled button's title
-	// ("Requires admin on main"), as on the Task page.
+	// ("Requires admin on main").
 	Conn string
 }
 

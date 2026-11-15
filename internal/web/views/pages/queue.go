@@ -39,9 +39,8 @@ const (
 	TaskCancel
 )
 
-// Element ids of the Queue page. Polls replace the regions by id; the
-// focusable elements in them have stable ids (tlink-, tsel-, tab-,
-// page- prefixes).
+// Element ids of the Queue page. Polls replace the regions by id; focusable
+// elements inside them have stable ids too.
 const (
 	// QueuePageID wraps the page: the hx-sync scope of its requests.
 	QueuePageID    = "queue-page"
@@ -76,8 +75,8 @@ const (
 	TasksSortID = "sort-time"
 )
 
-// asynq trims the archive (asynq v0.26.0 internal/rdb: maxArchiveSize,
-// archivedExpirationInDays): every Archive confirmation says so.
+// ArchiveCap and ArchiveDays are how far asynq trims the archive (see its
+// docs). Every Archive confirmation says so.
 const (
 	ArchiveCap  = 10000
 	ArchiveDays = 90
@@ -169,8 +168,7 @@ type Queue struct {
 	GroupsURL string
 	// Sort is the time column's sort link; its ID is empty for a table
 	// that does not sort.
-	Sort components.SortHead
-	// Actions are the toolbar's buttons, in order.
+	Sort    components.SortHead
 	Actions []TaskActionButton
 	// AllowAll offers "select all N" for this state.
 	AllowAll bool

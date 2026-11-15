@@ -89,8 +89,7 @@ func PreviewBytes(b []byte, n int) string {
 }
 
 // VisibleID is an ID (or other name) for display with its bidirectional
-// control characters (U+061C, U+200E, U+200F, U+202A–U+202E,
-// U+2066–U+2069) replaced by U+FFFD, so they cannot reorder the text
+// control characters replaced by U+FFFD, so they cannot reorder the text
 // around them. Titles and copy buttons keep the real ID.
 func VisibleID(s string) string {
 	if !strings.ContainsFunc(s, isBidiControl) {

@@ -86,8 +86,8 @@ const recordCSP = `document.addEventListener("securitypolicyviolation", function
 		" at " + e.sourceFile + ":" + e.lineNumber);
 });`
 
-// newPage opens a tab in a new browser context. The context records a
-// video and a trace (see record) and draws the cursor.
+// newPage opens a tab in a new browser context that records a video and a
+// trace (see record) and draws the cursor.
 func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 	t.Helper()
 	videos := t.TempDir()

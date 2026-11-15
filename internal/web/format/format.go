@@ -1,6 +1,5 @@
 // Package format is the only place numbers, dates, durations and IDs are
-// turned into display text. Templates and handlers call it instead of
-// fmt, strconv or time.Format, so every page renders values the same way.
+// turned into display text.
 package format
 
 import (
@@ -196,14 +195,12 @@ func isHex(c byte) bool {
 }
 
 // Version formats a build version for the sidebar footer and login page.
-// Release versions read "v0.1.0" whether or not the build string carries
-// the "v". A development build whose prerelease part names a commit reads
-// "dev" plus the commit's first 7 hex digits: a Go pseudo-version
-// ("v0.0.0-20261114015842-f9b5ecf3013c+dirty"), git describe output
-// ("v0.1.0-3-gf9b5ecf-dirty") or a GoReleaser snapshot
-// ("0.0.0-SNAPSHOT-f9b5ecf") all read "dev f9b5ecf". Other prereleases
-// ("v0.2.0-rc.1") keep their full form; anything else (such as "dev") is
-// shown as is.
+// Release versions read "v0.1.0" whether or not the build string carries the
+// "v". A development build whose prerelease part names a commit (a Go
+// pseudo-version, git describe output or a GoReleaser snapshot) reads "dev"
+// plus the commit's first 7 hex digits, such as "dev f9b5ecf". Other
+// prereleases ("v0.2.0-rc.1") keep their full form; anything else (such as
+// "dev") is shown as is.
 func Version(v string) string {
 	s := strings.TrimPrefix(v, "v")
 	if s == "" || s[0] < '0' || s[0] > '9' {

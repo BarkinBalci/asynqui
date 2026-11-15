@@ -31,11 +31,6 @@ type binding struct {
 }
 
 // New builds a Policy from config, which config.Load has validated.
-// authz.default is the role of every user on every connection when no
-// binding grants more; none hides connections by default. Each binding
-// grants its role on every connection matching one of its globs
-// (path.Match syntax) to the listed users and to members of the listed
-// groups.
 func New(a config.Authz) (*Policy, error) {
 	def, err := parseRole(a.Default)
 	if err != nil {
@@ -114,9 +109,8 @@ func (p *Policy) Visible(user Identity, conns []string) []string {
 	return out
 }
 
-// MaxRole returns the user's highest role across conns, as shown in the
-// account menu on the Overview. It is RoleNone when conns is empty or every
-// connection is hidden.
+// MaxRole returns the user's highest role across conns. It is RoleNone when
+// conns is empty or every connection is hidden.
 func (p *Policy) MaxRole(user Identity, conns []string) Role {
 	maxRole := RoleNone
 	for _, c := range conns {

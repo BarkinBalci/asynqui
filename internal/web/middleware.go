@@ -74,7 +74,7 @@ func recoverPanics(logger *slog.Logger, internal http.HandlerFunc, next http.Han
 			if v == nil {
 				return
 			}
-			if v == http.ErrAbortHandler { //nolint:errorlint // sentinel compared by identity, per net/http docs
+			if v == http.ErrAbortHandler { //nolint:errorlint // sentinel compared by identity
 				panic(v)
 			}
 			logger.ErrorContext(ctx, "panic",

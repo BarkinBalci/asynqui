@@ -202,7 +202,6 @@ func TestServersPage(t *testing.T) {
 	if doc.Find("#servers input[type=checkbox]").Length() != 0 {
 		t.Error("read-only table has checkboxes")
 	}
-	// Default: Busy desc, by share of busy workers.
 	var rows [][]string
 	doc.Find("#servers-rows tr").Each(func(_ int, tr *goquery.Selection) {
 		var cells []string
@@ -342,7 +341,6 @@ func TestServerPage(t *testing.T) {
 		tr.Find("td").Each(func(_ int, td *goquery.Selection) { cells = append(cells, text(td)) })
 		rows = append(rows, cells)
 	})
-	// Default: Running for desc.
 	want := [][]string{
 		{"9f2c4e1a-1111…", "email:welcome", "emails", "Nov 8, 00:27:52", "14m 00s"},
 		{"b7d01e93-2222…", "user:sync", "default", "Nov 8, 00:41:40", "12s"},
@@ -479,7 +477,7 @@ func TestSchedulersPage(t *testing.T) {
 		rows = append(rows, cells)
 	})
 	want := [][]string{ // Next run asc
-		// The payload is cut to 60 runes on the server.
+		// The payload is cut on the server.
 		{"8a42f0c3-7d16…", "*/5 * * * *", "cache:warm", "� raw <b>" + strings.Repeat("x", 51) + "…", "timeout=2m0s", "Nov 8, 00:44:52", "—"},
 		{"3c1e8d27-5b90…", "0 6 * * *", "report:daily", `{"tz":"Europe/Istanbul"}`, "queue=reports max_retry=3", "Nov 8, 06:41:52", "Nov 7, 06:41:52"},
 	}

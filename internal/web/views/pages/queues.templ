@@ -6,18 +6,9 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
 
-// QueuesPage is the Connection page.
-//
-// Requests: #queues-page is the hx-sync scope of all of them. A poll is
-// dropped while another request is in flight and aborted when a user
-// request starts; sorts and chart changes queue (the last one wins);
-// actions queue in order.
-//
-// Polling: the hidden #queues-poll element polls the page URL (hx-swap
-// none) and the answer (QueuesPoll) swaps regions out of band, by id. The
-// toolbar, the filter and the dialog are outside those regions, so typing,
-// focus and an open dialog survive; the row checkboxes carry hx-preserve,
-// so the selection survives too.
+// QueuesPage is the Connection page. See Live for requests and polling. The
+// toolbar, the filter and the dialog sit outside the polled regions, so
+// typing, focus and an open dialog survive.
 templ QueuesPage(m Queues) {
 	@views.Page(m.Layout, lastCrumb(m.Layout)) {
 		<div id={ QueuesPageID } class="content-region" hx-sync="this:queue last">

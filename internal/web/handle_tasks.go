@@ -254,18 +254,13 @@ func parseTaskForm(r *http.Request) taskForm {
 }
 
 // handleTaskAction serves POST /c/{conn}/queues/{queue}/tasks/{verb}: the
-// selected tasks (id=…, one Inspector call each) or, with all=1&state=,
-// every task of the state (one *All* call); for aggregating tasks, with
-// all=1&state=aggregating&group=…, every task of each group (one
-// *AllAggregatingTasks call each). The route's wrapper has checked the
-// role. Delete, Archive and "all" need confirm=1: the dialogs send it;
-// without JS the first post answers with a confirmation page.
-//
-// With htmx it answers like a user request of the page it came from (the
-// Queue page with a result notice and the selection cleared, or the Task
-// page), plus a toast per failure; a task deleted from its own page
-// redirects to the queue (HX-Redirect). Without JS it redirects back,
-// carrying the notice and failures in the flash cookie.
+// selected tasks (id=…) or, with all=1&state=, every task of the state; for
+// aggregating tasks, with all=1&state=aggregating&group=…, every task of each
+// group. Delete, Archive and "all" need confirm=1; without JS the first post
+// answers with a confirmation page. With htmx it answers like a user request
+// of the page it came from, plus a toast per failure, and a task deleted from
+// its own page redirects to the queue. Without JS it redirects back with the
+// notice and failures in the flash cookie.
 func handleTaskAction(d *deps, verb conn.TaskVerb) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())

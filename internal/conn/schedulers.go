@@ -16,13 +16,11 @@ import (
 // MaxEnqueuePageSize is the largest page of enqueue events.
 const MaxEnqueuePageSize = 100
 
-// maxEnqueueEvents is how many enqueue events asynq keeps per scheduler
-// entry, newest first (its scheduler trims the history to 1000).
+// maxEnqueueEvents is how many enqueue events asynq keeps per scheduler entry.
 const maxEnqueueEvents = 1000
 
-// taskExistsTTL is how long a task-existence lookup of the enqueue history
-// is reused. Task IDs link to the Task page only while the task exists, a
-// slow-changing fact compared with the 1s snapshots.
+// taskExistsTTL is how long a task-existence lookup of the enqueue history is
+// reused.
 const taskExistsTTL = 10 * time.Second
 
 // ErrPage is returned for a page number outside 1..MaxEnqueuePage(size)
@@ -30,7 +28,7 @@ const taskExistsTTL = 10 * time.Second
 var ErrPage = errors.New("conn: page out of bounds")
 
 // MaxEnqueuePage is the last page of enqueue events of the given size that
-// asynq can hold: ceil(1000/size).
+// asynq can hold.
 func MaxEnqueuePage(size int) int {
 	if size < 1 {
 		return 0
@@ -73,18 +71,13 @@ type EntryOption struct {
 	Value string
 }
 
-// SchedulerEntries returns the entries of the connection's running
-// schedulers, sorted by ID, from the 1s cache when fresh.
-//
-// The slice is shared between callers, who must not modify it.
+// SchedulerEntries returns the entries of the connection's running schedulers,
+// sorted by ID, from the cache. The slice is shared between callers, who must
+// not modify it.
 func (c *Conn) SchedulerEntries(ctx context.Context) ([]SchedulerEntry, error) {
 	return cached(ctx, c.cache, schedulerEntriesKey, cacheTTL, c.fetchSchedulerEntries)
 }
 
-// fetchSchedulerEntries reads Inspector.SchedulerEntries.
-//
-// Cost: one Lua script (listing the live scheduler keys and dropping
-// expired ones) and an LRANGE per scheduler.
 func (c *Conn) fetchSchedulerEntries(context.Context) ([]SchedulerEntry, error) {
 	entries, err := c.schedulers.SchedulerEntries()
 	if err != nil {
@@ -182,11 +175,10 @@ func taskExistsKey(queue, id string) cacheKey[bool] {
 }
 
 // SchedulerEnqueueEvents returns page page (from 1) of size events of the
-// scheduler entry entryID, newest first, from the 1s cache when fresh.
-// queue is the entry's queue: each event's task is looked up there to
-// tell whether it still exists; with queue empty (unknown) none is looked
-// up. An unknown entry has no events. A page past MaxEnqueuePage(size) is
-// ErrPage.
+// scheduler entry entryID, newest first, from the cache. Each event's task is
+// looked up in queue, the entry's queue, to tell whether it still exists; with
+// queue empty (unknown) none is looked up. An unknown entry has no events. A
+// page past MaxEnqueuePage(size) is ErrPage.
 func (c *Conn) SchedulerEnqueueEvents(ctx context.Context, entryID, queue string, page, size int) (EnqueuePage, error) {
 	if size < 1 || size > MaxEnqueuePageSize || page < 1 || page > MaxEnqueuePage(size) {
 		return EnqueuePage{}, ErrPage
@@ -196,11 +188,9 @@ func (c *Conn) SchedulerEnqueueEvents(ctx context.Context, entryID, queue string
 	})
 }
 
-// fetchEnqueueEvents reads one page with Inspector.ListSchedulerEnqueueEvents
-// (a ZREVRANGE), whether an older page follows with a second one-event read
-// at the first offset past the page (asynq gives no count), and then
-// GetTaskInfo per event (a SISMEMBER and a Lua script each, cached for
-// taskExistsTTL), up to queueConcurrency at a time.
+// fetchEnqueueEvents reads one page of events, one event past it to tell
+// whether an older page follows (asynq gives no count), and whether each
+// event's task still exists.
 func (c *Conn) fetchEnqueueEvents(ctx context.Context, entryID, queue string, page, size int) (EnqueuePage, error) {
 	evs, err := c.schedulers.ListSchedulerEnqueueEvents(entryID, asynq.PageSize(size), asynq.Page(page))
 	if err != nil {

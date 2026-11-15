@@ -28,13 +28,11 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web"
 )
 
-// version is set at build time with -ldflags "-X main.version=...". run
-// reads it through buildVersion.
+// version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-// shutdownTimeout bounds http.Server.Shutdown. server.shutdown_delay plus
-// this must stay below the orchestrator's grace period
-// (terminationGracePeriodSeconds on Kubernetes).
+// shutdownTimeout bounds http.Server.Shutdown. server.shutdown_delay plus this
+// must stay below the orchestrator's grace period.
 const shutdownTimeout = 10 * time.Second
 
 func main() {
@@ -51,9 +49,8 @@ func main() {
 }
 
 // run starts the server and blocks until ctx is canceled or SIGINT/SIGTERM
-// arrives, and the server has drained. All dependencies are built here and
-// passed down explicitly. Startup is fail-fast: anything that can fail runs
-// before the listener opens, and its error is returned.
+// arrives, and the server has drained. Anything that can fail runs before the
+// listener opens.
 func run(ctx context.Context, args []string, lookupEnv func(string) (string, bool), stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -151,8 +148,7 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 	logger.Info("listening", slog.String("addr", ln.Addr().String()), slog.String("version", ver))
 	// Health loops keep running while the instance drains; Close stops them.
 	reg.Start(context.WithoutCancel(ctx))
-	// The update check stops with ctx, since a draining instance does not
-	// need it, and run waits for it on every return path.
+	// The update check stops with ctx; run waits for it on every return path.
 	if checker != nil {
 		checkCtx, cancelCheck := context.WithCancel(ctx)
 		checkDone := make(chan struct{})
@@ -194,10 +190,8 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 }
 
 // buildVersion returns the version stamped with -ldflags or, for a "dev"
-// build, the main module version the go command recorded: the tag for
-// `go install …/cmd/asynqui@v0.1.0`, a pseudo-version (a prerelease, so
-// never update-checked) for a build in a git checkout. "(devel)" or no build
-// info keeps "dev".
+// build, the main module version from the build info (a tag for go install, a
+// pseudo-version in a git checkout).
 func buildVersion(stamped string, read func() (*debug.BuildInfo, bool)) string {
 	if stamped != "dev" {
 		return stamped

@@ -23,8 +23,6 @@ func closedAddr(t *testing.T) string {
 	return addr
 }
 
-// TestRegistrySource lists the registry's connections, in config order,
-// as the connections themselves.
 func TestRegistrySource(t *testing.T) {
 	addr := closedAddr(t)
 	reg, err := conn.NewRegistry([]config.Connection{

@@ -84,9 +84,9 @@ func (r *Registry) All() []*Conn {
 	return append([]*Conn(nil), r.conns...)
 }
 
-// Start runs one health loop per connection in the background, each
-// checking immediately and then every 10s, until ctx is canceled or Close
-// is called. It does not block. Calls after the first, or after Close, do
+// Start runs one health loop per connection in the background, each checking
+// immediately and then every healthInterval, until ctx is canceled or Close is
+// called. It does not block. Calls after the first, or after Close, do
 // nothing.
 func (r *Registry) Start(ctx context.Context) {
 	r.mu.Lock()
@@ -160,15 +160,15 @@ type Conn struct {
 	inspector *asynq.Inspector
 	redis     redis.UniversalClient
 
-	pinger     pinger             // redis, or a fake in tests
-	info       infoReader         // redis, or a fake in tests
-	queues     queueInspector     // inspector, or a fake in tests
-	tasks      taskInspector      // inspector, or a fake in tests
-	servers    serverInspector    // inspector, or a fake in tests
-	schedulers schedulerInspector // inspector, or a fake in tests
-	keys       keyReader          // redis, or a fake in tests: direct reads (keys.go)
+	pinger     pinger
+	info       infoReader
+	queues     queueInspector
+	tasks      taskInspector
+	servers    serverInspector
+	schedulers schedulerInspector
+	keys       keyReader
 	cache      *cache
-	now        func() time.Time // the clock; dates of History without queues
+	now        func() time.Time
 
 	closed atomic.Bool // set by Registry.Close
 	// backend is backendRedis or backendValkey; 0 before any detection.
@@ -180,32 +180,16 @@ type Conn struct {
 }
 
 // maxRetries is how often go-redis retries a failed command (on a network
-// error or timeout). One retry still covers a pooled connection that died
-// with a Redis restart, and keeps the bound below tight.
+// error or timeout). One retry still covers a pooled connection that died with
+// a Redis restart.
 const maxRetries = 1
 
-// newConn builds a connection without any Redis I/O.
-//
-// The Inspector and our own commands share one go-redis client, and so one
-// connection pool, instead of the second pool that asynq.NewInspector with a
-// RedisClientOpt would open. Its options are those
-// asynq.RedisClientOpt.MakeRedisClient sets, plus:
-//
-//   - ContextTimeoutEnabled, so that context deadlines bound our own
-//     commands (PING, INFO).
-//   - MaxRetries 1 instead of 3.
-//
-// Inspector methods take no context and run under context.Background()
-// inside asynq, so only the socket timeouts bound them. Each command gets at
-// most 1+maxRetries attempts (with a backoff under 512ms between them). An
-// attempt waits up to read_timeout+1s for a pool connection (go-redis's
-// default PoolTimeout); on a fresh connection it dials within dial_timeout
-// (TLS included) and runs the HELLO/AUTH handshake; then each round trip
-// takes up to write_timeout + read_timeout. With the default timeouts a hung
-// Redis fails a command on a pooled connection within about
-// 2*(4s+3s+3s) = 20s, and an Inspector call within that times its command
-// count (three for GetQueueInfo); a refused connection fails at once.
-// Nothing cancels these calls early: a viewer that leaves only stops
+// newConn builds a connection without any Redis I/O. The Inspector and our own
+// commands share one go-redis client, and so one connection pool, with the
+// options asynq.RedisClientOpt.MakeRedisClient sets plus
+// ContextTimeoutEnabled, so that context deadlines bound our own commands, and
+// maxRetries. Inspector methods take no context, so only the socket timeouts
+// bound them, and nothing cancels them early: a viewer that leaves only stops
 // waiting (see cached).
 func newConn(cc config.Connection, logger *slog.Logger) (*Conn, error) {
 	tc, err := tlsConfig(cc.TLS)

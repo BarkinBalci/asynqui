@@ -6,11 +6,8 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
 
-// InfoPage is the Redis / Valkey info page: key metrics of the instance
-// and of this connection's DB, then the raw INFO. See Live for polling.
-// Polls refresh the cards only: the raw INFO is a snapshot of the page
-// load (or of the poll that first had data), so a poll never resets its
-// scroll position or a text selection in it.
+// InfoPage is the Redis / Valkey info page. Polls refresh the cards only, so
+// they never reset the raw INFO's scroll position or a text selection in it.
 templ InfoPage(m Info) {
 	@views.Page(m.Layout, lastCrumb(m.Layout)) {
 		<div id={ InfoPageID } class="content-region" hx-sync="this:queue last">

@@ -58,11 +58,10 @@ func overviewTitle() templ.Component {
 	})
 }
 
-// OverviewPage is the full page. The card grid polls but swaps nothing
-// itself (hx-swap none): the response replaces each card, the heading badge,
-// the Updated time and the sidebar list out of band, by id, so focus and the
-// rest of the page survive. hx-disinherit keeps the cards' own forms from
-// inheriting the grid's htmx attributes.
+// OverviewPage is the full page. The card grid polls with hx-swap none and the
+// answer replaces its parts out of band by id, so focus survives.
+// hx-disinherit keeps the cards' own forms from inheriting the grid's htmx
+// attributes.
 func OverviewPage(m Overview) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -125,7 +124,7 @@ func OverviewPage(m Overview) templ.Component {
 				var templ_7745c5c3_Var4 string
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templruntime.NewAttributeExpression(m.PollURL).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/pages/overview.templ`, Line: 47, Col: 83}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/pages/overview.templ`, Line: 46, Col: 83}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
 				if templ_7745c5c3_Err != nil {

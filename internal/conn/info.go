@@ -85,8 +85,8 @@ func (r redisInfo) Info(ctx context.Context, sections ...string) (string, error)
 	return r.c.Info(ctx, sections...).Result()
 }
 
-// Info returns the server's INFO (default sections), from the 1s cache
-// when fresh. Each fetch also updates Backend.
+// Info returns the server's INFO (default sections), from the cache. Each
+// fetch also updates Backend.
 func (c *Conn) Info(ctx context.Context) (*Info, error) {
 	return cached(ctx, c.cache, infoKey, cacheTTL, c.fetchInfo)
 }
@@ -103,10 +103,8 @@ func (c *Conn) fetchInfo(ctx context.Context) (*Info, error) {
 	return info, nil
 }
 
-// Backend returns the server software found by the last INFO, and false
-// before any. It does no I/O: the health loop detects the backend each
-// time the connection becomes reachable, and every Info fetch refreshes
-// it.
+// Backend returns the server software found by the last INFO, and false before
+// any. It does no I/O.
 func (c *Conn) Backend() (Backend, bool) {
 	switch c.backend.Load() {
 	case backendRedis:
@@ -144,11 +142,9 @@ func (c *Conn) detectBackend(ctx context.Context) {
 	c.setBackend(parseInfo(raw, c.db).Backend)
 }
 
-// parseInfo parses an INFO reply: "# Section" headers followed by key:value
-// lines, split on the first colon; section names compare
-// case-insensitively, and the first of a repeated key counts. Blank and
-// malformed lines are skipped. db is the connection's DB, whose Keyspace
-// line fills Keyspace. Numbers that do not parse are left zero.
+// parseInfo parses an INFO reply. db is the connection's DB, whose Keyspace
+// line fills Keyspace. Malformed lines are skipped and numbers that do not
+// parse are left zero.
 func parseInfo(raw string, db int) *Info {
 	info := &Info{Raw: rawForDB(raw, db), Keyspace: Keyspace{DB: db}}
 	fields := map[string]string{} // by "section/key", the section lowercased

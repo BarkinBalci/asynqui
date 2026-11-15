@@ -1,11 +1,9 @@
 /* asynqui stylesheet. Tokens follow the canvas style guide.
  *
- * Theme: the server renders data-theme="system|light|dark" on <html> from
- * the theme cookie. Light tokens live on :root. The dark tokens are written
- * twice, once for [data-theme=dark] and once for [data-theme=system] under
- * prefers-color-scheme: dark. Keep the two blocks identical
- * (TestDarkTokensMatch checks it). No inline styles anywhere: the CSP
- * forbids them, so everything visual is a class here.
+ * Light tokens live on :root. The dark tokens are written twice, for
+ * [data-theme=dark] and for [data-theme=system] under prefers-color-scheme:
+ * dark; keep the two blocks identical (TestDarkTokensMatch). The CSP forbids
+ * inline styles, so everything visual is a class here.
  */
 
 @font-face{font-family:"Inter";font-style:normal;font-weight:400;font-display:swap;src:url(fonts/inter-latin-400-normal.woff2) format("woff2")}
@@ -115,7 +113,7 @@
 	--logo-mid:#7C8FEA;
 	--logo-front:#3B5BDB;
 	--logo-glyph:#FFFFFF;
-	/* queue and task pages (M5b) */
+	/* queue and task pages */
 	--id-fg:#475569;
 	--lasterr-bg:#FFF7ED;
 	--lasterr-fg:#7C2D12;
@@ -208,7 +206,7 @@
 	--logo-mid:#4F63C9;
 	--logo-front:#7C93F5;
 	--logo-glyph:#0F172A;
-	/* queue and task pages (M5b) */
+	/* queue and task pages */
 	--id-fg:#CBD5E1;
 	--lasterr-bg:#431407;
 	--lasterr-fg:#FDBA74;
@@ -303,7 +301,7 @@
 	--logo-mid:#4F63C9;
 	--logo-front:#7C93F5;
 	--logo-glyph:#0F172A;
-	/* queue and task pages (M5b) */
+	/* queue and task pages */
 	--id-fg:#CBD5E1;
 	--lasterr-bg:#431407;
 	--lasterr-fg:#FDBA74;
@@ -596,7 +594,7 @@ html:not(.js) .js-only{display:none}
 .toast-body{display:flex;flex:1;flex-direction:column;gap:4px;min-width:0;padding-top:5px;overflow-wrap:anywhere}
 .toast .iconbtn{color:inherit}
 
-/* ---------- servers, schedulers and redis info (M6) ---------- */
+/* ---------- servers, schedulers and redis info ---------- */
 .crumb-mono{font-family:var(--font-mono);font-size:13px}
 .back-link{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;font-size:13px;font-weight:600}
 .detail-head{display:flex;flex-direction:column;gap:8px;min-width:0}
@@ -608,7 +606,7 @@ html:not(.js) .js-only{display:none}
 .detail-main{flex:999 1 520px;min-width:0}
 .detail-side{flex:1 1 340px;min-width:0}
 .detail-stack{display:flex;flex-direction:column;gap:20px}
-/* ---------- queue and task pages (M5b) ---------- */
+/* ---------- queue and task pages ---------- */
 .queue-head{align-items:center}
 .head-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;min-width:0}
 .head-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
@@ -695,6 +693,6 @@ span.pager-btn{opacity:.45}
 .empty-state .icon{stroke:var(--empty-icon);stroke-width:1.6}
 .empty-state-title{font-weight:600}
 
-/* ---------- queue page follow-ups (M5c) ---------- */
+/* ---------- dialog warnings and aggregation groups ---------- */
 .dlg-warn{color:var(--muted);font-size:13px}
 .group-nav{display:flex;align-items:center;gap:8px;padding:12px 16px 0;font-size:13px;font-weight:600}

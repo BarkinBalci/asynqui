@@ -92,7 +92,6 @@ func TestTaskPage(t *testing.T) {
 		t.Error("next process at is not a <time>")
 	}
 
-	// Raw view.
 	doc = parse(t, do(t, h, request{path: uuidPath + "?payload=raw"}))
 	if got := doc.Find("pre#payload").Text(); got != `{"order_id":"ORD-88213","amount":4200}` {
 		t.Errorf("raw payload = %q", got)

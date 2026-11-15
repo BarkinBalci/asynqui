@@ -2,10 +2,8 @@ package components
 
 import "github.com/BarkinBalci/asynqui/internal/web/format"
 
-// ThroughputChart is the daily Processed / Failed chart: one SVG stretched
-// to the plot's width (non-scaling strokes), axis labels in HTML at fixed
-// fractions of the height, a native <title> tooltip per day, and the same
-// data in a visually hidden table. Colors come from CSS classes.
+// ThroughputChart is the daily Processed / Failed chart, with the same data in
+// a visually hidden table.
 templ ThroughputChart(c Chart) {
 	<div class="chart">
 		<div class="chart-legend" aria-hidden="true">

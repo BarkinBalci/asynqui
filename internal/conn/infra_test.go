@@ -475,8 +475,7 @@ func TestSchedulerEnqueueEvents(t *testing.T) {
 		}
 	})
 
-	// The page cap: asynq keeps 1000 events, so size 20 has 50 pages and
-	// size 30 has 34; the last page offers no older one.
+	// asynq keeps 1000 events per entry; the last page offers no older one.
 	t.Run("page cap", func(t *testing.T) {
 		if MaxEnqueuePage(20) != 50 || MaxEnqueuePage(30) != 34 || MaxEnqueuePage(100) != 10 || MaxEnqueuePage(0) != 0 {
 			t.Errorf("MaxEnqueuePage = %d %d %d", MaxEnqueuePage(20), MaxEnqueuePage(30), MaxEnqueuePage(100))
@@ -529,7 +528,7 @@ func TestSchedulerEnqueueEvents(t *testing.T) {
 		}
 	})
 
-	// Lookups are reused for 10s, beyond the 1s page snapshot.
+	// Lookups outlive the page snapshot.
 	t.Run("lookups are cached", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			fake := newFake()

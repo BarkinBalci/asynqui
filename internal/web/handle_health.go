@@ -6,10 +6,7 @@ import (
 )
 
 // Readiness reports whether this instance should receive traffic. The zero
-// value is ready: startup is fail-fast and the listener opens only after it
-// succeeds, so there is no "starting" state. Drain is terminal. Readiness
-// never reflects Redis health: an outage is shown per connection in the UI and
-// must not unroute or restart replicas.
+// value is ready and Drain is terminal. It never reflects Redis health.
 type Readiness struct {
 	draining atomic.Bool
 }

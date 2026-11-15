@@ -40,8 +40,7 @@ func TestQueues(t *testing.T) {
 	}
 }
 
-// Summary and Queues share one fetch: the Overview and the Connection page
-// cost one GetQueueInfo per queue per second together.
+// Summary and Queues share one fetch.
 func TestSummarySharesQueuesFetch(t *testing.T) {
 	fake := &fakeQueues{names: []string{"a", "b"}, infos: map[string]*asynq.QueueInfo{
 		"a": {Queue: "a", Pending: 1}, "b": {Queue: "b", Pending: 2},

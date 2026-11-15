@@ -8,17 +8,12 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
 
-// Live is the polling frame of the connection pages: Connection, Queue,
-// Task, Servers, Server detail, Schedulers, Scheduler entry and Redis info.
-//
-// Requests: the element with id PageID wraps the page and is the hx-sync
-// scope of every request it makes. The hidden poll element (PollID) polls
-// PollURL with hx-swap none; it is dropped while another request is in
-// flight and aborted by a user request (a sort or page link), whose answer
-// replaces the regions it changes and pushes the URL. Answers swap regions
-// out of band, by id: the poll element itself, the state banner
-// (BannerID, LiveStateID when empty), the page's data regions, the Updated
-// time and the sidebar list. An empty PollURL stops the polling.
+// Live is the polling frame of the connection pages. The element with id
+// PageID wraps the page and is the hx-sync scope of its requests. The hidden
+// poll element (PollID) polls PollURL with hx-swap none; answers swap regions
+// out of band by id: the poll element itself, the state banner, the page's
+// data regions, the Updated time and the sidebar list. An empty PollURL stops
+// the polling.
 type Live struct {
 	PageID   string
 	PollID   string
@@ -43,8 +38,7 @@ type Live struct {
 const LiveStateID = "live-state"
 
 // Element ids of the Servers, Schedulers and Redis info pages. Focusable
-// elements in the polled regions have stable ids too (sort-, slink-,
-// wtask-, wqueue-, elink-, etask-, hist- prefixes).
+// elements in the polled regions have stable ids too.
 const (
 	ServersPageID    = "servers-page"
 	ServersPollID    = "servers-poll"
@@ -180,7 +174,7 @@ type WorkerRow struct {
 	QueueLinkID string
 	Started     time.Time
 	Running     time.Duration
-	// Long highlights a task running for 10 minutes or more.
+	// Long highlights a long-running task.
 	Long bool
 }
 
@@ -253,8 +247,7 @@ type SchedulerEntry struct {
 	Next     time.Time
 	Prev     time.Time
 	// Now is the time the relative run times are written against.
-	Now time.Time
-	// History is the enqueue history page.
+	Now     time.Time
 	History History
 }
 

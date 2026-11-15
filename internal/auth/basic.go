@@ -36,8 +36,7 @@ func newBasic(b config.Basic) (*basicProvider, error) {
 		u.Groups = slices.Clone(u.Groups)
 		users[u.Username] = u
 	}
-	// The dummy hash shares the users' cost, so the timing of a failed
-	// login does not tell which user (or that no user) was tried.
+	// The dummy hash shares the users' cost.
 	cost, err := bcrypt.Cost([]byte(b.Users[0].PasswordHash.Reveal()))
 	if err != nil {
 		return nil, errors.New("basic: invalid bcrypt password hash") // never echo the hash

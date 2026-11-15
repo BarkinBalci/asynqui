@@ -34,14 +34,10 @@ func subject(id auth.Identity) authz.Identity {
 	return authz.Identity{Name: id.Name, Groups: id.Groups}
 }
 
-// view, op and admin guard a route with the role it needs on {conn}:
-//
-//   - no identity: authn Challenge (303 to login, 401 + HX-Redirect for
-//     htmx, or 401 for proxy and none),
-//   - unknown or hidden connection: 404,
-//   - insufficient role: 403.
-//
-// Routes without {conn} (the Overview) only need an identity.
+// view, op and admin guard a route with the role it needs on {conn}: no
+// identity gets authn's Challenge, an unknown or hidden connection 404 and an
+// insufficient role 403. Routes without {conn} (the Overview) only need an
+// identity.
 func view(d *deps, h http.Handler) http.Handler  { return d.require(authz.RoleViewer, h) }
 func op(d *deps, h http.Handler) http.Handler    { return d.require(authz.RoleOperator, h) }
 func admin(d *deps, h http.Handler) http.Handler { return d.require(authz.RoleAdmin, h) }
