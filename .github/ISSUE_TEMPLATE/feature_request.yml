@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest something asynqui should do
+description: Suggest an idea
 labels: [enhancement]
 body:
   - type: textarea
@@ -19,7 +19,7 @@ body:
     id: limitations
     attributes:
       label: Limitations
-      description: Some things asynq doesn't support, so asynqui can't either.
+      description: Some things are limited by what asynq supports.
       options:
         - label: I checked the README's [Limitations](https://github.com/BarkinBalci/asynqui#limitations) section
           required: false

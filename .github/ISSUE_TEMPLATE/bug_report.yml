@@ -1,62 +1,12 @@
 name: Bug report
-description: Something in asynqui doesn't work as it should
+description: Something doesn't work as it should
 labels: [bug]
 body:
-  - type: input
-    id: version
-    attributes:
-      label: asynqui version
-      description: Shown in the sidebar footer, or printed by `asynqui -version`.
-      placeholder: 0.1.0
-    validations:
-      required: true
-  - type: dropdown
-    id: install
-    attributes:
-      label: How do you run asynqui?
-      options:
-        - Binary
-        - Container
-        - Kubernetes
-        - Other
-    validations:
-      required: true
-  - type: input
-    id: redis
-    attributes:
-      label: Redis or Valkey version
-      placeholder: Redis 7.4.1
-    validations:
-      required: true
-  - type: input
-    id: asynq
-    attributes:
-      label: asynq version
-      description: The version your workers use. asynqui reads the data they write.
-      placeholder: v0.26.0
-    validations:
-      required: true
-  - type: dropdown
-    id: auth
-    attributes:
-      label: Auth provider
-      options:
-        - none
-        - basic
-        - proxy
-        - oidc
-    validations:
-      required: true
   - type: textarea
     id: what-happened
     attributes:
       label: What happened
-    validations:
-      required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: What you expected
+      description: What you saw, and what you expected instead.
     validations:
       required: true
   - type: textarea
@@ -66,8 +16,19 @@ body:
       placeholder: |
         1. Open …
         2. Click …
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown in the sidebar footer, or printed by `-version`.
+      placeholder: 0.1.0
     validations:
       required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Anything that might matter, such as how you run it, the Redis or Valkey version, the asynq version your workers use, or the auth provider.
   - type: textarea
     id: logs
     attributes:
