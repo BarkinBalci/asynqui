@@ -79,6 +79,84 @@ The deployment must get two things right:
 - Signing out is local: it clears the session cookie, not the IdP session.
 - Needs [session keys](#sessions).
 
+## OIDC setup
+
+1. Register asynqui at the IdP as a web client using the authorization-code flow, with the redirect URL `https://<host><base_path>/auth/callback`. Set the same URL as `redirect_url`.
+2. Set `issuer` to the IdP's issuer URL exactly as its discovery document (`<issuer>/.well-known/openid-configuration`) reports it, trailing slash included. asynqui reads it at startup.
+3. Choose the scopes, the username claim and the groups claim as below, then bind users or groups to roles.
+
+```yaml
+auth:
+  provider: oidc
+  session:
+    hash_key: ${ASYNQUI_SESSION_HASH_KEY}
+    block_key: ${ASYNQUI_SESSION_BLOCK_KEY}
+  oidc:
+    issuer: https://login.example.com/realms/acme
+    client_id: asynqui
+    client_secret: ${ASYNQUI_OIDC_CLIENT_SECRET}
+    redirect_url: https://asynqui.example.com/auth/callback
+    scopes: [openid, profile, email]
+    username_claim: email
+    groups_claim: groups
+authz:
+  bindings:
+    - groups: [platform]
+      role: admin
+      connections: ["*"]
+```
+
+- **Scopes:** keep `email` while `username_claim` is `email`. Add `groups` to `scopes` when the IdP sends groups only for that scope (Dex, for example).
+- **Username claim:** a string claim, read from the ID token, or from userinfo when the ID token lacks it. With `email`, login fails unless `email_verified` is true; any other claim is used as is, so pick one users cannot change themselves.
+- **Groups claim:** a string or an array of strings, from the ID token or else userinfo. `groups` in bindings match its values exactly. When the IdP signals a groups overage instead of listing them, the user signs in with no groups and asynqui logs a WARN.
+- **Session size:** the session cookie keeps only the groups that some binding names. If those still do not fit in 3800 bytes, login is refused with "Sign-in failed: too many groups for a session cookie."
+
+### Keycloak
+
+The issuer is `https://<host>/realms/<realm>`. Groups are not in tokens by default: add a **Group Membership** mapper to the client's dedicated scope, with token claim name `groups` and "Add to ID token" on. Turn off "Full group path" to get `platform` instead of `/platform`. `email_verified` is the user's "Email verified" flag.
+
+### Microsoft Entra ID
+
+The issuer is `https://login.microsoftonline.com/<tenant-id>/v2.0`. ID tokens often lack `email_verified`, so set `username_claim` to `preferred_username` (or another claim you bind on). Add the groups claim under the app's **Token configuration**; it carries group object IDs, so bind those. A user in more groups than fit in a token gets an overage, so no groups in asynqui; emitting only groups assigned to the application keeps the list short.
+
+### Google
+
+The issuer is `https://accounts.google.com`, and the default `username_claim: email` works. Google sends no groups claim, so bind by `users`.
+
+## oauth2-proxy setup
+
+[oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) signs users in and forwards requests to asynqui with `X-Forwarded-User`, `X-Forwarded-Email`, `X-Forwarded-Groups` (comma-separated) and `X-Forwarded-Preferred-Username`. It removes those headers from the client's request first. Run it next to asynqui, as in the [Kubernetes example](deployment.md#kubernetes-example):
+
+```yaml
+server:
+  addr: 127.0.0.1:8080
+auth:
+  provider: proxy
+  proxy:
+    user_header: X-Forwarded-Email
+    groups_header: X-Forwarded-Groups
+    trusted_proxies: ["127.0.0.1/32"]
+    logout_url: /oauth2/sign_out
+```
+
+```sh
+oauth2-proxy \
+  --http-address=0.0.0.0:4180 \
+  --upstream=http://127.0.0.1:8080/ \
+  --provider=oidc \
+  --oidc-issuer-url=https://login.example.com/realms/acme \
+  --client-id=asynqui \
+  --redirect-url=https://asynqui.example.com/oauth2/callback \
+  --email-domain=example.com \
+  --skip-auth-route='GET=^/health/'
+```
+
+- Pass the client secret and the cookie secret as `OAUTH2_PROXY_CLIENT_SECRET` and `OAUTH2_PROXY_COOKIE_SECRET`. Generate the cookie secret with `openssl rand -base64 32 | tr -- '+/' '-_'`.
+- At the IdP, register `https://<host>/oauth2/callback`, oauth2-proxy's own callback.
+- Groups come from the `groups` claim (`--oidc-groups-claim`). When the IdP needs the `groups` scope for it, add `--scope='openid email profile groups'`.
+- `--skip-auth-route` lets the probes through without sign-in. Adjust it to `^<base_path>/health/` with a `base_path`.
+- Sign out (`/oauth2/sign_out`) clears oauth2-proxy's cookie only; the IdP session stays.
+
 ## Sessions
 
 `basic` and `oidc` keep the signed-in user in the signed and encrypted `asynqui_session` cookie ([Cookies](#cookies)).
