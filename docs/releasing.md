@@ -4,7 +4,7 @@ How a maintainer cuts a release. What a release contains is in [deployment.md](d
 
 ## Cutting a release
 
-Push a tag `vX.Y.Z` (or `vX.Y.Z-rc.N` for a prerelease) on `main`. `.github/workflows/release.yml` runs the tests, then GoReleaser publishes the GitHub release, the archives and the images. The changelog is grouped by the commit prefixes in [contributing.md](contributing.md#commit-messages).
+Push a tag `vX.Y.Z` (or `vX.Y.Z-rc.N` for a prerelease) on `main`. `.github/workflows/release.yml` runs the tests, then GoReleaser publishes the GitHub release, the archives and the images. The changelog is grouped by the commit prefixes in [CONTRIBUTING.md](../CONTRIBUTING.md#commit-messages).
 
 - **No backport releases.** Cut releases only from the main line, in increasing version order. Each new release becomes GitHub's "latest", which the update check and the `latest` image tag follow, so a `v0.1.5` published after `v0.2.0` would point users backwards. Fix forward instead.
 - Builds and archives are reproducible: `.goreleaser.yaml` pins file timestamps and ownership to the commit.

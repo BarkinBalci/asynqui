@@ -111,7 +111,7 @@ Startup and precedence rules are in [configuration.md](configuration.md#startup)
 1. **Component tests:** render templ components with fixture view models and assert on the HTML with goquery.
 2. **Integration tests** (`internal/conn`, testcontainers): reads and actions against real Redis, Valkey and asynq. They skip without Docker unless `ASYNQUI_REQUIRE_DOCKER=1`, which makes them fail instead; CI and the release workflow set it.
 3. **Handler tests:** `httptest` through the full stack: full page vs fragment, role enforcement, actions, "not found" and "Connection failed" states. The checks every page shares (access by role, CSRF, ids of focusables in polled regions, answer shape, `hx-sync` scopes, path escaping) run over the route table in `internal/web/routes_test.go`; add new routes there.
-4. **Browser tests** (`e2e/`, see [contributing](contributing.md#browser-tests)): the `app.js` and htmx behaviour Go tests cannot run, plus an axe-core and CSP check of every page.
+4. **Browser tests** (`e2e/`, see [contributing](../CONTRIBUTING.md#browser-tests)): the `app.js` and htmx behaviour Go tests cannot run, plus an axe-core and CSP check of every page.
 
 Other conventions:
 - Use small hand-written fakes, and a fake OIDC provider built on `httptest.Server`.

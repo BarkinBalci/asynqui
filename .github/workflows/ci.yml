@@ -42,7 +42,7 @@ jobs:
         run: CGO_ENABLED=0 go build -trimpath ./cmd/asynqui
 
   e2e:
-    # Browser tests (docs/contributing.md).
+    # Browser tests (CONTRIBUTING.md).
     runs-on: ubuntu-latest
     services:
       redis:
