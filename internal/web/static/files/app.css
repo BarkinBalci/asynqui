@@ -351,7 +351,7 @@ h1,h2,h3,p{margin:0}
 }
 
 /* ---------- sidebar ---------- */
-.brand{display:flex;align-items:center;gap:10px;padding:0 8px;color:var(--text);font-weight:700;font-size:16px;letter-spacing:-0.01em}
+.brand{display:flex;align-items:center;gap:4px;padding:0 8px;color:var(--text);font-weight:700;font-size:16px;letter-spacing:-0.01em}
 .brand:hover{color:var(--text);text-decoration:none}
 .nav{display:flex;flex-direction:column;gap:2px}
 .nav a{display:flex;align-items:center;gap:10px;min-height:40px;padding:0 12px;border-radius:var(--radius);color:var(--text-2);font-weight:500}
@@ -487,7 +487,7 @@ summary.account-btn:hover{background:var(--control-hover)}
 /* ---------- login ---------- */
 .login{display:flex;flex-direction:column;align-items:center;gap:12px;min-height:100vh;padding:18vh 16px 48px}
 .login-card{width:100%;max-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
-.login-head{display:flex;align-items:center;gap:8px;margin:0;padding:14px 18px;border-bottom:1px solid var(--border);font-size:15px;font-weight:600}
+.login-head{display:flex;align-items:center;gap:4px;margin:0;padding:14px 18px;border-bottom:1px solid var(--border);font-size:15px;font-weight:600}
 .login-form{display:flex;flex-direction:column;gap:12px;margin:0;padding:18px}
 .login-form+.login-form{border-top:1px solid var(--border);padding:14px 18px 18px}
 .field{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:500;color:var(--text-2)}
