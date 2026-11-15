@@ -1,6 +1,6 @@
 # asynqui architecture
 
-How the code is organised and the conventions it follows. For how asynqui behaves, see [design.md](design.md).
+How the code is organised and the conventions it follows. For the design decisions behind asynqui, see [design.md](design.md).
 
 **References:**
 - Go's [Organizing a Go module](https://go.dev/doc/modules/layout), the "server project" layout.
@@ -53,7 +53,7 @@ cmd/asynqui → web → conn, auth, authz → config
 8. **UI text lives in templ.** Go code never builds user-facing strings. It returns typed errors or codes (`errors.Is`/`errors.As`) that templates map to copy.
 9. **Formatting goes through `web/format`.** No `fmt.Sprintf("%d")`, `time.Format` or `humanize` calls in handlers or templates.
 10. **CSS:** one hand-written stylesheet, `app.css`, whose custom properties are the design tokens. Dark mode swaps tokens under `[data-theme=dark]`, and `[data-theme=system]` follows `prefers-color-scheme`. No Tailwind and no CSS build step.
-11. **CSP-clean markup.** No inline `<script>`, `<style>`, `style=""` or `on*=` attributes. Use classes, SVG attributes and `app.js` instead. No form may lead off-origin ([design §7](design.md#7-http)), so SSO sign-in and proxy sign-out are links.
+11. **CSP-clean markup.** No inline `<script>`, `<style>`, `style=""` or `on*=` attributes. Use classes, SVG attributes and `app.js` instead. The CSP's `form-action 'self'` also covers a form's redirects, so no form may lead off-origin: SSO sign-in and proxy sign-out are links.
 12. **Minimal dependencies.** Prefer the standard library. No third-party router, DI framework, mock framework or assertion library. The frontend is vendored and embedded: no npm, no build step, no chart library.
 
 ## Wiring and lifecycle
@@ -69,10 +69,10 @@ cmd/asynqui → web → conn, auth, authz → config
 
 ## Authentication
 
-- **Cookies:** the session and OIDC flow cookies are signed and encrypted with `gorilla/securecookie`. `previous_keys` become extra codecs (`securecookie.CodecsFromPairs`) that only decode.
-- **OIDC:** go-oidc's `Verifier` checks the ID token's issuer, audience, expiry and signature; the nonce and the other claim checks in [design §3](design.md#oidc) run after it.
+- **Cookies:** the session and OIDC flow cookies are signed and encrypted with `gorilla/securecookie`. `previous_keys` become extra codecs (`securecookie.CodecsFromPairs`) that only decode. A session records the provider that minted it, and a cookie from another provider is rejected.
+- **OIDC:** go-oidc's `Verifier` checks the ID token's issuer, audience, expiry and signature; asynqui then checks the nonce, a non-empty `sub`, `azp` (which must equal `client_id` when present or when `aud` has several entries) and an `iat` at most 5 minutes ahead.
 - **Client address:** proxy trust and the login rate limit use `r.RemoteAddr`, never `X-Forwarded-For`.
-- **Return-to:** `next` is cleaned with `path.Clean` before the prefix check.
+- **Return-to:** `next` is cleaned with `path.Clean` before the prefix check. Anything but a same-origin path under `base_path` falls back to `<base>/`.
 
 ## Routing and middleware
 
@@ -80,6 +80,7 @@ cmd/asynqui → web → conn, auth, authz → config
 - **Links:** one helper, `d.url(segments ...string)`, builds every link, redirect and cookie path. It prefixes `base_path` and escapes each segment with `url.PathEscape`. Templates never concatenate paths; query strings use `url.Values`.
 - **Auth middleware** only identifies the user and never rejects a request. A proxy request with untrusted identity headers is marked as rejected.
 - **Wrappers:** `view`, `op` and `admin` read that identity and resolve `{conn}`. A request with no identity gets `authn.Challenge`, a hidden or unknown connection gets 404, and an insufficient role gets 403.
+- **Security headers:** a strict CSP with no `unsafe-inline` or `unsafe-eval`, `nosniff`, same-origin `Referrer-Policy` and `Cross-Origin-Opener-Policy`, and a `Permissions-Policy` that turns off the device features the UI never uses. Clipboard write stays allowed for the copy buttons.
 - **Global middleware**, outermost first: request logging, panic recovery, security headers, `http.CrossOriginProtection`, authentication, app mux.
 
 ## Data access and Redis load
@@ -103,6 +104,7 @@ cmd/asynqui → web → conn, auth, authz → config
 - **Stable ids:** htmx refocuses the element with the same id after a swap, so every focusable element in a polled region has a stable id, with one prefix per element kind so names cannot collide.
 - **Selection:** row checkboxes carry `hx-preserve` and a stable id, so a swapped-in table keeps them checked. They belong to an empty action form through their `form` attribute. `app.js` recomputes the toolbar after each swap and restores focus. An action's answer renders the checkboxes without `hx-preserve`, so the selection clears.
 - **Actions:** `<form method="post">`, enhanced with `hx-post` and `hx-swap="none"`. Error toasts are appended to `#toasts` out of band. Without JS the answer is always a redirect back, with failures in the `asynqui_flash` cookie. A confirm button posts `confirm=1`; without JS the first post answers with a confirmation page.
+- **Untrusted text:** wrap task IDs, types, queue and group names, payload previews and errors in `<bdi>`, and pass IDs and names through `format.VisibleID`, which shows bidirectional control characters as U+FFFD. Titles and Copy keep the real value.
 - **Time:** render timestamps with the `time` component; `app.js` localises them.
 - **Assets:** served under `/static/<hash>/…` with `Cache-Control: immutable`, the hash covering every embedded file. `//go:embed files` (without `all:`), so dotfiles are never embedded.
 

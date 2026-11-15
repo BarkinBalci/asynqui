@@ -2,6 +2,10 @@
 
 Development tasks are in `Taskfile.yml`, and `task` lists them. Install [Task](https://taskfile.dev/installation/) or run it as `go tool -modfile=tools/go.mod task`. Before you push, run `task check`. It runs the same checks as CI.
 
+## Reporting issues
+
+Report bugs and request features with the [issue forms](https://github.com/BarkinBalci/asynqui/issues/new/choose). Report security issues as [SECURITY.md](SECURITY.md) describes, not in an issue.
+
 ## Documentation
 
 | Document | Covers |
@@ -9,7 +13,7 @@ Development tasks are in `Taskfile.yml`, and `task` lists them. Install [Task](h
 | [configuration.md](docs/configuration.md) | Flags, environment variables, the config file and every key |
 | [authentication.md](docs/authentication.md) | Sign-in providers, sessions, roles, cookies |
 | [deployment.md](docs/deployment.md) | Installing and running asynqui in production |
-| [design.md](docs/design.md) | How asynqui behaves: pages, UI rules, sign-in, HTTP |
+| [design.md](docs/design.md) | The design decisions behind asynqui, and why |
 | [architecture.md](docs/architecture.md) | How the code is organised and the conventions it follows |
 | [releasing.md](docs/releasing.md) | Cutting a release |
 
@@ -72,10 +76,6 @@ The browser tests are in `e2e/`, behind the `e2e` build tag, so `go test ./...` 
 Each run leaves a video per test in `e2e/test-results/`, and a `.trace.zip` for each failed test. CI uploads the directory as the `e2e-test-results` artifact. Open a trace with `go run github.com/mxschmitt/playwright-go/cmd/playwright show-trace <file>.trace.zip` or on [trace.playwright.dev](https://trace.playwright.dev).
 
 axe-core is vendored in `e2e/testdata`. To upgrade it, replace the directory with the new release's `axe.min.js` and `LICENSE` and update the path in `e2e/a11y_test.go`. The accessibility check fails on any violation, minor ones included.
-
-## Demo GIF
-
-The README's `docs/images/demo.gif` is recorded from the `RunRetries` browser test. Regenerate it with `ASYNQUI_E2E_REDIS=localhost:6379 task demo-gif` when a page in that flow changes, and watch it before committing.
 
 ## Version stamping
 

@@ -27,8 +27,11 @@ import (
 // test-results/<Test>/<Subtest>.webm and <Subtest>.trace.zip.
 const resultsDir = "test-results"
 
+// imagesDir holds the README's images.
+const imagesDir = "../docs/images"
+
 // gifOut is where the GIF of ASYNQUI_E2E_GIF's subtest is written.
-const gifOut = "../docs/images/demo.gif"
+const gifOut = imagesDir + "/demo.gif"
 
 // slowMo is how long Playwright waits after each action, in
 // milliseconds, so the videos can be followed. The cursor's glide must
@@ -40,12 +43,17 @@ const slowMo = 400.0
 type presentation struct {
 	headed bool   // ASYNQUI_E2E_HEADED=1
 	gif    string // ASYNQUI_E2E_GIF: the subtest whose frames become gifOut
+	// screenshots is ASYNQUI_E2E_SCREENSHOTS=1: pages get the larger
+	// viewport at shotScale and no drawn cursor, and the tests save the
+	// README's screenshots (see screenshot).
+	screenshots bool
 }
 
 func presentationFromEnv() presentation {
 	return presentation{
-		headed: os.Getenv("ASYNQUI_E2E_HEADED") == "1",
-		gif:    os.Getenv("ASYNQUI_E2E_GIF"),
+		headed:      os.Getenv("ASYNQUI_E2E_HEADED") == "1",
+		gif:         os.Getenv("ASYNQUI_E2E_GIF"),
+		screenshots: os.Getenv("ASYNQUI_E2E_SCREENSHOTS") == "1",
 	}
 }
 
@@ -53,8 +61,14 @@ func (l presentation) launchOptions() playwright.BrowserTypeLaunchOptions {
 	return playwright.BrowserTypeLaunchOptions{Headless: new(!l.headed), SlowMo: new(slowMo)}
 }
 
-// viewport is the page, video and GIF size.
-func viewport() *playwright.Size { return &playwright.Size{Width: 1200, Height: 750} }
+// viewport is the page, video and GIF size, and with screenshots on
+// the screenshots' size in CSS pixels.
+func (l presentation) viewport() *playwright.Size {
+	if l.screenshots {
+		return &playwright.Size{Width: 1440, Height: 900}
+	}
+	return &playwright.Size{Width: 1200, Height: 750}
+}
 
 // records reports whether t is the subtest ASYNQUI_E2E_GIF names, by its
 // full name or its last part.
@@ -447,4 +461,59 @@ func (m *matcher) mapImage(dst *image.Paletted, src image.Image) {
 func distance(a, b color.RGBA) int {
 	dr, dg, db := int(a.R)-int(b.R), int(a.G)-int(b.G), int(a.B)-int(b.B)
 	return 3*dr*dr + 4*dg*dg + 2*db*db
+}
+
+// ---- Screenshots ----
+
+// shotScale is the screenshots' device scale factor.
+const shotScale = 2.0
+
+// shotReady is gifReady with no htmx request in flight.
+const shotReady = `() => (` + gifReady + `)() && !document.querySelector(".htmx-request")`
+
+// screenshot saves p as imagesDir/<name>.png once it has settled. It does
+// nothing without ASYNQUI_E2E_SCREENSHOTS.
+func (h *harness) screenshot(p *page, name string) {
+	p.t.Helper()
+	if !h.look.screenshots {
+		return
+	}
+	p.settle()
+	b, err := p.Screenshot(playwright.PageScreenshotOptions{
+		Type:       playwright.ScreenshotTypePng,
+		Caret:      playwright.ScreenshotCaretInitial,
+		Animations: playwright.ScreenshotAnimationsDisabled,
+	})
+	p.ok(err, "screenshot")
+	img, err := png.Decode(bytes.NewReader(b))
+	p.ok(err, "decode screenshot")
+	var out bytes.Buffer
+	enc := png.Encoder{CompressionLevel: png.BestCompression}
+	p.ok(enc.Encode(&out, img), "encode screenshot")
+	file := filepath.Join(imagesDir, name+".png")
+	p.ok(os.WriteFile(file, out.Bytes(), 0o600), "write %s", file)
+	p.t.Logf("wrote %s: %d KB", file, out.Len()>>10)
+}
+
+// settle moves the pointer off the content and waits until the page
+// shows its data with no request in flight. A page still checking is
+// refreshed every 2s.
+func (p *page) settle() {
+	p.t.Helper()
+	vp := p.ViewportSize()
+	p.ok(p.Mouse().Move(float64(vp.Width-1), float64(vp.Height-1)), "move the pointer away")
+	deadline := time.Now().Add(15 * time.Second)
+	refresh := time.Now().Add(2 * time.Second)
+	for !p.evalBool(shotReady) {
+		now := time.Now()
+		if now.After(deadline) {
+			p.t.Fatalf("%s did not settle", p.URL())
+		}
+		if now.After(refresh) {
+			p.eval(`() => document.querySelectorAll("[data-poll]").forEach((el) => htmx.trigger(el, "asynqui-refresh"))`)
+			refresh = now.Add(2 * time.Second)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	p.eval(`() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
 }

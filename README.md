@@ -53,6 +53,31 @@ Inside a container, `localhost` is the container itself, so point
 
 See the [deployment example](docs/deployment.md#kubernetes-example).
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="docs/images/overview.png"><img alt="The Overview: a card per connection with queue counts, processed and failed today, and health" src="docs/images/overview.png"></a>
+      <br>Overview
+    </td>
+    <td width="50%" align="center">
+      <a href="docs/images/queue.png"><img alt="A queue's Retry tab with three tasks selected and the Run now, Archive and Delete actions" src="docs/images/queue.png"></a>
+      <br>Queue
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="docs/images/task.png"><img alt="A retry task with its JSON payload, last error and details" src="docs/images/task.png"></a>
+      <br>Task
+    </td>
+    <td width="50%" align="center">
+      <a href="docs/images/schedulers.png"><img alt="A connection's scheduler entries with spec, task type, payload, options and next run" src="docs/images/schedulers.png"></a>
+      <br>Schedulers
+    </td>
+  </tr>
+</table>
+
 ## Limitations
 
 - Standalone Redis or Valkey only: no Sentinel or Cluster.
@@ -79,7 +104,7 @@ asynqui checks GitHub for new releases. You can [turn the update check off](docs
 **Contributing**
 
 - [Contributing](CONTRIBUTING.md): local development and the dev workflow
-- [Design](docs/design.md): how asynqui behaves
+- [Design](docs/design.md): design decisions and why
 - [Architecture](docs/architecture.md): how the code is organised
 - [Releasing](docs/releasing.md): cutting a release
 

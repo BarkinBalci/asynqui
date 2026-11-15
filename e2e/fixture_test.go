@@ -50,9 +50,9 @@ const (
 type fixture struct {
 	// insp is an inspector per reachable connection.
 	insp map[string]*asynq.Inspector
-	// refund is a scheduled task; archived is an archived one, with an
-	// error.
-	refund, archived seededTask
+	// refund is a scheduled task; retry is one in the retry set and
+	// archived an archived one, both with an error.
+	refund, retry, archived seededTask
 }
 
 type seededTask struct {
@@ -188,9 +188,9 @@ func (s *seeder) ok(queue, typ string, n int, payload func() string) {
 
 // fail enqueues a task that ends in the retry set after tries attempts,
 // next before its next retry.
-func (s *seeder) fail(queue, typ, payload, msg string, tries int, next time.Duration) {
+func (s *seeder) fail(queue, typ, payload, msg string, tries int, next time.Duration) seededTask {
 	s.retry[queue]++
-	s.add(queue, typ, payload, outcome{err: msg, tries: tries, next: next})
+	return s.add(queue, typ, payload, outcome{err: msg, tries: tries, next: next})
 }
 
 // dead enqueues a task that is archived after tries retries.
@@ -345,7 +345,7 @@ func seedFixture(t *testing.T, addr string) fixture {
 	for _, h := range hooks {
 		s.fail(qWebhooks, "webhook:deliver", p.webhook(), h.err, h.tries, h.next)
 	}
-	s.fail(qInvoices, "invoice:generate", p.invoice(), "render invoice pdf: chromium: navigation timeout of 30000 ms exceeded", 3, 11*time.Minute+20*time.Second)
+	fx.retry = s.fail(qInvoices, "invoice:generate", p.invoice(), "render invoice pdf: chromium: navigation timeout of 30000 ms exceeded", 3, 11*time.Minute+20*time.Second)
 	s.fail(qInvoices, "invoice:send", p.invoiceSend(), "smtp: 421 4.7.0 Try again later, closing connection", 2, 16*time.Minute)
 	s.fail(qCritical, "payment:capture", p.capture(), "psp: 503 upstream unavailable (request_id req_8f2k1LqZ)", 1, 8*time.Minute+45*time.Second)
 	fx.archived = s.dead(qRefunds, "refund:process", p.refund(), "psp: refund rejected: charge has already been refunded", 3)
@@ -446,7 +446,12 @@ func seedFixture(t *testing.T, addr string) fixture {
 
 	// Spec, type, queue and payload of each scheduler entry.
 	schedule := map[string][][4]string{
-		connPayments:      {{"@every 15m", "ledger:reconcile", "ledger", `{"accounts":"all"}`}},
+		connPayments: {
+			{"@every 15m", "ledger:reconcile", "ledger", `{"accounts":"all"}`},
+			{"@every 1h", "payment:expire_authorizations", qCritical, `{"older_than":"168h"}`},
+			{"30 1 * * *", "ledger:close_day", "ledger", `{"timezone":"UTC"}`},
+			{"0 0 1 * *", "invoice:generate", qInvoices, `{"cycle":"monthly"}`},
+		},
 		connNotifications: {{"0 8 * * 1", "digest:weekly", qDigest, `{"segment":"weekly_active"}`}},
 		connReports:       {{"0 6 * * *", "report:daily", "reports", `{"report":"revenue_by_region","format":"pdf"}`}},
 	}
