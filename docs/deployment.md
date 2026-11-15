@@ -4,9 +4,9 @@ How to install asynqui and run it in production. For flags, environment variable
 
 ## Prerequisites
 
-- **Redis or Valkey:** Redis 4.0 or later, the minimum [asynq](https://github.com/hibiken/asynq) requires, or Valkey. Standalone only, no Sentinel or Cluster.
+- **Redis or Valkey:** Redis 4.0 or later, the minimum [asynq](https://github.com/hibiken/asynq) requires, or Valkey. Standalone only: no Sentinel or Cluster.
 - **asynq:** asynqui reads asynq's key layout directly, so it is built and tested against asynq v0.26.0.
-- **Redis ACL (optional):** a least-privilege user needs the commands below, every key under `asynq:*` and the `asynq:cancel` channel, which Cancel publishes to. ACL users need Redis 6.2 or later; `client|setinfo` names a Redis 7.2 command, so drop it on older servers.
+- **Redis ACL (optional):** a least-privilege user needs the commands below, every key under `asynq:*`, and the `asynq:cancel` channel that Cancel publishes to. ACL users need Redis 6.2 or later. `client|setinfo` is a Redis 7.2 command, so drop it on older servers.
 
   ```sh
   redis-cli ACL SETUSER asynqui on '>PASSWORD' \
@@ -227,4 +227,4 @@ A release build asks GitHub for the latest release at startup and then daily, an
 
 - Read the notes of every release you skip on [GitHub Releases](https://github.com/BarkinBalci/asynqui/releases). Breaking changes are marked with `!` in the changelog (`feat!: …`).
 - The config is strict: a renamed or removed key stops startup with an error naming it, so fix the config before rolling out.
-- Pin the exact image tag and change it deliberately.
+- Use an exact image tag and change it deliberately.

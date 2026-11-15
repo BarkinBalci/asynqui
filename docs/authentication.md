@@ -82,7 +82,7 @@ Your deployment must get two things right:
 ## OIDC setup
 
 1. Register asynqui at the IdP as a web client using the authorization-code flow, with the redirect URL `https://<host><base_path>/auth/callback`. Set the same URL as `redirect_url`.
-2. Set `issuer` to the IdP's issuer URL exactly as its discovery document (`<issuer>/.well-known/openid-configuration`) reports it, trailing slash included. asynqui reads it at startup.
+2. Set `issuer` to the IdP's issuer URL, exactly as its discovery document at `<issuer>/.well-known/openid-configuration` reports it, trailing slash included. asynqui reads that document at startup.
 3. Choose the scopes, the username claim and the groups claim as below, then bind users or groups to roles.
 
 ```yaml
@@ -106,9 +106,9 @@ authz:
       connections: ["*"]
 ```
 
-- **Scopes:** keep `email` while `username_claim` is `email`. Add `groups` to `scopes` when the IdP sends groups only for that scope (Dex, for example).
-- **Username claim:** a string claim, read from the ID token, or from userinfo when the ID token lacks it. With `email`, login fails unless `email_verified` is true; any other claim is used as is, so pick one users cannot change themselves.
-- **Groups claim:** a string or an array of strings, from the ID token or else userinfo. `groups` in bindings match its values exactly. When the IdP signals a groups overage instead of listing them, the user signs in with no groups and asynqui logs a WARN.
+- **Scopes:** keep `email` while `username_claim` is `email`. Add `groups` to `scopes` if your IdP sends groups only for that scope, as Dex does.
+- **Username claim:** a string claim, read from the ID token, or from userinfo when the ID token lacks it. With `email`, login fails unless `email_verified` is true. Any other claim is used as is, so pick one that users can't change themselves.
+- **Groups claim:** a string or an array of strings, read from the ID token, or else from userinfo. The `groups` in bindings must match its values exactly. When the IdP signals a groups overage instead of listing them, the user signs in with no groups and asynqui logs a WARN.
 - **Session size:** the session cookie keeps only the groups that some binding names. If those still do not fit in 3800 bytes, login is refused with "Sign-in failed: too many groups for a session cookie."
 
 ### Keycloak
@@ -117,7 +117,7 @@ The issuer is `https://<host>/realms/<realm>`. Groups are not in tokens by defau
 
 ### Microsoft Entra ID
 
-The issuer is `https://login.microsoftonline.com/<tenant-id>/v2.0`. ID tokens often lack `email_verified`, so set `username_claim` to `preferred_username` (or another claim you bind on). Add the groups claim under the app's **Token configuration**; it carries group object IDs, so bind those. A user in more groups than fit in a token gets an overage, so no groups in asynqui; emitting only groups assigned to the application keeps the list short.
+The issuer is `https://login.microsoftonline.com/<tenant-id>/v2.0`. ID tokens often lack `email_verified`, so set `username_claim` to `preferred_username` (or another claim you bind on). Add the groups claim under the app's **Token configuration**. It carries group object IDs, so bind those. A user in more groups than fit in a token gets an overage and has no groups in asynqui. To keep the list short, emit only the groups assigned to the application.
 
 ### Google
 
@@ -153,9 +153,9 @@ oauth2-proxy \
 
 - Pass the client secret and the cookie secret as `OAUTH2_PROXY_CLIENT_SECRET` and `OAUTH2_PROXY_COOKIE_SECRET`. Generate the cookie secret with `openssl rand -base64 32 | tr -- '+/' '-_'`.
 - At the IdP, register `https://<host>/oauth2/callback`, oauth2-proxy's own callback.
-- Groups come from the `groups` claim (`--oidc-groups-claim`). When the IdP needs the `groups` scope for it, add `--scope='openid email profile groups'`.
-- `--skip-auth-route` lets the probes through without sign-in. Adjust it to `^<base_path>/health/` with a `base_path`.
-- Sign out (`/oauth2/sign_out`) clears oauth2-proxy's cookie only; the IdP session stays.
+- oauth2-proxy reads groups from the `groups` claim, set with `--oidc-groups-claim`. When the IdP needs the `groups` scope for it, add `--scope='openid email profile groups'`.
+- `--skip-auth-route` lets the probes through without sign-in. If you set a `base_path`, change it to `^<base_path>/health/`.
+- Sign out (`/oauth2/sign_out`) clears only oauth2-proxy's cookie. The IdP session stays.
 
 ## Sessions
 
