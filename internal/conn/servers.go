@@ -54,19 +54,12 @@ type Worker struct {
 	Deadline time.Time
 }
 
-// Servers returns the connection's asynq servers, sorted by host, PID and
-// ID, from the 1s cache when fresh.
-//
-// The slice is shared between callers, who must not modify it.
+// Servers returns the connection's asynq servers, sorted by host, PID and ID,
+// from the cache. The slice is shared between callers, who must not modify it.
 func (c *Conn) Servers(ctx context.Context) ([]Server, error) {
 	return cached(ctx, c.cache, serversKey, cacheTTL, c.fetchServers)
 }
 
-// fetchServers reads Inspector.Servers.
-//
-// Cost: two Lua scripts (listing the live server and worker keys, which
-// also drop expired ones), then a GET per server and an HVALS per server's
-// worker hash. Like every Inspector call it takes no context; see newConn.
 func (c *Conn) fetchServers(context.Context) ([]Server, error) {
 	infos, err := c.servers.Servers()
 	if err != nil {

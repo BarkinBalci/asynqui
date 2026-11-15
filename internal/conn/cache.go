@@ -15,15 +15,11 @@ const cacheTTL = time.Second
 // sweepInterval is the most often a cache removes its expired entries.
 const sweepInterval = 10 * time.Second
 
-// cacheKey names one snapshot of a connection. Its type parameter is the
-// type of the snapshot, so two uses of a key can never disagree on it: keys
-// with the same name but different T are different keys.
+// cacheKey names one snapshot of a connection. T is the snapshot's type, so
+// keys with the same name but different T are different keys.
 type cacheKey[T any] string
 
-// Cache keys. History keys are built per queue and range (historyKey),
-// enqueue event keys per entry and page (enqueueKey), and the Queue and
-// Task pages' keys per queue, state, page and task (queueKey, tasksKey,
-// groupsKey, taskKey in tasks.go).
+// Cache keys of the connection-wide snapshots.
 const (
 	queuesKey           cacheKey[[]Queue]          = "queues"
 	infoKey             cacheKey[*Info]            = "info"
@@ -56,21 +52,13 @@ func newCache() *cache {
 	return &cache{entries: map[any]cacheEntry{}, flight: new(singleflight.Group)}
 }
 
-// cached returns the value stored under key if it is younger than ttl.
-// Otherwise it starts fetch, or joins the one already running for key, and
-// stores a successful result for ttl. Errors are not stored, so the next
-// call fetches again. A panic in fetch is returned as an error.
-//
-// A served value is at most ttl plus its fetch time old: ttl counts from
-// when the fetch finished.
-//
-// fetch runs in its own goroutine (singleflight's DoChan) under ctx
-// without its cancelation, so a viewer that goes away does not fail the
-// fetch for the others; fetch must be bounded by its own timeouts. A
-// caller whose ctx ends stops waiting and gets ctx's error, while the
-// fetch goes on and is stored for later callers.
-//
-// The value is shared between callers, who must not modify it.
+// cached returns the value stored under key if it is younger than ttl, counted
+// from when its fetch finished. Otherwise it starts fetch, or joins the one
+// already running for key, and stores a successful result; errors, and panics
+// in fetch, are returned but not stored. fetch runs in its own goroutine under
+// ctx without its cancelation, so it must be bounded by its own timeouts: a
+// caller whose ctx ends gets ctx's error while the fetch goes on for later
+// callers. The value is shared between callers, who must not modify it.
 func cached[T any](ctx context.Context, c *cache, key cacheKey[T], ttl time.Duration, fetch func(context.Context) (T, error)) (T, error) {
 	var zero T
 	c.mu.Lock()
@@ -98,11 +86,9 @@ func cached[T any](ctx context.Context, c *cache, key cacheKey[T], ttl time.Dura
 	}
 }
 
-// fill is the shared fetch of key's flight: it runs fetch, recovering a
-// panic, and stores a successful result. A value stored since the caller
-// missed the cache (by a flight that finished, and was forgotten, in
-// between) is served instead of fetching again; a reset clears the
-// entries, so it is never older than the last reset.
+// fill is the shared fetch of key's flight: it runs fetch, recovering a panic,
+// and stores a successful result. A value stored by a flight that finished
+// after the caller missed the cache is served instead of fetching again.
 func fill[T any](c *cache, key cacheKey[T], ttl time.Duration, fetch func() (T, error)) (any, error) {
 	c.mu.Lock()
 	gen := c.gen
@@ -140,9 +126,8 @@ func (c *cache) store(key any, v any, ttl time.Duration, gen uint64) {
 }
 
 // reset drops every stored value and detaches the fetches in flight: they
-// still answer the callers waiting on them, but store nothing, and the
-// next caller starts a fresh fetch. Actions that change a connection call
-// it so the next read sees their effect.
+// still answer the callers waiting on them but store nothing. Actions that
+// change a connection call it so the next read sees their effect.
 func (c *cache) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

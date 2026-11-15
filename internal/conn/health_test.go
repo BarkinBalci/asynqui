@@ -39,9 +39,8 @@ func scriptedPinger(results <-chan pingResult) pinger {
 	})
 }
 
-// Tests in a synctest bubble run on a fake clock, and synctest.Test fails if
-// any goroutine the test started is still blocked when it returns, so they
-// also check that the health loops do not leak.
+// Tests in a synctest bubble run on a fake clock, and synctest.Test fails on a
+// health loop that is still blocked when the test returns.
 
 func TestHealthLoop(t *testing.T) {
 	errRefused := errors.New("connection refused")

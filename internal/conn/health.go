@@ -12,8 +12,8 @@ import (
 // connection.
 const healthInterval = 10 * time.Second
 
-// backendEvery is how many health checks pass between two backend
-// detections of a connection that stays up: once a minute.
+// backendEvery is how many health checks pass between two backend detections
+// of a connection that stays up.
 const backendEvery = 6
 
 // State is the reachability of a connection.
@@ -81,13 +81,11 @@ func (c *Conn) Recheck(ctx context.Context) (Health, error) {
 	return c.check(ctx)
 }
 
-// healthLoop checks the connection now and then every interval until ctx
-// is canceled. A check that outlasts the interval delays the next one.
-// Each time the connection becomes reachable, while the backend is still
-// unknown, and every backendEvery-th check (a server swapped behind the
-// same address without a failed PING), it also detects the backend (one
-// INFO server), so the "Redis info"/"Valkey info" label needs no INFO per
-// page.
+// healthLoop checks the connection now and then every interval until ctx is
+// canceled; a check that outlasts the interval delays the next one. It also
+// detects the backend each time the connection becomes reachable while the
+// backend is unknown, and every backendEvery-th check, in case another server
+// took over the address.
 func (c *Conn) healthLoop(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()

@@ -104,11 +104,11 @@ type Task struct {
 	CompletedAt time.Time
 	Result      []byte
 	// Started is when a worker started an active task, from the servers'
-	// worker lists (ListTasks of active tasks only). Zero when no server
-	// reports the task, as for an orphaned one.
+	// worker lists. Zero when no server reports the task, as for an orphaned
+	// one.
 	Started time.Time
 	// ArchivedAt is when an archived task was archived: its score in the
-	// archived set (ListTasks of archived tasks only; see keys.go).
+	// archived set (see keys.go).
 	ArchivedAt time.Time
 }
 
@@ -147,10 +147,9 @@ func (q QueueInfo) Count(s TaskState) int {
 	return 0
 }
 
-// queueKey, tasksKey, groupsKey and taskKey are the cache keys of one
-// queue's reads (see the key list in cache.go). The queue name, which may
-// hold any character, comes last or is length-prefixed, so two keys never
-// collide.
+// queueKey, tasksKey, groupsKey and taskKey are the cache keys of one queue's
+// reads. The queue name, which may hold any character, comes last or is
+// length-prefixed, so two keys never collide.
 func queueKey(queue string) cacheKey[QueueInfo] {
 	return cacheKey[QueueInfo]("queue/" + queue)
 }
@@ -171,12 +170,8 @@ func taskKey(queue, id string) cacheKey[Task] {
 	return cacheKey[Task]("task/" + strconv.Itoa(len(queue)) + "/" + queue + id)
 }
 
-// QueueInfo returns one queue's counters from the 1s cache when fresh. A
-// queue the connection does not have is ErrQueueNotFound.
-//
-// Cost: one SMEMBERS for the existence check, then GetQueueInfo (see
-// fetchQueues): about a second of the Connection page's cost for one
-// queue.
+// QueueInfo returns one queue's counters from the cache. A queue the
+// connection does not have is ErrQueueNotFound.
 func (c *Conn) QueueInfo(ctx context.Context, queue string) (QueueInfo, error) {
 	return cached(ctx, c.cache, queueKey(queue), cacheTTL, func(context.Context) (QueueInfo, error) {
 		if err := c.checkQueue(queue); err != nil {
@@ -208,28 +203,13 @@ func (c *Conn) checkQueue(queue string) error {
 }
 
 // ListTasks returns one page (1-based, size 1..MaxPageSize) of the queue's
-// tasks in state, from the 1s cache when fresh. A queue the connection does
-// not have is ErrQueueNotFound.
-//
-// Scheduled, retry, archived and completed tasks come in the order of the
-// state's time, the score of asynq's sorted set for the state (see
-// keys.go): soonest or oldest first, or latest first with desc. The
-// Inspector cannot list in reverse, so the page's IDs are read with one
-// range read of the set, then each is read with GetTaskInfo,
-// queueConcurrency at a time (see hydrate). Archived tasks carry
-// ArchivedAt from their score.
-//
-// Pending and active tasks come in asynq's order (oldest first; desc is
-// ignored), from ListPendingTasks and ListActiveTasks. Active tasks carry
-// Started from the servers' worker lists: the Servers snapshot the
-// Servers page shares. Aggregating tasks are listed per group
-// (ListGroupTasks), so that state is ErrUnsupported.
-//
-// Cost: for the sorted states an SMEMBERS for the existence check and one
-// range read, then per task GetTaskInfo's SISMEMBER and Lua script; for
-// pending and active tasks one List*Tasks.
-//
-// The slice is shared between callers, who must not modify it.
+// tasks in state, from the cache. A queue the connection does not have is
+// ErrQueueNotFound. Scheduled, retry, archived and completed tasks come in the
+// order of the state's time (see keys.go), latest first with desc, and
+// archived tasks carry ArchivedAt. Pending and active tasks come in asynq's
+// order and ignore desc; active tasks carry Started. Aggregating tasks are
+// listed per group, so that state is ErrUnsupported. The slice is shared
+// between callers, who must not modify it.
 func (c *Conn) ListTasks(ctx context.Context, queue string, state TaskState, page, size int, desc bool) ([]Task, error) {
 	if state == TaskAggregating || state < TaskActive || state > TaskCompleted {
 		return nil, ErrUnsupported
@@ -286,15 +266,11 @@ func (c *Conn) listActive(ctx context.Context, queue string, page, size int) ([]
 	return out, nil
 }
 
-// hydrate reads each entry's task with GetTaskInfo, at most
-// queueConcurrency at a time, and returns them in the entries' order.
-//
-// A task that is gone, or no longer in state (run, deleted, moved on
-// between the two reads), is left out, so a page may come up short. So is
-// one whose read fails with an error reply (a WARN is logged): one bad
-// task does not hide the page. A queue that is gone (ErrQueueNotFound) or
-// a server that cannot be reached (Unreachable) fails the page, and no
-// further reads start after either.
+// hydrate reads each entry's task with GetTaskInfo, at most queueConcurrency
+// at a time, in the entries' order. A task that is gone or no longer in state
+// is left out, so a page may come up short; so is one whose read fails with an
+// error reply (logged as a WARN). A missing queue or an unreachable server
+// fails the page, and no further reads start after either.
 func (c *Conn) hydrate(ctx context.Context, queue string, state TaskState, entries []keyEntry) ([]Task, error) {
 	tasks := make([]Task, len(entries))
 	keep := make([]bool, len(entries))
@@ -359,14 +335,11 @@ func (c *Conn) hydrate(ctx context.Context, queue string, state TaskState, entri
 	return out, nil
 }
 
-// ListGroupTasks returns one page (1-based, size 1..MaxPageSize) of the
-// tasks of one aggregation group of the queue, in asynq's order (oldest
-// first), from the 1s cache when fresh. A queue the connection does not
-// have is ErrQueueNotFound; a group without tasks is an empty page.
-//
-// Cost: an SMEMBERS for the existence check, then ListAggregatingTasks.
-//
-// The slice is shared between callers, who must not modify it.
+// ListGroupTasks returns one page (1-based, size 1..MaxPageSize) of the tasks
+// of one aggregation group of the queue, in asynq's order, from the cache. A
+// queue the connection does not have is ErrQueueNotFound; a group without
+// tasks is an empty page. The slice is shared between callers, who must not
+// modify it.
 func (c *Conn) ListGroupTasks(ctx context.Context, queue, group string, page, size int) ([]Task, error) {
 	page, size = max(page, 1), min(max(size, 1), MaxPageSize)
 	return cached(ctx, c.cache, groupTasksKey(queue, group, page, size), cacheTTL, func(context.Context) ([]Task, error) {
@@ -396,7 +369,7 @@ func (c *Conn) workerStarts(ctx context.Context) (map[string]time.Time, error) {
 }
 
 // Groups returns the queue's aggregation groups, sorted by name, from the
-// 1s cache when fresh.
+// cache.
 func (c *Conn) Groups(ctx context.Context, queue string) ([]Group, error) {
 	return cached(ctx, c.cache, groupsKey(queue), cacheTTL, func(context.Context) ([]Group, error) {
 		if err := c.checkQueue(queue); err != nil {
@@ -415,9 +388,8 @@ func (c *Conn) Groups(ctx context.Context, queue string) ([]Group, error) {
 	})
 }
 
-// Task returns one task of the queue (asynq's GetTaskInfo), from the 1s
-// cache when fresh. It returns ErrTaskNotFound or ErrQueueNotFound, each
-// also wrapping asynq's error.
+// Task returns one task of the queue from the cache. It returns
+// ErrTaskNotFound or ErrQueueNotFound, each also wrapping asynq's error.
 func (c *Conn) Task(ctx context.Context, queue, id string) (Task, error) {
 	if strings.TrimSpace(id) == "" {
 		return Task{}, ErrTaskNotFound
@@ -442,16 +414,11 @@ const (
 	TaskCancel
 )
 
-// TaskAction applies verb to one task of the queue. Run moves a
-// scheduled, retry, archived or aggregating task to pending; Archive
-// archives a pending, scheduled, retry or aggregating task; Delete deletes
-// a task in any state but active. Cancel asks the worker processing an
-// active task to stop it (asynq's CancelProcessing, best effort); it first
-// reads the task, so that a task that is not active is ErrTaskState
-// instead of a signal no worker listens for. Each returns ErrTaskNotFound
-// or ErrQueueNotFound (wrapping asynq's), or asynq's untyped error for a
-// state Run, Archive or Delete does not apply to. On success the
-// connection's cached reads are dropped.
+// TaskAction applies verb to one task of the queue. Cancel first reads the
+// task, so a task that is not active is ErrTaskState rather than a signal no
+// worker listens for. Each returns ErrTaskNotFound or ErrQueueNotFound
+// (wrapping asynq's), or asynq's untyped error for a state the verb does not
+// apply to. On success the connection's cached reads are dropped.
 func (c *Conn) TaskAction(ctx context.Context, queue string, verb TaskVerb, id string) error {
 	var act func(string, string) error
 	switch verb {
@@ -494,13 +461,11 @@ func (c *Conn) cancel(queue, id string) error {
 	return nil
 }
 
-// AllAction applies verb to every task of the queue in state and returns
-// how many it acted on: Run to scheduled, retry or archived tasks,
-// Archive to pending, scheduled or retry ones, Delete to any but active
-// and aggregating ones (see GroupAction). Other pairs are ErrUnsupported,
-// a queue the connection does not have ErrQueueNotFound. The cached reads
-// are dropped even when it fails, since asynq may have moved some tasks
-// before failing.
+// AllAction applies verb to every task of the queue in state and returns how
+// many it acted on. A pair asynq has no "all" action for is ErrUnsupported, a
+// queue the connection does not have ErrQueueNotFound. The cached reads are
+// dropped even when it fails, since asynq may have moved some tasks before
+// failing.
 func (c *Conn) AllAction(ctx context.Context, queue string, verb TaskVerb, state TaskState) (int, error) {
 	t := c.tasks
 	var fn func(string) (int, error)

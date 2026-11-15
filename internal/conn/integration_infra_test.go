@@ -32,8 +32,7 @@ func TestIntegrationServersAndSchedulers(t *testing.T) {
 	if err := srv.Start(mux); err != nil {
 		t.Fatal(err)
 	}
-	// The scheduler first writes its entries after one heartbeat (10s by
-	// default), so beat every second.
+	// The scheduler writes its entries on a heartbeat, so beat every second.
 	sch := asynq.NewScheduler(opt, &asynq.SchedulerOpts{LogLevel: asynq.FatalLevel, HeartbeatInterval: time.Second})
 	id, err := sch.Register("@every 1s", asynq.NewTask("report:daily", []byte(`{"a":1}`)), asynq.Queue("reports"), asynq.MaxRetry(2))
 	if err != nil {

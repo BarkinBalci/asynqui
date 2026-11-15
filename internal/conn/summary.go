@@ -21,13 +21,9 @@ type Summary struct {
 	OldestPending time.Duration
 }
 
-// Summary returns the connection's totals. It is computed from Queues, so
-// the Overview and the Connection page share one fetch per second.
-//
-// Any failing queue fails the whole Summary, including a queue deleted
-// between the listing and its read: GetQueueInfo then fails with an error
-// that does not wrap asynq.ErrQueueNotFound. Errors are not cached, so the
-// next poll recovers.
+// Summary returns the connection's totals, computed from Queues. Any failing
+// queue fails the whole Summary, including a queue deleted between the listing
+// and its read.
 func (c *Conn) Summary(ctx context.Context) (Summary, error) {
 	qs, err := c.Queues(ctx)
 	if err != nil {

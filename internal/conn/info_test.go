@@ -10,13 +10,8 @@ import (
 )
 
 // readInfoFixture returns a testdata INFO reply with Redis's CRLF line
-// endings.
-//
-// The fixtures were built from the INFO code of Redis 7.4.1 and Valkey 8.0
-// (src/server.c): every field a fresh standalone master writes in the
-// default sections, in order, with made-up values. Regenerate them from
-// real containers (redis:7.4-alpine, valkey/valkey:8.0-alpine; INFO with no
-// argument) once Docker is available.
+// endings. The fixtures hold every field a fresh standalone Redis 7.4.1 or
+// Valkey 8.0 master writes in the default sections, with made-up values.
 func readInfoFixture(t *testing.T, name string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", name))
@@ -33,8 +28,7 @@ func TestParseInfoFixtures(t *testing.T) {
 	}{
 		{"info_redis.txt", Info{Backend: BackendRedis, Version: "7.4.1", RedisVersion: "7.4.1", Mode: "standalone",
 			MaxMemoryPolicy: "noeviction", Keyspace: Keyspace{Keys: 128, Expires: 4}}},
-		// Valkey writes server_mode, not redis_mode, unless
-		// extended-redis-compatibility is on (it is off by default).
+		// Valkey writes server_mode, not redis_mode, by default.
 		{"info_valkey.txt", Info{Backend: BackendValkey, Version: "8.0.2", RedisVersion: "7.2.4", Mode: "standalone",
 			MaxMemoryPolicy: "noeviction", Keyspace: Keyspace{Keys: 3, Expires: 1}}},
 	}

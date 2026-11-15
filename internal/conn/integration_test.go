@@ -20,9 +20,8 @@ import (
 )
 
 // These tests run a real Redis (or Valkey) with testcontainers. They skip
-// when no Docker provider is available, unless ASYNQUI_REQUIRE_DOCKER=1
-// (set in CI), which makes them fail instead: TestIntegrationKeys pins
-// the asynq key layout and must never be skipped silently there.
+// without Docker unless ASYNQUI_REQUIRE_DOCKER=1, which makes them fail
+// instead.
 
 const redisImage = "redis:7.4-alpine"
 
@@ -102,8 +101,7 @@ func mustGet(t *testing.T, reg *conn.Registry, name string) *conn.Conn {
 	return c
 }
 
-// newClient returns an asynq Client for enqueuing test tasks: asynqui itself
-// never enqueues.
+// newClient returns an asynq Client for enqueuing test tasks.
 func newClient(t *testing.T, cc config.Connection) *asynq.Client {
 	t.Helper()
 	c := asynq.NewClient(asynq.RedisClientOpt{Addr: cc.Addr, DB: cc.DB, Username: cc.Username, Password: cc.Password.Reveal()})
@@ -210,8 +208,7 @@ func TestIntegrationInfo(t *testing.T) {
 		backend     conn.Backend
 		version     string // prefix
 		redisPrefix string
-		// Valkey writes server_mode unless extended-redis-compatibility
-		// is on, which it is not by default.
+		// Valkey writes server_mode, not redis_mode, by default.
 		modeKey string
 	}{
 		{redisImage, conn.BackendRedis, "7.4.", "7.4.", "redis_mode"},

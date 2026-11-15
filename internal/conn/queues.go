@@ -14,7 +14,7 @@ import (
 )
 
 // queueConcurrency bounds the per-queue Inspector calls in flight per
-// connection (GetQueueInfo, History).
+// connection.
 const queueConcurrency = 8
 
 // MaxHistoryDays is the longest History range.
@@ -49,9 +49,9 @@ type queueInspector interface {
 type Queue struct {
 	Name   string
 	Paused bool
-	// Size is asynq's QueueInfo.Size. In asynq v0.26.0 it counts every
-	// stored task: Pending + Active + Scheduled + Retry + Archived +
-	// Completed + Aggregating (its doc comment leaves Completed out).
+	// Size is asynq's QueueInfo.Size, which in asynq v0.26.0 counts every
+	// stored task, completed and aggregating included (its doc comment leaves
+	// Completed out).
 	Size      int
 	Pending   int
 	Active    int
@@ -70,31 +70,18 @@ type Queue struct {
 }
 
 // Queues returns every queue of the connection, sorted by name, from the
-// 1s cache when fresh. It is shared with Summary. Any failing queue fails
-// the whole list; errors are not cached.
-//
-// The slice is shared between callers, who must not modify it.
+// cache. Any failing queue fails the whole list. The slice is shared between
+// callers, who must not modify it.
 func (c *Conn) Queues(ctx context.Context) ([]Queue, error) {
 	return cached(ctx, c.cache, queuesKey, cacheTTL, c.fetchQueues)
 }
 
-// fetchQueues lists the queues and reads up to queueConcurrency of them at
-// a time. After the first failure it starts no further reads.
-//
-// The Inspector takes no context: its calls are bounded only by the
-// go-redis socket timeouts (see newConn), and ctx is unused.
-//
-// Cost: GetQueueInfo sends three commands per queue (SISMEMBER, then two
-// Lua scripts). The second is asynq's memoryUsage script for
-// QueueInfo.MemoryUsage, which the Connection page shows: it runs MEMORY
-// USAGE on up to 20 task hashes from each of the pending, active,
-// scheduled, retry, archived and completed sets and on each set itself (up
-// to 126 calls), plus up to 20 tasks from each of the first 5 aggregation
-// groups (100 more) and a ZCARD per group, all inside one script that
-// blocks Redis while it runs. The Inspector has no cheaper per-queue read
-// and its RDB is internal, so avoiding it would mean copying asynq's key
-// layout. The 1s cache keeps the cost to one round per connection per
-// second, whatever the viewer count.
+// fetchQueues lists the queues and reads up to queueConcurrency of them at a
+// time. After the first failure it starts no further reads. The Inspector
+// takes no context, so ctx is unused and only the go-redis socket timeouts
+// bound the calls (see newConn). GetQueueInfo runs asynq's memoryUsage script,
+// which blocks Redis while it samples the queue's keys; the cache keeps that
+// to one round per connection per cacheTTL.
 func (c *Conn) fetchQueues(context.Context) ([]Queue, error) {
 	names, err := c.queues.Queues()
 	if err != nil {
@@ -175,12 +162,11 @@ func historyKey(queue string, days int) cacheKey[[]DailyStat] {
 }
 
 // History returns the daily counters of the last days days, oldest first,
-// ending today (UTC), from the 1s cache when fresh. An empty queue sums
-// every queue of the connection; a connection without queues has days of
-// zeros. A queue the connection does not have is ErrQueueNotFound, and
-// days outside 1..MaxHistoryDays is ErrHistoryRange.
-//
-// The slice is shared between callers, who must not modify it.
+// ending today (UTC), from the cache. An empty queue sums every queue of the
+// connection; a connection without queues has days of zeros. A queue the
+// connection does not have is ErrQueueNotFound, and days outside
+// 1..MaxHistoryDays is ErrHistoryRange. The slice is shared between callers,
+// who must not modify it.
 func (c *Conn) History(ctx context.Context, queue string, days int) ([]DailyStat, error) {
 	if days < 1 || days > MaxHistoryDays {
 		return nil, ErrHistoryRange
@@ -190,12 +176,10 @@ func (c *Conn) History(ctx context.Context, queue string, days int) ([]DailyStat
 	})
 }
 
-// fetchHistory reads Inspector.History per queue (one SISMEMBER and one
-// Lua script reading 2*days counters each), up to queueConcurrency at a
-// time, and sums them by UTC day. The days are today and the days-1
-// before it by our clock; a counter that asynq dated outside them (its
-// clock on the other side of midnight) is dropped. The result is oldest
-// first.
+// fetchHistory reads Inspector.History per queue, up to queueConcurrency at a
+// time, and sums them by UTC day. The days are today and the days-1 before it
+// by our clock; a counter that asynq dated outside them (its clock on the
+// other side of midnight) is dropped. The result is oldest first.
 func (c *Conn) fetchHistory(queue string, days int) ([]DailyStat, error) {
 	names, err := c.queues.Queues()
 	if err != nil {
@@ -235,11 +219,9 @@ func utcDay(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
-// PauseQueue pauses the queue: asynq servers stop taking its tasks. It
-// returns ErrQueueNotFound for a queue the connection does not have.
-// Pausing a paused queue is an error from asynq. On success the
-// connection's cached reads are dropped, so the next read shows the
-// change.
+// PauseQueue pauses the queue. It returns ErrQueueNotFound for a queue the
+// connection does not have; pausing a paused queue is an error from asynq. On
+// success the connection's cached reads are dropped.
 func (c *Conn) PauseQueue(ctx context.Context, queue string) error {
 	return c.queueAction(ctx, queue, c.queues.PauseQueue)
 }
@@ -249,16 +231,12 @@ func (c *Conn) UnpauseQueue(ctx context.Context, queue string) error {
 	return c.queueAction(ctx, queue, c.queues.UnpauseQueue)
 }
 
-// DeleteQueue deletes an empty queue (asynq's DeleteQueue without force).
-// It returns ErrQueueNotFound or ErrQueueNotEmpty, each also wrapping
-// asynq's error when asynq reported it. On success the cached reads are
-// dropped.
-//
-// Empty means a QueueInfo.Size of 0, read fresh (not from the cache) just
-// before the delete. asynq's own check leaves out completed and
-// aggregating tasks, whose keys a delete would orphan; the Size counts
-// them. A task enqueued between the read and the delete is still caught
-// by asynq's check unless it is completed or aggregating.
+// DeleteQueue deletes an empty queue (asynq's DeleteQueue without force). It
+// returns ErrQueueNotFound or ErrQueueNotEmpty, each also wrapping asynq's
+// error when asynq reported it. On success the cached reads are dropped. Empty
+// means a QueueInfo.Size of 0, read fresh just before the delete: asynq's own
+// check leaves out completed and aggregating tasks, whose keys a delete would
+// orphan.
 func (c *Conn) DeleteQueue(ctx context.Context, queue string) error {
 	if err := ctx.Err(); err != nil {
 		return err

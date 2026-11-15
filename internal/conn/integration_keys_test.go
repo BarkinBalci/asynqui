@@ -14,12 +14,10 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
-// TestIntegrationKeys pins the asynq key layout that conn's direct reads
-// (keys.go) assume, against the asynq version in go.mod: real tasks are
-// scheduled, failed into retry, archived (by hand and by a worker) and
-// completed, then the raw sorted sets are read and their order and scores
-// checked, and so are the task tables built on them, both ways. A change
-// in asynq's layout fails here.
+// TestIntegrationKeys pins the asynq key layout that keys.go assumes: it
+// schedules, retries, archives (by hand and by a worker) and completes real
+// tasks, then checks the raw sorted sets' order and scores and the task tables
+// built on them, both ways.
 func TestIntegrationKeys(t *testing.T) {
 	_, addr := runRedis(t, redisImage)
 	cc := connection("main", addr, 0)

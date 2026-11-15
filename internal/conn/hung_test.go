@@ -52,7 +52,6 @@ func TestHungRedis(t *testing.T) {
 	c, _ := reg.Get("main")
 	base := runtime.NumGoroutine()
 
-	// Viewers poll every 50ms with a 500ms request timeout, for 3s.
 	const requestTimeout = 500 * time.Millisecond
 	var (
 		wg      sync.WaitGroup
