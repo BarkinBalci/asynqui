@@ -104,7 +104,7 @@ asynqui checks GitHub for new releases. You can [turn the update check off](docs
 **Contributing**
 
 - [Contributing](CONTRIBUTING.md): local development and the dev workflow
-- [Design](docs/design.md): how asynqui behaves
+- [Design](docs/design.md): design decisions and why
 - [Architecture](docs/architecture.md): how the code is organised
 - [Releasing](docs/releasing.md): cutting a release
 

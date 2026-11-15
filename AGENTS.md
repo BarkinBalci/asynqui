@@ -12,7 +12,7 @@ Tasks are in `Taskfile.yml`. Run them with `task`, or with `go tool -modfile=too
 
 ## Where to look
 
-- [docs/design.md](docs/design.md): how asynqui behaves. Update it when you change behaviour.
+- [docs/design.md](docs/design.md): the design decisions behind asynqui, and why. Update it when a decision changes.
 - [docs/architecture.md](docs/architecture.md): how the code is organised and the conventions it follows.
 - [CONTRIBUTING.md](CONTRIBUTING.md): local development, tests and commit messages.
 
@@ -21,7 +21,7 @@ Tasks are in `Taskfile.yml`. Run them with `task`, or with `go tool -modfile=too
 - Use only asynq's public API. The one exception is the direct reads in `internal/conn/keys.go` ([architecture](docs/architecture.md#data-access-and-redis-load)). If a feature needs more than that, raise it in an issue instead of working around asynq.
 - No package-level variables beyond the ones [architecture rule 1](docs/architecture.md#rules) lists.
 - Markup must pass the CSP: no inline scripts, styles, `style=""` or `on*=` attributes ([architecture rule 11](docs/architecture.md#rules)).
-- Keep UI text minimal, with no helper or explanatory copy ([design](docs/design.md#copy-and-visual-rules)).
+- Keep UI text minimal, with no helper or explanatory copy ([design](docs/design.md#ui-conventions)).
 - Comments and docs say what something is and how to use it. No asides that justify a choice (those go in the commit message), no lists that go stale, and write for people.
 - Commit subjects use [Conventional Commits](CONTRIBUTING.md#commit-messages).
 - Tests are table-driven and use small hand-written fakes, with no mock framework ([testing](docs/architecture.md#testing)).

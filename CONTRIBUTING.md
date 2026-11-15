@@ -13,7 +13,7 @@ Report bugs and request features with the [issue forms](https://github.com/Barki
 | [configuration.md](docs/configuration.md) | Flags, environment variables, the config file and every key |
 | [authentication.md](docs/authentication.md) | Sign-in providers, sessions, roles, cookies |
 | [deployment.md](docs/deployment.md) | Installing and running asynqui in production |
-| [design.md](docs/design.md) | How asynqui behaves: pages, UI rules, sign-in, HTTP |
+| [design.md](docs/design.md) | The design decisions behind asynqui, and why |
 | [architecture.md](docs/architecture.md) | How the code is organised and the conventions it follows |
 | [releasing.md](docs/releasing.md) | Cutting a release |
 

@@ -5,5 +5,5 @@
 ## Checklist
 
 - [ ] `task check` passes
-- [ ] docs/design.md or the user docs are updated, if behaviour changed
+- [ ] The user docs are updated if behaviour changed, and docs/design.md if a design decision changed
 - [ ] The title is a [Conventional Commit](https://github.com/BarkinBalci/asynqui/blob/main/CONTRIBUTING.md#commit-messages)
