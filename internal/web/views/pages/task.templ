@@ -6,16 +6,9 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
 
-// TaskPage is the Task page.
-//
-// Polling: the hidden #task-poll element polls the page URL with what
-// the page shows (?seen=state.version, hx-swap none). The answer
-// (TaskPoll) replaces the badge and the last error, result and details
-// cards out of band only when the task changed, and the actions (with
-// the action form and the delete dialog) only when its state changed.
-// The payload card, its toggle and the copy buttons are left alone. A
-// task that is gone replaces the whole page body with "Task not found"
-// and stops the poll.
+// TaskPage is the Task page. Its poll carries what the page shows (?seen=);
+// the answer replaces the cards only when the task changed, and the actions
+// only when its state changed. The payload card is never replaced.
 templ TaskPage(m Task) {
 	@views.Page(m.Layout, lastCrumb(m.Layout)) {
 		<div id={ TaskPageID } class="content-region" hx-sync="this:queue last">

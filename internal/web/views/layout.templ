@@ -2,11 +2,9 @@ package views
 
 import "github.com/BarkinBalci/asynqui/internal/web/views/components"
 
-// Document is the HTML skeleton. data-theme is rendered by the server from
-// the theme cookie, so there is no flash before app.js runs. Scripts are
-// external and deferred: htmx first, then app.js, which configures htmx
-// before it initialises. title is a component so page names come from the
-// same templ copy as headings and breadcrumbs.
+// Document is the HTML skeleton. data-theme comes from the theme cookie, so
+// there is no flash before app.js runs. htmx loads before app.js, which
+// configures it before it initialises.
 templ Document(d Doc, title templ.Component) {
 	<!DOCTYPE html>
 	<html lang="en" data-theme={ d.Theme.Value() } data-refresh={ d.Refresh.Value() } data-base={ d.CookiePath }>

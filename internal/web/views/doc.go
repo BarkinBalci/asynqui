@@ -1,6 +1,5 @@
-// Package views holds the page shell (layout.templ), with shared pieces in
-// views/components and one file per page in views/pages. Components receive
-// plain view-model structs and never call Redis or contain business logic.
+// Package views holds the page shell, with shared pieces in views/components
+// and one file per page in views/pages.
 package views
 
 import (

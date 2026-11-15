@@ -9,17 +9,9 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/components"
 )
 
-// QueuePage is the Queue page.
-//
-// Requests: #queue-page is the hx-sync scope of all of them, as on the
-// Connection page. Polling: the hidden #queue-poll element polls the page
-// URL (hx-swap none) and the answer (QueuePoll) swaps regions out of band
-// by id: the badge, the Pause/Resume button, the stats, the tab counts,
-// the table, the "select all" banner and the pager. The tabs, the
-// toolbar, the rows-per-page select and the dialogs are left alone, so
-// typing, focus and an open dialog survive; the row checkboxes carry
-// hx-preserve, so the selection survives too. Tab, page and size changes
-// and actions are user requests: their answer replaces the whole card.
+// QueuePage is the Queue page. See Live for requests and polling. The tabs,
+// the toolbar, the rows-per-page select and the dialogs sit outside the polled
+// regions, so typing, focus and an open dialog survive.
 templ QueuePage(m Queue) {
 	@views.Page(m.Layout, lastCrumb(m.Layout)) {
 		if m.NotFound {
@@ -304,9 +296,9 @@ templ verbIcon(v TaskVerb, size string) {
 	}
 }
 
-// tasksBanner is the Gmail-style "select all N" banner. app.js shows it
-// once every row of the page is selected and switches it to "all N"
-// mode, which sets the form's all=1.
+// tasksBanner is the "select all N" banner. app.js shows it once every row of
+// the page is selected and switches it to "all N" mode, which sets the form's
+// all=1.
 templ tasksBanner(m Queue, oob bool) {
 	if m.AllowAll && m.Total > int64(len(m.Rows)) {
 		<div id={ TasksBannerID } class="sel-banner" data-select-banner={ TasksFormID } data-total={ format.Number(m.Total) } hidden { components.OOB(oob)... }>
@@ -393,8 +385,8 @@ templ timeHeader(sort components.SortHead) {
 	}
 }
 
-// stateHeaders are the columns that depend on the tab. The time column
-// the state's order follows sorts (sort); see docs.
+// stateHeaders are the columns that depend on the tab; sort is the time
+// column's sort link.
 templ stateHeaders(s TaskState, sort components.SortHead) {
 	switch s {
 		case StateActive:
@@ -894,6 +886,5 @@ templ TasksConfirmTitle(v TaskVerb, all bool, s TaskState, total int64, names []
 	}
 }
 
-// dangerVerb is a verb whose buttons are red: Delete, and Archive, since
-// asynq trims the archive.
+// dangerVerb is a verb whose buttons are red: Delete and Archive.
 func dangerVerb(v TaskVerb) bool { return v == TaskDelete || v == TaskArchive }

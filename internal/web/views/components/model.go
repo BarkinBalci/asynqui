@@ -1,7 +1,4 @@
-// Package components holds the templ pieces shared by pages: sidebar, top
-// bar, badges, icons, times and the connection card. They render plain
-// view-model structs and map enums to English copy; Go code never builds
-// UI text.
+// Package components holds the templ pieces shared by pages.
 package components
 
 import (
@@ -204,11 +201,10 @@ type ConnCard struct {
 	RecheckURL    string
 }
 
-// Element ids. Connection names match [a-z0-9][a-z0-9._-]*, so they are
-// valid in ids, and each kind of element has its own prefix, so ids cannot
-// collide whatever the names. Polled regions are swapped by id, and htmx
-// refocuses the element with the same id after a swap, so every focusable
-// element in a polled region has a stable id.
+// Element ids. Each kind of element has its own prefix, so ids cannot collide
+// whatever the connection names. htmx refocuses the element with the same id
+// after a swap, so every focusable element in a polled region needs a stable
+// id.
 const (
 	UpdatedID     = "updated-at"
 	UnreachableID = "overview-unreachable"

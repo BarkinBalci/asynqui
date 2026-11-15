@@ -28,11 +28,10 @@ templ overviewTitle() {
 	All connections
 }
 
-// OverviewPage is the full page. The card grid polls but swaps nothing
-// itself (hx-swap none): the response replaces each card, the heading badge,
-// the Updated time and the sidebar list out of band, by id, so focus and the
-// rest of the page survive. hx-disinherit keeps the cards' own forms from
-// inheriting the grid's htmx attributes.
+// OverviewPage is the full page. The card grid polls with hx-swap none and the
+// answer replaces its parts out of band by id, so focus survives.
+// hx-disinherit keeps the cards' own forms from inheriting the grid's htmx
+// attributes.
 templ OverviewPage(m Overview) {
 	@views.Page(m.Layout, overviewTitle()) {
 		<div class="page-head">

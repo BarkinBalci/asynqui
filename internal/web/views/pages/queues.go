@@ -44,8 +44,7 @@ const (
 )
 
 // Element ids of the Connection page. Polls replace the regions by id;
-// focusable elements inside them have stable ids too (sort-, qsel-,
-// qlink-, range- prefixes).
+// focusable elements inside them have stable ids too.
 const (
 	// QueuesPageID wraps the page: it is the hx-sync scope of every
 	// request the page makes.
@@ -128,7 +127,7 @@ type Throughput struct {
 	Chart        components.Chart
 }
 
-// RangeButton is one of the 7d/14d/30d/90d buttons.
+// RangeButton is one of the chart's range buttons.
 type RangeButton struct {
 	ID    string
 	Days  int
