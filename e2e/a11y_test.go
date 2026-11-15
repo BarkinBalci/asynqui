@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	playwright "github.com/mxschmitt/playwright-go"
 )
 
 // axeFile is axe-core, vendored (testdata/axe-core-4.14.0, MPL-2.0) so
@@ -19,14 +21,16 @@ const axeFile = "testdata/axe-core-4.14.0/axe.min.js"
 func a11yPages(h *harness) []struct{ name, path string } {
 	return []struct{ name, path string }{
 		{"Overview", "/"},
-		{"Connection", connPath},
-		{"Queue", queuePath(qSched, "scheduled")},
-		{"Queue (active)", queuePath(qWork, "active")},
-		{"Task", h.seed.taskURL},
-		{"Task (archived)", h.seed.archivedURL},
-		{"Servers", connPath + "/servers"},
-		{"Schedulers", connPath + "/schedulers"},
-		{"Info", connPath + "/info"},
+		{"Connection", connPath(connPayments)},
+		{"Queue", queuePath(connPayments, qInvoices, "scheduled")},
+		{"Queue (retry)", queuePath(connPayments, qWebhooks, "retry")},
+		{"Queue (active)", queuePath(connNotifications, qPush, "active")},
+		{"Queue (paused)", queuePath(connNotifications, qDigest, "pending")},
+		{"Task", h.fx.refund.path()},
+		{"Task (archived)", h.fx.archived.path()},
+		{"Servers", connPath(connPayments) + "/servers"},
+		{"Schedulers", connPath(connPayments) + "/schedulers"},
+		{"Info", connPath(connPayments) + "/info"},
 	}
 }
 
@@ -49,8 +53,9 @@ func testAccessibility(t *testing.T, h *harness) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p := h.newPage(t, h.open, pageOpts{})
 	for _, theme := range []string{"light", "dark"} {
-		p := h.newPage(t, h.open, pageOpts{cookies: map[string]string{"asynqui_theme": theme}})
+		p.ok(p.ctx.AddCookies([]playwright.OptionalCookie{{Name: "asynqui_theme", Value: theme, URL: new(h.open.url)}}), "theme cookie")
 		for _, pg := range a11yPages(h) {
 			p.open(pg.path)
 			time.Sleep(200 * time.Millisecond) // app.js renders times, reveals copy buttons
@@ -87,9 +92,9 @@ func testAccessibility(t *testing.T, h *harness) {
 func testNoCSPViolations(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{cookies: map[string]string{"asynqui_refresh": "2s"}})
 	paths := []string{
-		"/c/" + connName + "/queues/" + qFind + "/find?id=nope", // the no-JS Find task page
-		"/c/" + connName + "/servers/" + firstServerID(t, h),
-		"/c/" + connName + "/schedulers/" + firstEntryID(t, h),
+		connPath(connPayments) + "/queues/" + qInvoices + "/find?id=nope", // the no-JS Find task page
+		connPath(connPayments) + "/servers/" + firstServerID(t, h),
+		connPath(connPayments) + "/schedulers/" + firstEntryID(t, h),
 	}
 	for _, pg := range a11yPages(h) {
 		paths = append(paths, pg.path)
@@ -103,25 +108,24 @@ func testNoCSPViolations(t *testing.T, h *harness) {
 		}
 	}
 	// Dialogs, the theme and a toast on an action that fails.
-	p.open(queuePath(qFind, "pending"))
+	p.open(queuePath(connPayments, qInvoices, "pending"))
 	p.ok(p.Keyboard().Press("/"), "open Find task")
 	p.ok(p.Keyboard().Press("Escape"), "close it")
 	p.ok(p.Locator(`button[name=theme][value=dark]`).Click(), "dark theme")
-	p.open(connPath)
-	p.ok(p.Locator("#"+hexID("qsel-", qEmpty)).Check(), "select")
+	p.open(connPath(connPayments))
+	p.ok(p.Locator("#"+hexID("qsel-", qPayouts)).Check(), "select")
 	p.ok(p.Locator("#act-delete").Click(), "Delete")
 	p.ok(p.expect.Locator(p.Locator("#queues-delete")).ToBeVisible(), "dialog")
 	p.ok(p.Locator("#queues-delete-cancel").Click(), "cancel")
 
 	// The login page, on the basic instance.
-	lp := h.newPage(t, h.basic, pageOpts{})
-	lp.open("/login")
-	lp.ok(lp.expect.Locator(lp.Locator("#login-username")).ToBeFocused(), "username autofocus")
+	p.open(h.basic.url + "/login")
+	p.ok(p.expect.Locator(p.Locator("#login-username")).ToBeFocused(), "username autofocus")
 }
 
 func firstServerID(t *testing.T, h *harness) string {
 	t.Helper()
-	srvs, err := h.insp.Servers()
+	srvs, err := h.fx.insp[connPayments].Servers()
 	if err != nil || len(srvs) == 0 {
 		t.Fatalf("servers: %v (%d)", err, len(srvs))
 	}
@@ -130,7 +134,7 @@ func firstServerID(t *testing.T, h *harness) string {
 
 func firstEntryID(t *testing.T, h *harness) string {
 	t.Helper()
-	es, err := h.insp.SchedulerEntries()
+	es, err := h.fx.insp[connPayments].SchedulerEntries()
 	if err != nil || len(es) == 0 {
 		t.Fatalf("scheduler entries: %v (%d)", err, len(es))
 	}

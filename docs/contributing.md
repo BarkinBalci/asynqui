@@ -19,9 +19,9 @@ A scope and `!` for breaking changes are fine: `feat(auth)!: drop the session co
 
 ## Browser tests
 
-`e2e/` holds the browser smoke tests: the behaviour of `app.js` and htmx (polling, focus and selection across polls, dialogs, copy, theme, login) and an axe-core and CSP check of every page. They sit behind the `e2e` build tag, so `go test ./...` needs no browser. CI runs them in the `e2e` job.
+`e2e/` holds the browser tests: the behaviour of `app.js` and htmx and an axe-core and CSP check of every page. They sit behind the `e2e` build tag, so `go test ./...` needs no browser. CI runs them in the `e2e` job.
 
-The harness flushes and seeds a Redis with asynq (a worker and a scheduler included), builds `cmd/asynqui`, starts it twice on random ports (auth `none` with admin, and basic auth with an admin and a viewer) and drives headless Chromium through [playwright-go](https://github.com/mxschmitt/playwright-go).
+The harness seeds one fixture that every test shares (`e2e/fixture_test.go`), starts the built `cmd/asynqui` with auth `none` and with basic auth, and drives Chromium through [playwright-go](https://github.com/mxschmitt/playwright-go).
 
 1. Install the driver and Chromium once, at the version in `go.mod` (`--with-deps` also installs the system libraries, with sudo):
 
@@ -29,18 +29,31 @@ The harness flushes and seeds a Redis with asynq (a worker and a scheduler inclu
    go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps chromium
    ```
 
-2. Point the tests at a **throwaway** Redis, which they flush, or leave `ASYNQUI_E2E_REDIS` unset to start one with testcontainers (Docker):
+2. Run them against a **throwaway** Redis, which they flush:
 
    ```sh
    ASYNQUI_E2E_REDIS=localhost:6379 task e2e
    go test -tags e2e ./e2e -run 'TestBrowser/FindTask' -v   # one test
    ```
 
+| Variable | Effect |
+|---|---|
+| `ASYNQUI_E2E_REDIS=host:port` | The Redis to use; unset, testcontainers starts one (Docker) |
+| `ASYNQUI_E2E_HEADED=1` | Shows the browser |
+
+Each run leaves a video per test in `e2e/test-results/`, and a `.trace.zip` next to the video of each failed test. CI uploads the directory as the `e2e-test-results` artifact. Open a trace with:
+
+```sh
+go run github.com/mxschmitt/playwright-go/cmd/playwright show-trace <file>.trace.zip
+```
+
+or on [trace.playwright.dev](https://trace.playwright.dev), which reads it locally in the browser.
+
 The axe-core build is vendored in `e2e/testdata` (never fetched at run time); to upgrade it, replace the directory with the new release's `axe.min.js` and `LICENSE` and update the path in `e2e/a11y_test.go`. The accessibility check fails on any violation, minor ones included.
 
 ## Demo GIF
 
-The README's `docs/images/demo.gif` is generated. `task demo-gif` (build tag `demo`) seeds a throwaway Redis with demo data on DBs 0 to 2, which it flushes, records a flow through asynqui in headless Chromium and overwrites the GIF. It needs the same Chromium and `ASYNQUI_E2E_REDIS` as the browser tests: `ASYNQUI_E2E_REDIS=localhost:6379 task demo-gif`. Regenerate it when a page in the flow changes and watch it before committing.
+The README's `docs/images/demo.gif` is recorded from the `RunRetries` browser test. Regenerate it with `ASYNQUI_E2E_REDIS=localhost:6379 task demo-gif` when a page in that flow changes, and watch it before committing.
 
 ## Releases
 

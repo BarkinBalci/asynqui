@@ -1,11 +1,10 @@
-//go:build demo
+//go:build e2e
 
 package e2e
 
 import (
 	"bytes"
 	"cmp"
-	"encoding/hex"
 	"image"
 	"image/color"
 	"image/draw"
@@ -13,8 +12,10 @@ import (
 	"image/png"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,148 +23,148 @@ import (
 	playwright "github.com/mxschmitt/playwright-go"
 )
 
-// GIF geometry and pace.
-const (
-	gifWidth  = 1200
-	gifHeight = 750
-	gifFrame  = 110 * time.Millisecond // about 9 fps
-)
+// resultsDir holds a video per page and, for a failed test, its trace:
+// test-results/<Test>/<Subtest>.webm and <Subtest>.trace.zip.
+const resultsDir = "test-results"
 
-// cursorScript draws an arrow that follows the mouse, since headless
-// screenshots show none. It keeps its place across page loads.
+// gifOut is where the GIF of ASYNQUI_E2E_GIF's subtest is written.
+const gifOut = "../docs/images/demo.gif"
+
+// slowMo is how long Playwright waits after each action, in
+// milliseconds, so the videos can be followed. The cursor's glide must
+// fit in it.
+const slowMo = 400.0
+
+// presentation is how a run looks, from the environment. It never
+// changes what a test does or asserts.
+type presentation struct {
+	headed bool   // ASYNQUI_E2E_HEADED=1
+	gif    string // ASYNQUI_E2E_GIF: the subtest whose frames become gifOut
+}
+
+func presentationFromEnv() presentation {
+	return presentation{
+		headed: os.Getenv("ASYNQUI_E2E_HEADED") == "1",
+		gif:    os.Getenv("ASYNQUI_E2E_GIF"),
+	}
+}
+
+func (l presentation) launchOptions() playwright.BrowserTypeLaunchOptions {
+	return playwright.BrowserTypeLaunchOptions{Headless: new(!l.headed), SlowMo: new(slowMo)}
+}
+
+// viewport is the page, video and GIF size.
+func viewport() *playwright.Size { return &playwright.Size{Width: 1200, Height: 750} }
+
+// records reports whether t is the subtest ASYNQUI_E2E_GIF names, by its
+// full name or its last part.
+func (l presentation) records(t *testing.T) bool {
+	if l.gif == "" {
+		return false
+	}
+	name := t.Name()
+	return l.gif == name || l.gif == name[strings.LastIndex(name, "/")+1:]
+}
+
+// resultName is the file name, without extension, for the next page of
+// t: the subtest's name, with -2, -3, … for further pages.
+func (h *harness) resultName(t *testing.T) string {
+	name := t.Name()
+	if i := strings.Index(name, "/"); i >= 0 {
+		name = strings.ReplaceAll(name[i+1:], "/", "_")
+	}
+	base := name
+	for n := 2; ; n++ {
+		if _, err := os.Stat(filepath.Join(h.results, name+".webm")); os.IsNotExist(err) {
+			return name
+		}
+		name = base + "-" + strconv.Itoa(n)
+	}
+}
+
+// record starts tracing on bctx and registers the cleanup that keeps
+// the page's video, and the trace if t failed. It runs after every
+// other cleanup of the page, so t.Failed() includes them.
+func (h *harness) record(t *testing.T, bctx playwright.BrowserContext, pg playwright.Page) {
+	t.Helper()
+	name := h.resultName(t)
+	video := filepath.Join(h.results, name+".webm")
+	// Reserve the name until the video is saved.
+	if err := os.WriteFile(video, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := bctx.Tracing().Start(playwright.TracingStartOptions{
+		Title:       new(t.Name()),
+		Screenshots: new(true),
+		Snapshots:   new(true),
+		Sources:     new(true),
+	}); err != nil {
+		t.Fatalf("start tracing: %v", err)
+	}
+	t.Cleanup(func() {
+		if t.Failed() {
+			trace := filepath.Join(h.results, name+".trace.zip")
+			if err := bctx.Tracing().Stop(trace); err != nil {
+				t.Logf("save trace: %v", err)
+			} else {
+				t.Logf("trace: %s", trace)
+			}
+		} else if err := bctx.Tracing().Stop(); err != nil {
+			t.Logf("stop tracing: %v", err)
+		}
+		if err := bctx.Close(); err != nil {
+			t.Logf("close browser context: %v", err)
+		}
+		v := pg.Video()
+		if v == nil {
+			return
+		}
+		if err := v.SaveAs(video); err != nil {
+			t.Logf("save video: %v", err)
+		}
+		_ = v.Delete()
+	})
+}
+
+// cursorScript draws an arrow that follows the mouse, since screenshots
+// and videos show none. It glides to each new position, shows presses
+// and keeps its place across page loads.
 const cursorScript = `(() => {
-	const key = "asynqui-demo-cursor";
-	let pos = {x: -40, y: -40};
+	const key = "asynqui-e2e-cursor";
+	let pos = {x: Math.round(innerWidth * 0.62), y: Math.round(innerHeight * 0.72)};
 	try { pos = JSON.parse(sessionStorage.getItem(key)) || pos; } catch (e) {}
 	const el = document.createElement("div");
 	el.setAttribute("aria-hidden", "true");
 	el.innerHTML = '<svg width="22" height="22" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.2 14.2 L10 20.5 L13 19.2 L10.3 13 L16 13 Z" fill="#111827" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round"/></svg>';
 	Object.assign(el.style, {position: "fixed", left: "0", top: "0", zIndex: "2147483647", pointerEvents: "none", transformOrigin: "3px 2px"});
-	let down = false;
-	const place = () => { el.style.transform = "translate(" + (pos.x - 3) + "px," + (pos.y - 2) + "px)" + (down ? " scale(0.85)" : ""); };
+	let down = false, downAt = 0;
+	const place = () => { el.style.transform = "translate(" + (pos.x - 3) + "px," + (pos.y - 2) + "px)" + (down ? " scale(0.8)" : ""); };
 	place();
-	const attach = () => document.documentElement.appendChild(el);
+	const attach = () => {
+		document.documentElement.appendChild(el);
+		requestAnimationFrame(() => { el.style.transition = "transform 300ms cubic-bezier(.3,.1,.2,1)"; });
+	};
 	if (document.readyState === "loading") { document.addEventListener("DOMContentLoaded", attach); } else { attach(); }
 	window.addEventListener("mousemove", (e) => {
 		pos = {x: e.clientX, y: e.clientY};
 		place();
 		try { sessionStorage.setItem(key, JSON.stringify(pos)); } catch (err) {}
 	}, true);
-	window.addEventListener("mousedown", () => { down = true; place(); }, true);
-	window.addEventListener("mouseup", () => { down = false; place(); }, true);
+	window.addEventListener("mousedown", () => { down = true; downAt = Date.now(); place(); }, true);
+	window.addEventListener("mouseup", () => {
+		setTimeout(() => { down = false; place(); }, Math.max(0, 180 - (Date.now() - downAt)));
+	}, true);
 })();`
 
-// recordDemo records Overview → payments → the webhooks queue → Retry
-// tab → select three tasks → Run, and writes it as a GIF.
-func recordDemo(t *testing.T, browser playwright.Browser, baseURL string, d demo, out string) {
-	t.Helper()
-	bctx, pg := newDemoPage(t, browser, baseURL, "light", gifWidth, gifHeight, 1)
-	if err := bctx.AddInitScript(playwright.Script{Content: new(cursorScript)}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pg.Goto("/"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, pg)
-	c := &cursor{t: t, pg: pg, x: gifWidth * 0.62, y: gifHeight * 0.72}
-	if err := pg.Mouse().Move(c.x, c.y); err != nil {
-		t.Fatal(err)
-	}
+// ---- GIF ----
 
-	rec := startRecording(t, pg)
-	hold := func(d time.Duration) { time.Sleep(d) }
-	hold(800 * time.Millisecond)
-	c.click("#open-" + demoPayments)
-	waitData(t, pg, "#queues-rows")
-	hold(900 * time.Millisecond)
-	c.click("#qlink-" + hex.EncodeToString([]byte(d.queue)))
-	waitData(t, pg, "#tasks-rows")
-	hold(400 * time.Millisecond)
-	c.click("#tab-retry")
-	if err := pg.Locator("#tab-retry.on").WaitFor(); err != nil {
-		t.Fatalf("retry tab: %v", err)
-	}
-	hold(500 * time.Millisecond)
-	for i := range 3 {
-		c.click("#tasks-rows tr:nth-child(" + strconv.Itoa(i+1) + ") input.cb")
-		hold(150 * time.Millisecond)
-	}
-	hold(200 * time.Millisecond)
-	c.click(`.tbar button:text-is("Run now")`)
-	if err := pg.Locator(".notice").WaitFor(); err != nil {
-		t.Fatalf("run notice: %v", err)
-	}
-	c.move(c.x+140, c.y+90)
-	hold(1500 * time.Millisecond)
-	frames := rec.stop()
-	_ = bctx.Close()
+// gifFrame is the GIF's frame interval.
+const gifFrame = 110 * time.Millisecond
 
-	if err := writeGIF(out, frames); err != nil {
-		t.Fatal(err)
-	}
-	st, err := os.Stat(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("wrote %s: %d frames, %d KB", out, len(frames), st.Size()>>10)
-}
-
-// waitData waits for sel to be on the page and for no region to be
-// checking.
-func waitData(t *testing.T, pg playwright.Page, sel string) {
-	t.Helper()
-	if err := pg.Locator(sel).WaitFor(playwright.LocatorWaitForOptions{State: playwright.WaitForSelectorStateAttached}); err != nil {
-		t.Fatalf("waiting for %s: %v", sel, err)
-	}
-	if _, err := pg.WaitForFunction(`() => document.fonts.status === "loaded" && !document.querySelector(".checking, .conn-checking")`, nil); err != nil {
-		t.Fatalf("waiting for data: %v", err)
-	}
-}
-
-// cursor glides the mouse at a human pace.
-type cursor struct {
-	t    *testing.T
-	pg   playwright.Page
-	x, y float64
-}
-
-func (c *cursor) move(x, y float64) {
-	c.t.Helper()
-	const steps = 12
-	x0, y0 := c.x, c.y
-	for i := 1; i <= steps; i++ {
-		f := float64(i) / steps
-		f = f * f * (3 - 2*f)
-		if err := c.pg.Mouse().Move(x0+(x-x0)*f, y0+(y-y0)*f); err != nil {
-			c.t.Fatal(err)
-		}
-		time.Sleep(22 * time.Millisecond)
-	}
-	c.x, c.y = x, y
-}
-
-func (c *cursor) click(sel string) {
-	c.t.Helper()
-	loc := c.pg.Locator(sel).First()
-	if err := loc.ScrollIntoViewIfNeeded(); err != nil {
-		c.t.Fatalf("scroll to %s: %v", sel, err)
-	}
-	box, err := loc.BoundingBox()
-	if err != nil || box == nil {
-		c.t.Fatalf("locate %s: %v", sel, err)
-	}
-	c.move(box.X+box.Width/2, box.Y+box.Height/2)
-	time.Sleep(100 * time.Millisecond)
-	if err := c.pg.Mouse().Down(); err != nil {
-		c.t.Fatal(err)
-	}
-	time.Sleep(90 * time.Millisecond)
-	if err := c.pg.Mouse().Up(); err != nil {
-		c.t.Fatal(err)
-	}
-}
-
-// ---- recording ----
+// gifReady is true once the page shows data: the frames before it are
+// dropped.
+const gifReady = `() => location.protocol.startsWith("http") && document.readyState === "complete" &&
+	document.fonts.status === "loaded" && !document.querySelector(".checking, .conn-checking, .dot-unknown")`
 
 type frame struct {
 	img image.Image
@@ -171,7 +172,6 @@ type frame struct {
 }
 
 type recording struct {
-	t      *testing.T
 	pg     playwright.Page
 	done   chan struct{}
 	wg     sync.WaitGroup
@@ -179,18 +179,35 @@ type recording struct {
 	frames []frame
 }
 
-// startRecording takes a screenshot every gifFrame until stop.
-func startRecording(t *testing.T, pg playwright.Page) *recording {
-	r := &recording{t: t, pg: pg, done: make(chan struct{})}
+// recordGIF takes a screenshot of pg every gifFrame, from the first one
+// that shows data until t's cleanup, and writes them to gifOut if t
+// passed. Register it after the page's other cleanups that need the
+// page, since it runs before them.
+func recordGIF(t *testing.T, pg playwright.Page) {
+	t.Helper()
+	r := &recording{pg: pg, done: make(chan struct{})}
 	r.wg.Go(func() {
+		ready := false
 		for {
 			at := time.Now()
-			b, err := pg.Screenshot(playwright.PageScreenshotOptions{Type: playwright.ScreenshotTypePng})
-			if err == nil {
-				if img, err := png.Decode(bytes.NewReader(b)); err == nil {
-					r.mu.Lock()
-					r.frames = append(r.frames, frame{img: img, at: at})
-					r.mu.Unlock()
+			if !ready {
+				v, err := pg.Evaluate(gifReady)
+				ready = err == nil && v == true
+			}
+			if ready {
+				// Caret "initial" leaves the page alone: hiding the caret
+				// sets a style attribute on inputs, which htmx copies when
+				// it settles a swap and the CSP then blocks.
+				b, err := pg.Screenshot(playwright.PageScreenshotOptions{
+					Type:  playwright.ScreenshotTypePng,
+					Caret: playwright.ScreenshotCaretInitial,
+				})
+				if err == nil {
+					if img, err := png.Decode(bytes.NewReader(b)); err == nil {
+						r.mu.Lock()
+						r.frames = append(r.frames, frame{img: img, at: at})
+						r.mu.Unlock()
+					}
 				}
 			}
 			select {
@@ -200,21 +217,32 @@ func startRecording(t *testing.T, pg playwright.Page) *recording {
 			}
 		}
 	})
-	return r
+	t.Cleanup(func() {
+		close(r.done)
+		r.wg.Wait()
+		if t.Failed() {
+			t.Logf("%s not written: the test failed", gifOut)
+			return
+		}
+		if len(r.frames) < 2 {
+			t.Errorf("GIF: recorded %d frames", len(r.frames))
+			return
+		}
+		if err := writeGIF(gifOut, r.frames); err != nil {
+			t.Errorf("write %s: %v", gifOut, err)
+			return
+		}
+		if st, err := os.Stat(gifOut); err == nil {
+			t.Logf("wrote %s: %d frames, %d KB", gifOut, len(r.frames), st.Size()>>10)
+		}
+	})
 }
 
-func (r *recording) stop() []frame {
-	close(r.done)
-	r.wg.Wait()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.frames) < 2 {
-		r.t.Fatalf("recorded %d frames", len(r.frames))
-	}
-	return r.frames
-}
-
-// ---- GIF encoding ----
+// GIF holds: the first frame shows at least gifFirst, the last gifLast.
+const (
+	gifFirst = 100 // 1/100 s
+	gifLast  = 250
+)
 
 // transparent is the palette index of "unchanged since the last frame".
 const transparent = 255
@@ -231,13 +259,13 @@ func writeGIF(out string, frames []frame) error {
 	cur := image.NewPaletted(b, pal)
 	for i, f := range frames {
 		nearest.mapImage(cur, f.img)
-		delay := 200
+		delay := gifLast
 		if i+1 < len(frames) {
 			delay = int(frames[i+1].at.Sub(f.at) / (10 * time.Millisecond))
 		}
 		if i == 0 {
 			g.Image = append(g.Image, clonePaletted(cur))
-			g.Delay = append(g.Delay, delay)
+			g.Delay = append(g.Delay, max(delay, gifFirst))
 			g.Disposal = append(g.Disposal, gif.DisposalNone)
 			copy(prev.Pix, cur.Pix)
 			continue
@@ -263,7 +291,10 @@ func writeGIF(out string, frames []frame) error {
 		g.Disposal = append(g.Disposal, gif.DisposalNone)
 		copy(prev.Pix, cur.Pix)
 	}
-	g.Delay[len(g.Delay)-1] = max(g.Delay[len(g.Delay)-1], 200)
+	g.Delay[len(g.Delay)-1] = max(g.Delay[len(g.Delay)-1], gifLast)
+	if err := os.MkdirAll(filepath.Dir(out), 0o750); err != nil {
+		return err
+	}
 	fh, err := os.Create(out)
 	if err != nil {
 		return err
@@ -303,10 +334,9 @@ func diffBox(a, b *image.Paletted) (image.Rectangle, bool) {
 // frequent is how many palette entries go to the most frequent colors.
 const frequent = 200
 
-// buildPalette counts colors over all frames in buckets of 6 bits per
-// channel, averaged within each. It takes the frequent most common
-// buckets, fills up to 255 with common buckets far from those, and adds
-// the transparent entry.
+// buildPalette counts colors over all frames in coarse buckets, averaged
+// within each. It takes the most common buckets, fills the rest with
+// common buckets far from those, and adds the transparent entry.
 func buildPalette(frames []frame) color.Palette {
 	type bucket struct {
 		n       int

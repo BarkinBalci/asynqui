@@ -15,16 +15,18 @@ import (
 	playwright "github.com/mxschmitt/playwright-go"
 )
 
-// TestBrowser runs every browser test against one harness: one Redis,
-// one seed, two asynqui instances and one Chromium. Each subtest gets its
-// own browser context (cookies, permissions) and its own queues, so any
-// of them can run alone: go test -tags e2e ./e2e -run 'TestBrowser/Theme'.
+// TestBrowser runs every browser test against one harness: one Redis
+// with the fixture, two asynqui instances and one Chromium. Each subtest
+// gets its own browser context (cookies, permissions) and changes only
+// what no other subtest reads, so any of them can run alone:
+// go test -tags e2e ./e2e -run 'TestBrowser/Theme'.
 func TestBrowser(t *testing.T) {
 	h := newHarness(t)
 	tests := []struct {
 		name string
 		run  func(*testing.T, *harness)
 	}{
+		{"RunRetries", testRunRetries},
 		{"ThemeNoFlash", testThemeNoFlash},
 		{"ThemeSystem", testThemeSystem},
 		{"RefreshOffAnd2s", testRefreshOffAnd2s},
@@ -84,12 +86,17 @@ const recordCSP = `document.addEventListener("securitypolicyviolation", function
 		" at " + e.sourceFile + ":" + e.lineNumber);
 });`
 
+// newPage opens a tab in a new browser context. The context records a
+// video and a trace (see record) and draws the cursor.
 func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 	t.Helper()
+	videos := t.TempDir()
 	opts := playwright.BrowserNewContextOptions{
 		BaseURL:     new(inst.url),
 		Locale:      new("en-US"),
 		Permissions: o.permissions,
+		Viewport:    viewport(),
+		RecordVideo: &playwright.RecordVideo{Dir: new(videos), Size: viewport()},
 	}
 	if o.timezone != "" {
 		opts.TimezoneId = new(o.timezone)
@@ -99,6 +106,9 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = bctx.Close() })
+	if err := bctx.AddInitScript(playwright.Script{Content: new(cursorScript)}); err != nil {
+		t.Fatal(err)
+	}
 	if len(o.cookies) > 0 {
 		var cs []playwright.OptionalCookie
 		for k, v := range o.cookies {
@@ -114,6 +124,11 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 	pg, err := bctx.NewPage()
 	if err != nil {
 		t.Fatal(err)
+	}
+	h.record(t, bctx, pg)
+	if h.look.records(t) && !h.gifTaken {
+		h.gifTaken = true
+		recordGIF(t, pg)
 	}
 	pg.SetDefaultTimeout(10000)
 	p := &page{Page: pg, t: t, ctx: bctx, expect: playwright.NewPlaywrightAssertions(5000)}
@@ -242,12 +257,28 @@ func containing(s string) *regexp.Regexp { return regexp.MustCompile(regexp.Quot
 // hexID is components.HexID: the id of a row's checkbox or link.
 func hexID(prefix, s string) string { return prefix + hex.EncodeToString([]byte(s)) }
 
-// queuePath is the Queue page of q on one tab.
-func queuePath(q, state string) string {
-	return "/c/" + connName + "/queues/" + q + "?state=" + state
+// connPath is the Connection page of c.
+func connPath(c string) string { return "/c/" + c }
+
+// queuePath is the Queue page of q on c, on one tab.
+func queuePath(c, q, state string) string {
+	return connPath(c) + "/queues/" + q + "?state=" + state
 }
 
-const connPath = "/c/" + connName
+// click clicks loc after moving the pointer onto it, so the drawn
+// cursor gets there before the click.
+func (p *page) click(loc playwright.Locator, what string) {
+	p.t.Helper()
+	p.ok(loc.Hover(), "hover %s", what)
+	p.ok(loc.Click(), "%s", what)
+}
+
+// check checks the checkbox loc, moving the pointer first as click does.
+func (p *page) check(loc playwright.Locator, what string) {
+	p.t.Helper()
+	p.ok(loc.Hover(), "hover %s", what)
+	p.ok(loc.Check(), "%s", what)
+}
 
 // login signs in through the basic login form, starting at path.
 func (p *page) login(path, user, password string) {

@@ -1,7 +1,7 @@
 version: "2"
 
 run:
-  build-tags: [e2e, demo] # lint the browser tests and the demo GIF generator too
+  build-tags: [e2e] # lint the browser tests too
 
 linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused

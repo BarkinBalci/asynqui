@@ -3,15 +3,70 @@
 package e2e
 
 import (
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/hibiken/asynq"
 	playwright "github.com/mxschmitt/playwright-go"
 )
+
+// Run now on retry tasks, reached from the Overview with polling on,
+// moves them to pending. The README's GIF is this test.
+func testRunRetries(t *testing.T, h *harness) {
+	insp := h.fx.insp[connPayments]
+	before, err := insp.GetQueueInfo(qWebhooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Retry != webhookRetries {
+		t.Fatalf("%s has %d retry tasks, want the fixture's %d", qWebhooks, before.Retry, webhookRetries)
+	}
+	p := h.newPage(t, h.open, pageOpts{cookies: map[string]string{"asynqui_refresh": "5s"}})
+	p.open("/")
+	p.click(p.Locator("#open-"+connPayments), "open payments")
+	p.ok(p.expect.Page(p.Page).ToHaveURL(regexp.MustCompile(regexp.QuoteMeta(connPath(connPayments))+"$")), "on the Connection page")
+	p.click(p.Locator("#"+hexID("qlink-", qWebhooks)), "open webhooks")
+	p.ok(p.expect.Page(p.Page).ToHaveURL(containing(connPath(connPayments)+"/queues/"+qWebhooks)), "on the Queue page")
+	p.click(p.Locator("#tab-retry"), "Retry tab")
+	p.ok(p.expect.Page(p.Page).ToHaveURL(containing("state=retry")), "URL has state=retry")
+	p.ok(p.expect.Locator(p.Locator("#tab-retry")).ToHaveClass(containing("on")), "Retry tab on")
+
+	retries, pending := p.Locator("#tab-count-retry"), p.Locator("#tab-count-pending")
+	p.ok(p.expect.Locator(retries).ToHaveText(strconv.Itoa(webhookRetries)), "retry count")
+	p.ok(p.expect.Locator(pending).ToHaveText(strconv.Itoa(before.Pending)), "pending count")
+	boxes := p.Locator("#tasks-rows input.cb")
+	p.ok(p.expect.Locator(boxes).ToHaveCount(webhookRetries), "a row per retry task")
+	var ids []string
+	for i := range 3 {
+		box := boxes.Nth(i)
+		p.check(box, fmt.Sprintf("select row %d", i+1))
+		id, err := box.GetAttribute("value")
+		p.ok(err, "row %d id", i+1)
+		ids = append(ids, id)
+	}
+	p.ok(p.expect.Locator(p.Locator(`[data-toolbar=tasks-form] [data-sel-count]`)).ToHaveText("3"), "3 selected")
+	p.click(p.Locator("#act-run"), "Run now")
+
+	p.ok(p.expect.Locator(p.Locator(".notice")).ToHaveText("Moved 3 tasks to pending"), "notice")
+	p.ok(p.expect.Locator(retries).ToHaveText(strconv.Itoa(webhookRetries-3)), "retry count after")
+	p.ok(p.expect.Locator(pending).ToHaveText(strconv.Itoa(before.Pending+3)), "pending count after")
+	p.ok(p.expect.Locator(boxes).ToHaveCount(webhookRetries-3), "rows after")
+	for _, id := range ids {
+		info, err := insp.GetTaskInfo(qWebhooks, id)
+		if err != nil {
+			t.Errorf("task %s: %v", id, err)
+		} else if info.State != asynq.TaskStatePending {
+			t.Errorf("task %s is %s, want pending", id, info.State)
+		}
+	}
+}
 
 // bodyBG is the body's computed background color.
 func (p *page) bodyBG() string {
@@ -109,7 +164,7 @@ func testThemeSystem(t *testing.T, h *harness) {
 // Off sends no polls at all; 2s polls about every 2s.
 func testRefreshOffAnd2s(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{cookies: map[string]string{"asynqui_refresh": "off"}})
-	p.open(connPath)
+	p.open(connPath(connPayments))
 	p.ok(p.expect.Locator(p.Locator(`button[name=refresh][value=off]`)).ToHaveAttribute("aria-pressed", "true"), "Off pressed")
 	time.Sleep(6 * time.Second)
 	if n := p.polls.Load(); n != 0 {
@@ -139,7 +194,7 @@ func (p *page) setHidden(hidden bool) {
 // Polling stops while the tab is hidden and refreshes once on return.
 func testPollingPausesWhileHidden(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{cookies: map[string]string{"asynqui_refresh": "2s"}})
-	p.open(connPath)
+	p.open(connPath(connPayments))
 	eventually(t, "a poll with 2s", func() bool { return p.polls.Load() >= 1 })
 	p.setHidden(true)
 	time.Sleep(300 * time.Millisecond) // a poll already in flight
@@ -190,7 +245,7 @@ func (p *page) rowNames() []string {
 // keep the new sort.
 func testSortDuringPoll(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
-	p.open(connPath)
+	p.open(connPath(connPayments))
 	before := p.rowNames()
 	// htmx logs the poll it aborts for the sort.
 	p.allow(`^console error: htmx:(sendAbort|afterRequest), `)
@@ -228,7 +283,7 @@ func testSortDuringPoll(t *testing.T, h *harness) {
 func testQueuesTableFits(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
 	p.ok(p.SetViewportSize(1440, 900), "viewport")
-	p.open(connPath)
+	p.open(connPath(connPayments))
 	p.ok(p.Locator("#queues").WaitFor(), "queues table")
 	over, _ := p.eval(`async () => {
 		await document.fonts.ready;
@@ -244,7 +299,7 @@ func testQueuesTableFits(t *testing.T, h *harness) {
 // select is the same element, focused, with its value, afterwards.
 func testPickerSurvivesPoll(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
-	p.open(connPath)
+	p.open(connPath(connPayments))
 	p.ok(p.Locator("#tp-queue").Focus(), "focus picker")
 	p.eval(`() => { document.getElementById("tp-queue").__mark = 1; document.getElementById("tp-chart").__mark = 1; }`)
 	p.pollOnce("queues-poll")
@@ -263,9 +318,9 @@ func testPickerSurvivesPoll(t *testing.T, h *harness) {
 // keeps counting them.
 func testSelectionSurvivesPoll(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
-	p.open(connPath)
+	p.open(connPath(connPayments))
 	count := p.Locator(`[data-toolbar=queues-form] [data-sel-count]`)
-	a, b, c := "#"+hexID("qsel-", qSortA), "#"+hexID("qsel-", qSortB), "#"+hexID("qsel-", qSortC)
+	a, b, c := "#"+hexID("qsel-", qCritical), "#"+hexID("qsel-", qInvoices), "#"+hexID("qsel-", qWebhooks)
 	p.ok(p.Locator(a).Check(), "check a")
 	p.ok(p.Locator(b).Check(), "check b")
 	p.ok(p.expect.Locator(count).ToHaveText("2"), "2 selected")
@@ -288,15 +343,15 @@ func testSelectionSurvivesPoll(t *testing.T, h *harness) {
 // Delete is enabled only while every selected queue is empty.
 func testDeleteNeedsEmptyQueue(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
-	p.open(connPath)
+	p.open(connPath(connPayments))
 	del := p.Locator("#act-delete")
 	p.ok(p.expect.Locator(del).ToBeDisabled(), "Delete disabled with no selection")
-	p.ok(p.Locator("#"+hexID("qsel-", qSortA)).Check(), "check non-empty")
+	p.ok(p.Locator("#"+hexID("qsel-", qCritical)).Check(), "check non-empty")
 	p.ok(p.expect.Locator(del).ToBeDisabled(), "Delete disabled for a non-empty queue")
 	p.ok(p.expect.Locator(del).ToHaveAttribute("title", "Queue is not empty"), "blocked title")
-	p.ok(p.Locator("#"+hexID("qsel-", qEmpty)).Check(), "check empty")
+	p.ok(p.Locator("#"+hexID("qsel-", qPayouts)).Check(), "check empty")
 	p.ok(p.expect.Locator(del).ToBeDisabled(), "Delete disabled for a mixed selection")
-	p.ok(p.Locator("#"+hexID("qsel-", qSortA)).Uncheck(), "uncheck non-empty")
+	p.ok(p.Locator("#"+hexID("qsel-", qCritical)).Uncheck(), "uncheck non-empty")
 	p.ok(p.expect.Locator(del).ToBeEnabled(), "Delete enabled for an empty queue")
 	if title, _ := del.GetAttribute("title"); title != "" {
 		t.Errorf("enabled Delete still has title %q", title)
@@ -307,7 +362,7 @@ func testDeleteNeedsEmptyQueue(t *testing.T, h *harness) {
 // counts N and confirming empties the state.
 func testSelectAllNDeleteAll(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
-	p.open(queuePath(qBulk, "pending"))
+	p.open(queuePath(connReports, qLow, "pending"))
 	banner := p.Locator("#tasks-banner")
 	p.ok(p.expect.Locator(banner).ToBeHidden(), "banner hidden")
 	p.ok(p.Locator("#tsel-all").Check(), "select page")
@@ -315,16 +370,17 @@ func testSelectAllNDeleteAll(t *testing.T, h *harness) {
 	count := p.Locator(`[data-toolbar=tasks-form] [data-sel-count]`)
 	p.ok(p.expect.Locator(count).ToHaveText("20"), "20 selected")
 	everything := p.Locator("#sel-everything")
-	p.ok(p.expect.Locator(everything).ToHaveText("Select all 30 pending tasks"), "select all N label")
+	n := strconv.Itoa(lowBacklog)
+	p.ok(p.expect.Locator(everything).ToHaveText("Select all "+n+" pending tasks"), "select all N label")
 	p.ok(everything.Click(), "select all N")
-	p.ok(p.expect.Locator(count).ToHaveText("30"), "30 selected")
+	p.ok(p.expect.Locator(count).ToHaveText(n), "%s selected", n)
 	p.ok(p.expect.Locator(p.Locator(`[data-toolbar=tasks-form] [data-sel-all]`)).ToBeVisible(), `"All" shown`)
 	p.ok(p.expect.Locator(p.Locator("#sel-clear")).ToBeFocused(), "focus on Clear selection")
 
 	p.ok(p.Locator("#act-delete").Click(), "Delete")
 	dlg := p.Locator("#tasks-all-delete")
 	p.ok(p.expect.Locator(dlg).ToBeVisible(), "all dialog open")
-	p.ok(p.expect.Locator(p.Locator("#tasks-all-delete-title")).ToHaveText("Delete all 30 pending tasks"), "dialog title")
+	p.ok(p.expect.Locator(p.Locator("#tasks-all-delete-title")).ToHaveText("Delete all "+n+" pending tasks"), "dialog title")
 	if n, _ := p.Locator("#tasks-delete").IsVisible(); n {
 		t.Errorf("the per-row delete dialog opened too")
 	}
@@ -332,20 +388,21 @@ func testSelectAllNDeleteAll(t *testing.T, h *harness) {
 	p.ok(p.expect.Locator(dlg).ToBeHidden(), "dialog closed")
 	p.ok(p.expect.Locator(p.Locator("#tab-count-pending")).ToHaveText("0"), "pending count 0")
 	p.ok(p.expect.Locator(p.Locator("#tasks-rows")).ToHaveText("No pending tasks"), "empty table")
-	p.ok(p.expect.Locator(p.Locator(".notice")).ToHaveText("Deleted 30 tasks"), "notice")
+	p.ok(p.expect.Locator(p.Locator(".notice")).ToHaveText("Deleted "+n+" tasks"), "notice")
 	p.ok(p.expect.Locator(count).ToBeHidden(), "selection cleared")
-	info, err := h.insp.GetQueueInfo(qBulk)
+	info, err := h.fx.insp[connReports].GetQueueInfo(qLow)
 	p.ok(err, "queue info")
-	if info.Pending != 0 {
-		t.Errorf("Redis still has %d pending tasks in %s", info.Pending, qBulk)
+	if info.Pending != 0 || info.Active != 1 {
+		t.Errorf("Redis has %d pending and %d active tasks in %s, want 0 and the 1 running", info.Pending, info.Active, qLow)
 	}
 }
 
 // Active offers no "select all N", even with more tasks than one page.
 func testNoSelectAllOnActive(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
-	p.open(queuePath(qWork, "active"))
-	p.ok(p.expect.Locator(p.Locator("#tab-count-active")).ToHaveText("22"), "22 active")
+	p.open(queuePath(connNotifications, qPush, "active"))
+	n := strconv.Itoa(pushActive)
+	p.ok(p.expect.Locator(p.Locator("#tab-count-active")).ToHaveText(n), "%s active", n)
 	p.ok(p.Locator("#tsel-all").Check(), "select page")
 	count := p.Locator(`[data-toolbar=tasks-form] [data-sel-count]`)
 	p.ok(p.expect.Locator(count).ToHaveText("20"), "20 selected")
@@ -362,7 +419,10 @@ func testNoSelectAllOnActive(t *testing.T, h *harness) {
 // Archiving asks first and warns that asynq trims the archive.
 func testArchiveWarning(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
-	p.open(queuePath(qArchive, "pending"))
+	insp := h.fx.insp[connPayments]
+	before, err := insp.GetQueueInfo(qInvoices)
+	p.ok(err, "queue info")
+	p.open(queuePath(connPayments, qInvoices, "pending"))
 	p.ok(p.Locator("#tasks-rows input[type=checkbox]").First().Check(), "check a task")
 	p.ok(p.Locator("#act-archive").Click(), "Archive")
 	dlg := p.Locator("#tasks-archive")
@@ -374,18 +434,20 @@ func testArchiveWarning(t *testing.T, h *harness) {
 	p.ok(p.expect.Locator(p.Locator("#tasks-archive-cancel")).ToBeFocused(), "Cancel focused")
 	p.ok(p.Keyboard().Press("Escape"), "Escape")
 	p.ok(p.expect.Locator(dlg).ToBeHidden(), "dialog closed")
-	info, err := h.insp.GetQueueInfo(qArchive)
+	after, err := insp.GetQueueInfo(qInvoices)
 	p.ok(err, "queue info")
-	if info.Archived != 0 || info.Pending != 2 {
-		t.Errorf("closing the dialog acted: %d pending, %d archived", info.Pending, info.Archived)
+	if after.Archived != before.Archived || after.Pending != before.Pending {
+		t.Errorf("closing the dialog acted: %d pending, %d archived, was %d and %d",
+			after.Pending, after.Archived, before.Pending, before.Archived)
 	}
 }
 
 // "/" opens Find task; a miss says so inline; Enter on a hit navigates;
 // Escape closes it and gives focus back to the button.
 func testFindTask(t *testing.T, h *harness) {
+	task := h.fx.refund
 	p := h.newPage(t, h.open, pageOpts{})
-	p.open(queuePath(qFind, "pending"))
+	p.open(queuePath(task.conn, task.queue, "scheduled"))
 	dlg, input := p.Locator("#find-task"), p.Locator("#find-id")
 	p.ok(p.Keyboard().Press("/"), "press /")
 	p.ok(p.expect.Locator(dlg).ToBeVisible(), "dialog open")
@@ -409,10 +471,10 @@ func testFindTask(t *testing.T, h *harness) {
 	if n, _ := p.Locator("#find-miss").Count(); n != 0 {
 		t.Errorf("reopened dialog still shows the miss")
 	}
-	p.ok(p.Keyboard().Type(findID), "type the ID")
+	p.ok(p.Keyboard().Type(task.id), "type the ID")
 	p.ok(p.Keyboard().Press("Enter"), "Enter")
-	p.ok(p.expect.Page(p.Page).ToHaveURL(containing("/queues/"+qFind+"/tasks/"+findID)), "on the Task page")
-	p.ok(p.expect.Locator(p.Locator(".id-full")).ToHaveText(findID), "task shown")
+	p.ok(p.expect.Page(p.Page).ToHaveURL(containing(task.path())), "on the Task page")
+	p.ok(p.expect.Locator(p.Locator(".id-full")).ToHaveText(task.id), "task shown")
 }
 
 // readClipboard reads the clipboard (the context grants clipboard-read).
@@ -422,28 +484,35 @@ func (p *page) readClipboard() string {
 
 // Copy buttons copy the full text, not what is shown.
 func testCopy(t *testing.T, h *harness) {
+	task := h.fx.refund
+	var fields struct {
+		RefundID string `json:"refund_id"`
+	}
+	if err := json.Unmarshal([]byte(task.payload), &fields); err != nil || fields.RefundID == "" {
+		t.Fatalf("fixture payload %s: %v", task.payload, err)
+	}
 	p := h.newPage(t, h.open, pageOpts{permissions: []string{"clipboard-read", "clipboard-write"}})
 	// In the table the ID is shortened.
-	p.open(queuePath(qFind, "pending"))
-	link := p.Locator("#" + hexID("tlink-", copyID))
-	p.ok(p.expect.Locator(link).ToHaveText(copyID[:13]+"…"), "short ID in the table")
+	p.open(queuePath(task.conn, task.queue, "scheduled"))
+	link := p.Locator("#" + hexID("tlink-", task.id))
+	p.ok(p.expect.Locator(link).ToHaveText(task.id[:13]+"…"), "short ID in the table")
 
-	p.open(h.seed.taskURL)
+	p.open(task.path())
 	btn := p.Locator("#task-copy-id")
 	p.ok(p.expect.Locator(btn).ToBeVisible(), "Copy ID shown")
 	p.ok(btn.Click(), "Copy ID")
-	eventually(t, "the ID on the clipboard", func() bool { return p.readClipboard() == copyID })
+	eventually(t, "the ID on the clipboard", func() bool { return p.readClipboard() == task.id })
 	p.ok(p.expect.Locator(btn).ToHaveClass(containing("copied")), "copied feedback")
 
 	payload, err := p.Locator("#payload").TextContent()
 	p.ok(err, "payload text")
-	if !strings.Contains(payload, "copy me in full") {
+	if !strings.Contains(payload, fields.RefundID) {
 		t.Fatalf("payload block %q", payload)
 	}
 	p.ok(p.Locator("#payload-copy").Click(), "Copy payload")
 	eventually(t, "the payload on the clipboard", func() bool { return p.readClipboard() == payload })
 
-	p.open(connPath + "/info")
+	p.open(connPath(connPayments) + "/info")
 	raw, err := p.Locator("#raw-info").TextContent()
 	p.ok(err, "raw INFO")
 	p.ok(p.Locator("#raw-info-copy").Click(), "Copy INFO")
@@ -456,8 +525,8 @@ func testCopy(t *testing.T, h *harness) {
 // A poll gives focus back to the checkbox or link that had it.
 func testFocusSurvivesPoll(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{})
-	p.open(connPath)
-	for _, id := range []string{hexID("qsel-", qSortB), hexID("qlink-", qSortB), "qsel-all", "sort-size"} {
+	p.open(connPath(connPayments))
+	for _, id := range []string{hexID("qsel-", qInvoices), hexID("qlink-", qInvoices), "qsel-all", "sort-size"} {
 		p.ok(p.Locator("#"+id).Focus(), "focus %s", id)
 		p.pollOnce("queues-poll")
 		if got := p.activeID(); got != id {
@@ -465,7 +534,7 @@ func testFocusSurvivesPoll(t *testing.T, h *harness) {
 		}
 	}
 	// Keyboard selection keeps working after the poll.
-	box := "#" + hexID("qsel-", qSortB)
+	box := "#" + hexID("qsel-", qInvoices)
 	p.ok(p.Locator(box).Focus(), "focus")
 	p.ok(p.Keyboard().Press("Space"), "Space")
 	p.ok(p.expect.Locator(p.Locator(box)).ToBeChecked(), "checked by keyboard")
@@ -473,7 +542,7 @@ func testFocusSurvivesPoll(t *testing.T, h *harness) {
 	p.ok(p.expect.Locator(p.Locator(box)).ToBeFocused(), "still focused")
 	p.ok(p.expect.Locator(p.Locator(box)).ToBeChecked(), "still checked")
 
-	p.open(queuePath(qSched, "scheduled"))
+	p.open(queuePath(connPayments, qInvoices, "scheduled"))
 	first := p.Locator("#tasks-rows input[type=checkbox]").First()
 	id, err := first.GetAttribute("id")
 	p.ok(err, "row id")
@@ -515,13 +584,24 @@ func testTimes(t *testing.T, h *harness) {
 		t.Skipf("no tzdata: %v", err)
 	}
 	p := h.newPage(t, h.open, pageOpts{timezone: tz})
-	p.open(queuePath(qSched, "scheduled"))
+	p.open(queuePath(connPayments, qInvoices, "scheduled"))
 	rel := p.Locator("#tasks-rows time:not([data-format])").First()
-	p.ok(p.expect.Locator(rel).ToHaveText(regexp.MustCompile(`^in (9m \d\ds|10m 00s)$`)), "relative text")
+	relText := regexp.MustCompile(`^in (\d+)m (\d\d)s$`)
+	p.ok(p.expect.Locator(rel).ToHaveText(relText), "relative text")
 	dt, err := rel.GetAttribute("datetime")
 	p.ok(err, "datetime")
 	when, err := time.Parse(time.RFC3339, dt)
 	p.ok(err, "parse datetime %q", dt)
+	text, err := rel.TextContent()
+	p.ok(err, "relative text")
+	if m := relText.FindStringSubmatch(text); m != nil {
+		mins, _ := strconv.Atoi(m[1])
+		secs, _ := strconv.Atoi(m[2])
+		shown := time.Duration(mins)*time.Minute + time.Duration(secs)*time.Second
+		if off := time.Until(when) - shown; off < -2*time.Second || off > 2*time.Second {
+			t.Errorf("relative text %q is %s off the datetime %s", text, off, dt)
+		}
+	}
 	title, err := rel.GetAttribute("title")
 	p.ok(err, "title")
 	wantAbs := when.In(loc).Format("15:04:05")
@@ -543,7 +623,7 @@ func testTimes(t *testing.T, h *harness) {
 // a viewer's action buttons are disabled.
 func testLogin(t *testing.T, h *harness) {
 	p := h.newPage(t, h.basic, pageOpts{})
-	target := "/c/" + connName + "/queues/" + qFind + "?state=pending"
+	target := queuePath(connPayments, qInvoices, "pending")
 	// A failed sign-in answers 401.
 	p.allow(`status of 401 \(Unauthorized\)`)
 	p.login(target, adminUser, "wrong-password")
@@ -563,9 +643,9 @@ func testLogin(t *testing.T, h *harness) {
 
 func testViewerActionsDisabled(t *testing.T, h *harness) {
 	p := h.newPage(t, h.basic, pageOpts{})
-	p.login(connPath, viewerUser, viewerPass)
-	p.ok(p.expect.Page(p.Page).ToHaveURL(h.basic.url+connPath), "signed in")
-	p.ok(p.Locator("#"+hexID("qsel-", qSortA)).Check(), "select a queue")
+	p.login(connPath(connPayments), viewerUser, viewerPass)
+	p.ok(p.expect.Page(p.Page).ToHaveURL(h.basic.url+connPath(connPayments)), "signed in")
+	p.ok(p.Locator("#"+hexID("qsel-", qCritical)).Check(), "select a queue")
 	want := map[string]string{
 		"#act-pause":  "Requires operator",
 		"#act-resume": "Requires operator",
@@ -576,7 +656,7 @@ func testViewerActionsDisabled(t *testing.T, h *harness) {
 		p.ok(p.expect.Locator(b).ToBeDisabled(), "%s disabled", sel)
 		p.ok(p.expect.Locator(b).ToHaveAttribute("title", containing(title)), "%s title", sel)
 	}
-	p.open(queuePath(qArchive, "pending"))
+	p.open(queuePath(connPayments, qInvoices, "pending"))
 	p.ok(p.Locator("#tasks-rows input[type=checkbox]").First().Check(), "select a task")
 	for _, sel := range []string{"#act-archive", "#act-delete", "#queue-toggle-btn"} {
 		p.ok(p.expect.Locator(p.Locator(sel)).ToBeDisabled(), "%s disabled", sel)
