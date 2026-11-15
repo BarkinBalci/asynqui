@@ -39,8 +39,8 @@ func TestParseRole(t *testing.T) {
 	}
 }
 
-// TestMatrix checks every role against every action, exactly as in the
-// requirements' authorization table.
+// TestMatrix checks every role against every action, exactly as in
+// the capability table in docs/authentication.md#roles-and-access.
 func TestMatrix(t *testing.T) {
 	type row struct{ none, viewer, operator, admin bool }
 	matrix := map[Action]row{
@@ -108,7 +108,7 @@ func mustPolicy(t *testing.T, def Role, b ...config.Binding) *Policy {
 }
 
 func TestRoleFor(t *testing.T) {
-	// The bindings from requirements.md §4 plus a few edge cases.
+	// The bindings from docs/authentication.md#roles-and-access plus a few edge cases.
 	bindings := []config.Binding{
 		{Groups: []string{"platform"}, Role: config.RoleAdmin, Connections: []string{"*"}},
 		{Users: []string{"jdoe@example.com"}, Role: config.RoleOperator, Connections: []string{"billing", "main*"}},

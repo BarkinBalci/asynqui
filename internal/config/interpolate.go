@@ -50,7 +50,7 @@ func interpolate(n *yaml.Node, lookupEnv func(string) (string, bool)) error {
 }
 
 // expand expands ${NAME}, ${NAME:-default} and $$ in s (see
-// docs/requirements.md §8).
+// docs/configuration.md#interpolation).
 func expand(s string, lookupEnv func(string) (string, bool)) (string, error) {
 	validName := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	var b strings.Builder

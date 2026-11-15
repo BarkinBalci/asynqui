@@ -52,8 +52,8 @@ func parseRole(r config.Role) (Role, error) {
 // Action is something a user can do on a connection.
 type Action int
 
-// Actions checked by the server. Every capability in the requirements'
-// authorization table has one.
+// Actions checked by the server. Every capability in the table in
+// docs/authentication.md#roles-and-access has one.
 const (
 	ActionView Action = iota + 1 // every page and fragment
 	ActionPauseQueue
