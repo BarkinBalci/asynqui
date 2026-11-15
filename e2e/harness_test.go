@@ -125,9 +125,8 @@ func writeConfig(t *testing.T, dir, name, body string) string {
 	return p
 }
 
-// connectionsConfig is the config every instance shares: the fixture's
-// connections, no update check, no shutdown delay, polling off unless a
-// test turns it on.
+// connectionsConfig is the config both instances share: the fixture's
+// connections, with polling off unless a test turns it on.
 func connectionsConfig(redisAddr, downAddr string) string {
 	var b strings.Builder
 	b.WriteString(`server:

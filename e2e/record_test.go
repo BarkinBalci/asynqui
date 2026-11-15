@@ -127,8 +127,8 @@ func (h *harness) record(t *testing.T, bctx playwright.BrowserContext, pg playwr
 }
 
 // cursorScript draws an arrow that follows the mouse, since screenshots
-// and videos show none. It glides to each new position, shows a press
-// for at least 180ms and keeps its place across page loads.
+// and videos show none. It glides to each new position, shows presses
+// and keeps its place across page loads.
 const cursorScript = `(() => {
 	const key = "asynqui-e2e-cursor";
 	let pos = {x: Math.round(innerWidth * 0.62), y: Math.round(innerHeight * 0.72)};
@@ -158,7 +158,7 @@ const cursorScript = `(() => {
 
 // ---- GIF ----
 
-// gifFrame is the GIF's frame interval, about 9 fps.
+// gifFrame is the GIF's frame interval.
 const gifFrame = 110 * time.Millisecond
 
 // gifReady is true once the page shows data: the frames before it are
@@ -334,10 +334,9 @@ func diffBox(a, b *image.Paletted) (image.Rectangle, bool) {
 // frequent is how many palette entries go to the most frequent colors.
 const frequent = 200
 
-// buildPalette counts colors over all frames in buckets of 6 bits per
-// channel, averaged within each. It takes the frequent most common
-// buckets, fills up to 255 with common buckets far from those, and adds
-// the transparent entry.
+// buildPalette counts colors over all frames in coarse buckets, averaged
+// within each. It takes the most common buckets, fills the rest with
+// common buckets far from those, and adds the transparent entry.
 func buildPalette(frames []frame) color.Palette {
 	type bucket struct {
 		n       int

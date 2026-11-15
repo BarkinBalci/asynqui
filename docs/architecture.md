@@ -275,16 +275,7 @@ func addRoutes(mux *http.ServeMux, d deps) {
    - actions mutating Redis
    - "not found" and "Connection failed" states
    - the checks every page shares (access by role, CSRF, ids of focusables in polled regions, the answers' shape, `hx-sync` scopes, path escaping) run once over a route table (`internal/web/routes_test.go`)
-4. **Browser smoke tests** (`e2e/`, build tag `e2e`, the CI `e2e` job; see [contributing](contributing.md#browser-tests)): playwright-go and headless Chromium against the built binary and one realistic fixture in Redis (three connections and an unreachable one), for the behaviour that lives in `app.js` and htmx and that Go tests cannot run (selection across polls, focus, dialogs, `hx-sync`); handler and component tests only check the markup that drives it:
-   - theme without a flash, System following `prefers-color-scheme`
-   - polling: Off sends nothing, 2s polls, a hidden tab pauses
-   - a sort or a picker during a poll, selection and focus across polls, the Delete rule
-   - "select all N" then Delete all, none on Active, the Archive warning, Find task
-   - copy, local times, login and a viewer's disabled actions, the account menu
-   - Run now on retry tasks, reached from the Overview; this test is also the README's GIF (`task demo-gif`)
-   - an axe-core check per page in both themes (vendored axe-core; fails on any violation), and no console error or CSP violation on any page
-
-   Each test records a video, and a failed one its Playwright trace, into `e2e/test-results/`; CI uploads them as an artifact.
+4. **Browser tests** (`e2e/`, build tag `e2e`; see [contributing](contributing.md#browser-tests)): playwright-go drives Chromium against the built binary and a seeded Redis, for the behaviour in `app.js` and htmx that Go tests cannot run, plus an axe-core and CSP check of every page. Each test records a video, and a failed one its trace.
 
 Other conventions:
 - **No mock frameworks.** Use small hand-written fakes for error paths and a fake OIDC provider built on `httptest.Server`.

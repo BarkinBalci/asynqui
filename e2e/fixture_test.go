@@ -29,20 +29,20 @@ const (
 
 // Queues the tests use by name.
 const (
-	qCritical = "critical" // payments
-	qInvoices = "invoices" // payments: pending, scheduled, retry, archived
-	qWebhooks = "webhooks" // payments: webhookRetries retry tasks
-	qRefunds  = "refunds"  // payments: scheduled and archived only
-	qPayouts  = "payouts"  // payments: empty, every task processed
-	qPush     = "push"     // notifications: pushActive active tasks
-	qDigest   = "digest"   // notifications: paused
-	qLow      = "low"      // reports: lowBacklog pending behind busy workers
+	qCritical = "critical"
+	qInvoices = "invoices"
+	qWebhooks = "webhooks"
+	qRefunds  = "refunds"
+	qPayouts  = "payouts" // empty
+	qPush     = "push"
+	qDigest   = "digest" // paused
+	qLow      = "low"
 )
 
 // Counts the tests assert.
 const (
 	webhookRetries = 9
-	pushActive     = 22 // more than the smallest page (20), so "select all N" would apply
+	pushActive     = 22 // more than the smallest page, so "select all N" would apply
 	lowBacklog     = 41
 )
 
@@ -50,8 +50,8 @@ const (
 type fixture struct {
 	// insp is an inspector per reachable connection.
 	insp map[string]*asynq.Inspector
-	// refund is a scheduled task in qRefunds; archived is an archived
-	// one, with an error.
+	// refund is a scheduled task; archived is an archived one, with an
+	// error.
 	refund, archived seededTask
 }
 
@@ -264,11 +264,8 @@ func (s *seeder) active(n int) {
 }
 
 // seedFixture flushes the fixture's DBs and fills them through asynq's
-// client, inspector, workers and schedulers: tasks processed today,
-// retries and archived tasks with errors, busy workers with a backlog,
-// scheduled tasks, a paused queue, an empty one and 30 days of
-// throughput history. Every retry is due in 8 minutes or more, so
-// nothing moves while the tests run.
+// client, inspector, workers and schedulers. No retry is due before a
+// run ends, so nothing moves while the tests run.
 func seedFixture(t *testing.T, addr string) fixture {
 	t.Helper()
 	rng := rand.New(rand.NewPCG(7, 42))
@@ -384,8 +381,7 @@ func seedFixture(t *testing.T, addr string) fixture {
 		seeders[fc.name].settled()
 	}
 
-	// Long tasks hold every payments and reports worker and some
-	// notifications ones; what comes after them waits as a backlog.
+	// Long tasks hold workers; what comes after them waits as a backlog.
 	s = seeders[connPayments]
 	for range 4 {
 		s.busy(qInvoices, "invoice:generate", p.invoice())
@@ -470,11 +466,9 @@ func seedFixture(t *testing.T, addr string) fixture {
 }
 
 // writeDailyCounters writes asynq's daily processed and failed counters
-// directly, for the 29 days before today, so the Connection page's
-// throughput chart has a believable shape. The keys follow asynq v0.26.0
-// internal/base (ProcessedKey and FailedKey,
-// "asynq:{<queue>}:processed:<UTC date>"), with asynq's 90-day expiry.
-// Today's counters come from the fixture's workers.
+// directly for the days before today, so the throughput chart has
+// history. The keys and expiry follow asynq v0.26.0 internal/base
+// (ProcessedKey and FailedKey). Today's counters come from the workers.
 func writeDailyCounters(t *testing.T, rdb *redis.Client, rng *rand.Rand, daily map[string]int) {
 	t.Helper()
 	today := time.Now().UTC()

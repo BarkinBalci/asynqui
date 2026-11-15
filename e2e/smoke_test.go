@@ -17,10 +17,8 @@ import (
 	playwright "github.com/mxschmitt/playwright-go"
 )
 
-// The README's flow: from the Overview into payments and its webhooks
-// queue, then Run now on three retry tasks, with the default 5s refresh
-// polling along. The notice, the tab counts, the table and Redis all
-// show the three tasks moved to pending.
+// Run now on retry tasks, reached from the Overview with polling on,
+// moves them to pending. The README's GIF is this test.
 func testRunRetries(t *testing.T, h *harness) {
 	insp := h.fx.insp[connPayments]
 	before, err := insp.GetQueueInfo(qWebhooks)
