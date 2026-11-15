@@ -32,12 +32,12 @@ type Failure int
 
 // Failure codes passed to a FailFunc.
 const (
-	FailBadRequest         Failure = iota + 1 // malformed form
-	FailInvalidCredentials                    // "Invalid username or password."
-	FailTooManyAttempts                       // basic rate limit hit
-	FailSSO                                   // any OIDC failure
-	FailSessionTooLarge                       // identity does not fit in the cookie
-	FailInternal                              // anything else
+	FailBadRequest Failure = iota + 1 // malformed form
+	FailInvalidCredentials
+	FailTooManyAttempts // basic rate limit hit
+	FailSSO             // any OIDC failure
+	FailSessionTooLarge // identity does not fit in the cookie
+	FailInternal        // anything else
 )
 
 const (
@@ -72,16 +72,11 @@ type Authenticator struct {
 	proxy    *proxyProvider
 }
 
-// New builds the Authenticator for cfg's auth.provider, from config that
-// config.Load has validated. Cookies are scoped to server.base_path and
-// redirects stay inside it. sessionGroups are the groups worth keeping in
-// an OIDC session: those some authz binding references
-// (authz.Policy.Groups); basic sessions store no groups, which come from
-// config on every request. logger records sign-in failures; nil discards.
-//
-// For oidc it performs discovery using ctx, so it fails at startup if the
-// IdP is unreachable. An *http.Client in ctx (oidc.ClientContext) talks
-// to the IdP instead of the default one with a 10s timeout.
+// New builds the Authenticator for cfg's auth.provider from validated config.
+// sessionGroups are the groups worth keeping in an OIDC session: those some
+// authz binding references. logger records sign-in failures; nil discards. For
+// oidc it runs discovery under ctx, so an unreachable IdP fails startup; an
+// *http.Client in ctx (oidc.ClientContext) replaces the default client.
 func New(ctx context.Context, cfg *config.Config, sessionGroups []string, logger *slog.Logger) (*Authenticator, error) {
 	return newAuth(ctx, cfg, sessionGroups, logger, time.Now)
 }
@@ -129,8 +124,7 @@ func newAuth(ctx context.Context, cfg *config.Config, sessionGroups []string, lo
 	return a, nil
 }
 
-// Kind returns the configured provider, e.g. so the login page can choose
-// between the form and the SSO button.
+// Kind returns the configured provider.
 func (a *Authenticator) Kind() Kind { return a.kind }
 
 // ProxyLogoutURL is auth.proxy.logout_url, or "" for other providers. The
@@ -184,11 +178,9 @@ func (s sessionIdentifier) identify(w http.ResponseWriter, r *http.Request) (Ide
 	return id, ok
 }
 
-// Middleware stores the request's Identity in its context when the request
-// is authenticated; read it with IdentityFrom. It never rejects a request:
-// route wrappers decide what needs a session and call Challenge. An invalid
-// or expired session cookie is cleared. For none every request carries the
-// zero Identity.
+// Middleware stores the request's Identity in its context when the request is
+// authenticated; read it with IdentityFrom. It never rejects a request (see
+// Challenge). An invalid or expired session cookie is cleared.
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if id, ok := a.ident.identify(w, r); ok {
@@ -198,12 +190,10 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// Challenge answers a request that needs an identity but has none. For
-// basic and oidc it redirects to <base>/login?next=<this page> (303), or,
-// for htmx requests, sets HX-Redirect to the login page with the page the
-// user is on (HX-Current-URL), so the whole page navigates instead of a
-// fragment swap. For proxy and none it is a plain 401. Responses are never
-// cached.
+// Challenge answers a request that needs an identity but has none: for basic
+// and oidc a 303 to the login page, or for htmx requests an HX-Redirect to it,
+// returning to the page the user is on; for proxy and none a plain 401.
+// Responses are never cached.
 func (a *Authenticator) Challenge(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch a.kind {
@@ -238,11 +228,9 @@ func (a *Authenticator) Challenge(w http.ResponseWriter, r *http.Request) {
 }
 
 // LoginHandler serves POST /login, the basic login form: it checks the
-// "username" and "password" form fields (per client IP and per username,
-// a burst of 5 attempts, then 1 every 12s), sets the session and redirects to
-// "next". Every other provider gets 404, oidc included: its flow starts
-// only at SSOHandler (GET /login/sso). fail may be nil, which writes a
-// plain-text error.
+// "username" and "password" fields under a rate limit per client IP and per
+// username, sets the session and redirects to "next". Every other provider
+// gets 404, oidc included. fail may be nil, which writes a plain-text error.
 func (a *Authenticator) LoginHandler(fail FailFunc) http.Handler {
 	fail = failFunc(fail)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -264,8 +252,6 @@ func (a *Authenticator) basicLogin(w http.ResponseWriter, r *http.Request, next 
 	known := a.basic.exists(username)
 	logUser := slog.Attr{}
 	if known {
-		// Unknown "usernames" are not logged: they are often passwords
-		// typed into the wrong field.
 		logUser = slog.String("username", username)
 	}
 	ok, retry := a.ipLimit.allow(clientKey(r.RemoteAddr))
@@ -292,13 +278,12 @@ func (a *Authenticator) basicLogin(w http.ResponseWriter, r *http.Request, next 
 	http.Redirect(w, r, next, http.StatusSeeOther) //nolint:gosec // G710: next passed SafeNext.
 }
 
-// SSOHandler serves GET /login/sso for oidc: the "Sign in with SSO" link.
-// It starts the authorization code flow and redirects to the IdP, returning
-// afterwards to the ?next= path if it passes SafeNext. A GET is safe here:
-// it only sets a fresh flow cookie, and the state, nonce and PKCE verifier
-// in it bind the callback to this browser. Being a navigation rather than a
-// form post, it is not subject to the CSP form-action directive, which would
-// block a form that redirects to the IdP. Other providers get 404.
+// SSOHandler serves GET /login/sso for oidc: it starts the authorization code
+// flow and redirects to the IdP, returning afterwards to ?next= if it passes
+// SafeNext. A GET is safe here: it only sets a fresh flow cookie whose state,
+// nonce and PKCE verifier bind the callback to this browser. It is a link
+// rather than a form because CSP form-action would block a form that redirects
+// to the IdP. Other providers get 404.
 func (a *Authenticator) SSOHandler(fail FailFunc) http.Handler {
 	fail = failFunc(fail)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

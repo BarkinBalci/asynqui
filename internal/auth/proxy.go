@@ -30,10 +30,8 @@ type proxyProvider struct {
 	lastLogged time.Time
 }
 
-// newProxy builds the provider from config: the user header carries the
-// username, the optional groups header comma-separated groups, and only
-// requests from the trusted proxies (CIDRs or bare IPs) may carry them. The
-// logout URL is where Sign out goes; empty hides it.
+// newProxy builds the provider from validated config. An empty logout URL
+// hides Sign out.
 func newProxy(ctx context.Context, c config.Proxy, logger *slog.Logger, now func() time.Time) (*proxyProvider, error) {
 	p := &proxyProvider{
 		userHeader:   c.UserHeader,

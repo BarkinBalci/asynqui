@@ -21,9 +21,7 @@ const (
 )
 
 // limiter is a token bucket per key. Keys are client IPs (IPv6 by /64) or
-// folded usernames. Behind a reverse proxy every user shares the proxy's
-// IP, so one user's failures can lock out the others: that is the
-// documented trade-off of keying on RemoteAddr only.
+// folded usernames.
 type limiter struct {
 	cap     int
 	now     func() time.Time

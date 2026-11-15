@@ -47,8 +47,7 @@ func TestProxyIdentify(t *testing.T) {
 		{"groups parsed", trusted, "10.0.0.1:1",
 			hdr("X-Forwarded-User", " jdoe ", "X-Forwarded-Groups", " platform, ,ops,,dev"),
 			Identity{Subject: "jdoe", Name: "jdoe", Groups: []string{"platform", "ops", "dev"}}, true},
-		// Header names are case-insensitive on the wire; net/http
-		// canonicalises them before the handler sees them.
+		// net/http canonicalises header names.
 		{"lower-case header name", trusted, "10.0.0.1:1", hdr("x-forwarded-user", "jdoe"), Identity{Subject: "jdoe", Name: "jdoe"}, true},
 		{"underscore is a different header", trusted, "10.0.0.1:1", hdr("X_Forwarded_User", "jdoe"), Identity{}, false},
 
@@ -153,7 +152,7 @@ func TestProxyWarnings(t *testing.T) {
 	if count() != 1 {
 		t.Fatalf("no spoofing warning: %q", buf.String())
 	}
-	// An attacker can trigger this at will; it is logged once a minute.
+	// An attacker can trigger this at will, so it is throttled.
 	spoof(http.Header{"X-Forwarded-User": {"admin"}})
 	spoof(http.Header{"X-Forwarded-Groups": {"platform"}})
 	if count() != 1 {
