@@ -2,17 +2,17 @@
 
 Dev tasks live in `Taskfile.yml`; run `task` to list them. Install [Task](https://taskfile.dev/installation/) or run it as `go tool -modfile=tools/go.mod task`. Run `task check` before pushing; it runs the CI check job.
 
-Code conventions are in [architecture.md](architecture.md). Each topic has one owning doc; link to the owner instead of repeating it.
+Code conventions are in [architecture.md](docs/architecture.md). Each topic has one owning doc; link to the owner instead of repeating it.
 
 | Doc | Owns |
 |---|---|
-| [configuration.md](configuration.md) | flags, environment, precedence, startup, logging, the config file and every key |
-| [authentication.md](authentication.md) | providers, sessions, roles and bindings, cookies |
-| [deployment.md](deployment.md) | install, Kubernetes, probes, shutdown, reverse proxy, update check |
-| [design.md](design.md) | the behaviour spec: pages, UI rules, sign-in flow, HTTP behaviour |
-| [architecture.md](architecture.md) | code layout, rules and internals |
-| contributing.md | the dev workflow |
-| [releasing.md](releasing.md) | cutting a release |
+| [configuration.md](docs/configuration.md) | flags, environment, precedence, startup, logging, the config file and every key |
+| [authentication.md](docs/authentication.md) | providers, sessions, roles and bindings, cookies |
+| [deployment.md](docs/deployment.md) | install, Kubernetes, probes, shutdown, reverse proxy, update check |
+| [design.md](docs/design.md) | the behaviour spec: pages, UI rules, sign-in flow, HTTP behaviour |
+| [architecture.md](docs/architecture.md) | code layout, rules and internals |
+| CONTRIBUTING.md | the dev workflow |
+| [releasing.md](docs/releasing.md) | cutting a release |
 
 ## Local development
 

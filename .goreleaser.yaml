@@ -55,7 +55,7 @@ checksum:
 changelog:
   use: git
   sort: asc
-  # Groups by conventional-commit prefix (docs/contributing.md). The regexps
+  # Groups by conventional-commit prefix (CONTRIBUTING.md). The regexps
   # see the commit subject alone, so they anchor at its start.
   groups:
     - title: Features

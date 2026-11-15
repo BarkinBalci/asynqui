@@ -78,7 +78,7 @@ asynqui checks GitHub for new releases; [update check](docs/deployment.md#update
 
 **Contributing**
 
-- [Contributing](docs/contributing.md): local development and the dev workflow
+- [Contributing](CONTRIBUTING.md): local development and the dev workflow
 - [Design](docs/design.md): the behaviour spec
 - [Architecture](docs/architecture.md): internals
 - [Releasing](docs/releasing.md): cutting a release

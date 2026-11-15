@@ -3,5 +3,5 @@
 //
 //	go test -tags e2e ./e2e/...
 //
-// See docs/contributing.md for setup, recordings and the demo GIF.
+// See CONTRIBUTING.md for setup, recordings and the demo GIF.
 package e2e

@@ -75,7 +75,7 @@ func newHarness(t *testing.T) *harness {
 
 	pw, err := playwright.Run()
 	if err != nil {
-		t.Fatalf("start playwright (install Chromium first, see docs/contributing.md): %v", err)
+		t.Fatalf("start playwright (install Chromium first, see CONTRIBUTING.md): %v", err)
 	}
 	t.Cleanup(func() { _ = pw.Stop() })
 	h.browser, err = pw.Chromium.Launch(h.look.launchOptions())
