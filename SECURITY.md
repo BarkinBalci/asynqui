@@ -2,8 +2,8 @@
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities privately, using **Report a vulnerability** on the repository's [Security tab](https://github.com/BarkinBalci/asynqui/security). Please don't open a public issue.
+Please report security issues privately, using **Report a vulnerability** on the [Security tab](https://github.com/BarkinBalci/asynqui/security), rather than in a public issue. That way a fix can ship before the details are public.
 
 ## Supported versions
 
-Only the latest release gets security fixes.
+Security fixes go into the latest release.
