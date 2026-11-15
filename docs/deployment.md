@@ -37,12 +37,12 @@ Tags with a prerelease part (`0.2.0-rc.1`) are published as GitHub prereleases.
 
 ### Container image
 
-`ghcr.io/barkinbalci/asynqui` is multi-arch (linux/amd64, linux/arm64) and built on `gcr.io/distroless/static-debian12:nonroot`. It is tagged with the exact version (`0.1.0`), `0.1` and `latest`. Prereleases get only their exact version. Use the exact version in production.
+`ghcr.io/barkinbalci/asynqui` is multi-arch (linux/amd64, linux/arm64) and built on `gcr.io/distroless/static-debian12:nonroot`. It is tagged with the exact version (`0.1.1`), `0.1` and `latest`. Prereleases get only their exact version. Use the exact version in production.
 
 - Runs as UID/GID 65532 and listens on 8080.
 - Reads its config from `/etc/asynqui/config.yaml`, set through `ASYNQUI_CONFIG`, which `-config` overrides. Mount the file read-only.
 - UID 65532 must be able to read it: mode `0644`, or `0640` with group 65532. On SELinux hosts add `:z` to the bind mount. For a Kubernetes Secret with a restrictive `defaultMode`, set `fsGroup: 65532`.
-- Pass flags after the image name: `docker run ... ghcr.io/barkinbalci/asynqui:0.1.0 -log-level debug`.
+- Pass flags after the image name: `docker run ... ghcr.io/barkinbalci/asynqui:0.1.1 -log-level debug`.
 - There is no shell, so there is no Docker `HEALTHCHECK`. Use the HTTP probes.
 
 ## Kubernetes example
