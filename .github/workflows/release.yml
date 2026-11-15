@@ -49,6 +49,21 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: previous stable tag
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          prev=""
+          for t in $(git tag --list --sort=version:refname); do
+            [ "$t" = "$TAG" ] && break
+            if [[ $t =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              prev=$t
+            fi
+          done
+          if [ -n "$prev" ]; then
+            echo "GORELEASER_PREVIOUS_TAG=$prev" >> "$GITHUB_ENV"
+          fi
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
