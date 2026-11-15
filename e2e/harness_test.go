@@ -38,8 +38,11 @@ type harness struct {
 	open, basic *instance
 	browser     playwright.Browser
 	fx          fixture
+	look        presentation
 	// results is where this test's videos and traces go.
 	results string
+	// gifTaken is set once a page records the GIF.
+	gifTaken bool
 }
 
 // instance is one running asynqui process.
@@ -52,7 +55,7 @@ type instance struct {
 // Everything stops when t's cleanups run.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{results: filepath.Join(resultsDir, t.Name())}
+	h := &harness{look: presentationFromEnv(), results: filepath.Join(resultsDir, t.Name())}
 	if err := os.RemoveAll(h.results); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +78,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("start playwright (install Chromium first, see docs/contributing.md): %v", err)
 	}
 	t.Cleanup(func() { _ = pw.Stop() })
-	h.browser, err = pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{Headless: new(true)})
+	h.browser, err = pw.Chromium.Launch(h.look.launchOptions())
 	if err != nil {
 		t.Fatalf("launch chromium: %v", err)
 	}

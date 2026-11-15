@@ -10,5 +10,11 @@
 // They need Chromium installed for playwright-go and a throwaway Redis,
 // whose DBs 0 to 2 they flush: ASYNQUI_E2E_REDIS=host:port, or
 // testcontainers when it is unset. Every test runs against one realistic
-// fixture (fixture_test.go). See docs/contributing.md.
+// fixture (fixture_test.go).
+//
+// Each page records a video into test-results/, and a failed test also
+// saves its trace there. ASYNQUI_E2E_PACE=1 slows the run down and draws
+// the cursor, ASYNQUI_E2E_HEADED=1 shows the browser, and
+// ASYNQUI_E2E_GIF=<subtest> writes that subtest as the README's
+// docs/images/demo.gif. See docs/contributing.md.
 package e2e

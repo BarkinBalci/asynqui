@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
@@ -31,11 +32,11 @@ func testRunRetries(t *testing.T, h *harness) {
 	}
 	p := h.newPage(t, h.open, pageOpts{cookies: map[string]string{"asynqui_refresh": "5s"}})
 	p.open("/")
-	p.ok(p.Locator("#open-"+connPayments).Click(), "open payments")
+	p.click(p.Locator("#open-"+connPayments), "open payments")
 	p.ok(p.expect.Page(p.Page).ToHaveURL(regexp.MustCompile(regexp.QuoteMeta(connPath(connPayments))+"$")), "on the Connection page")
-	p.ok(p.Locator("#"+hexID("qlink-", qWebhooks)).Click(), "open webhooks")
+	p.click(p.Locator("#"+hexID("qlink-", qWebhooks)), "open webhooks")
 	p.ok(p.expect.Page(p.Page).ToHaveURL(containing(connPath(connPayments)+"/queues/"+qWebhooks)), "on the Queue page")
-	p.ok(p.Locator("#tab-retry").Click(), "Retry tab")
+	p.click(p.Locator("#tab-retry"), "Retry tab")
 	p.ok(p.expect.Page(p.Page).ToHaveURL(containing("state=retry")), "URL has state=retry")
 	p.ok(p.expect.Locator(p.Locator("#tab-retry")).ToHaveClass(containing("on")), "Retry tab on")
 
@@ -47,13 +48,13 @@ func testRunRetries(t *testing.T, h *harness) {
 	var ids []string
 	for i := range 3 {
 		box := boxes.Nth(i)
-		p.ok(box.Check(), "select row %d", i+1)
+		p.check(box, fmt.Sprintf("select row %d", i+1))
 		id, err := box.GetAttribute("value")
 		p.ok(err, "row %d id", i+1)
 		ids = append(ids, id)
 	}
 	p.ok(p.expect.Locator(p.Locator(`[data-toolbar=tasks-form] [data-sel-count]`)).ToHaveText("3"), "3 selected")
-	p.ok(p.Locator("#act-run").Click(), "Run now")
+	p.click(p.Locator("#act-run"), "Run now")
 
 	p.ok(p.expect.Locator(p.Locator(".notice")).ToHaveText("Moved 3 tasks to pending"), "notice")
 	p.ok(p.expect.Locator(retries).ToHaveText(strconv.Itoa(webhookRetries-3)), "retry count after")

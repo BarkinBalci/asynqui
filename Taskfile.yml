@@ -43,6 +43,13 @@ tasks:
     desc: Run the browser tests (Chromium + a throwaway Redis; see docs/contributing.md)
     cmd: go test -tags e2e -count=1 ./e2e/...
 
+  demo-gif:
+    desc: Regenerate the README's docs/images/demo.gif from the RunRetries browser test (Chromium + a throwaway Redis; see docs/contributing.md)
+    env:
+      ASYNQUI_E2E_PACE: '1'
+      ASYNQUI_E2E_GIF: RunRetries
+    cmd: go test -tags e2e -count=1 -run '^TestBrowser$/^RunRetries$' ./e2e/
+
   run:
     desc: Run locally against localhost:6379 with config.dev.yaml
     deps: [generate]

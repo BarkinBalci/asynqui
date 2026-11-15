@@ -62,6 +62,7 @@ type page struct {
 	t      *testing.T
 	ctx    playwright.BrowserContext
 	expect playwright.PlaywrightAssertions
+	pace   bool
 
 	mu       sync.Mutex
 	problems []string
@@ -86,8 +87,9 @@ const recordCSP = `document.addEventListener("securitypolicyviolation", function
 		" at " + e.sourceFile + ":" + e.lineNumber);
 });`
 
-// newPage opens a tab in a new browser context, which records a video
-// and a trace (see record).
+// newPage opens a tab in a new browser context. The context records a
+// video and a trace (see record) and, in presentation mode, draws the
+// cursor.
 func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 	t.Helper()
 	videos := t.TempDir()
@@ -95,8 +97,8 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 		BaseURL:     new(inst.url),
 		Locale:      new("en-US"),
 		Permissions: o.permissions,
-		Viewport:    viewport(),
-		RecordVideo: &playwright.RecordVideo{Dir: new(videos), Size: viewport()},
+		Viewport:    h.look.viewport(),
+		RecordVideo: &playwright.RecordVideo{Dir: new(videos), Size: h.look.viewport()},
 	}
 	if o.timezone != "" {
 		opts.TimezoneId = new(o.timezone)
@@ -106,6 +108,11 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = bctx.Close() })
+	if h.look.pace {
+		if err := bctx.AddInitScript(playwright.Script{Content: new(cursorScript)}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if len(o.cookies) > 0 {
 		var cs []playwright.OptionalCookie
 		for k, v := range o.cookies {
@@ -123,8 +130,12 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 		t.Fatal(err)
 	}
 	h.record(t, bctx, pg)
+	if h.look.records(t) && !h.gifTaken {
+		h.gifTaken = true
+		recordGIF(t, pg)
+	}
 	pg.SetDefaultTimeout(10000)
-	p := &page{Page: pg, t: t, ctx: bctx, expect: playwright.NewPlaywrightAssertions(5000)}
+	p := &page{Page: pg, t: t, ctx: bctx, expect: playwright.NewPlaywrightAssertions(5000), pace: h.look.pace}
 	pg.OnConsole(func(m playwright.ConsoleMessage) {
 		if m.Type() == "error" {
 			p.problem("console error: " + m.Text())
@@ -256,6 +267,25 @@ func connPath(c string) string { return "/c/" + c }
 // queuePath is the Queue page of q on c, on one tab.
 func queuePath(c, q, state string) string {
 	return connPath(c) + "/queues/" + q + "?state=" + state
+}
+
+// click clicks loc. In presentation mode the pointer first moves onto
+// it, so the drawn cursor gets there before the click.
+func (p *page) click(loc playwright.Locator, what string) {
+	p.t.Helper()
+	if p.pace {
+		p.ok(loc.Hover(), "hover %s", what)
+	}
+	p.ok(loc.Click(), "%s", what)
+}
+
+// check checks the checkbox loc, moving the pointer first as click does.
+func (p *page) check(loc playwright.Locator, what string) {
+	p.t.Helper()
+	if p.pace {
+		p.ok(loc.Hover(), "hover %s", what)
+	}
+	p.ok(loc.Check(), "%s", what)
 }
 
 // login signs in through the basic login form, starting at path.
