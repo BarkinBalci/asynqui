@@ -25,7 +25,7 @@ You need:
 
 `task run` starts asynqui against `localhost:6379` with `config.dev.yaml`, which has no login and gives you full control.
 
-`task demo` fills a **throwaway** Redis with the browser tests' fixture and serves asynqui on it until you press Ctrl-C. The fixture's workers and schedulers keep running meanwhile. It flushes DBs 0–2 and shows four connections, one of them unreachable.
+`task demo` fills a **throwaway** Redis with the browser tests' fixture and serves asynqui on it until you press Ctrl-C. The fixture's workers and schedulers keep running meanwhile. It flushes DBs 0–2.
 
 ```sh
 ASYNQUI_E2E_REDIS=localhost:6379 task demo   # http://127.0.0.1:8080
