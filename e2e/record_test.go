@@ -30,42 +30,31 @@ const resultsDir = "test-results"
 // gifOut is where the GIF of ASYNQUI_E2E_GIF's subtest is written.
 const gifOut = "../docs/images/demo.gif"
 
-// paceSlowMo is how long Playwright waits after each action in
-// presentation mode, in milliseconds.
-const paceSlowMo = 400.0
+// slowMo is how long Playwright waits after each action, in
+// milliseconds, so the videos can be followed. The cursor's glide must
+// fit in it.
+const slowMo = 400.0
 
 // presentation is how a run looks, from the environment. It never
 // changes what a test does or asserts.
 type presentation struct {
-	pace   bool   // ASYNQUI_E2E_PACE=1
 	headed bool   // ASYNQUI_E2E_HEADED=1
 	gif    string // ASYNQUI_E2E_GIF: the subtest whose frames become gifOut
 }
 
 func presentationFromEnv() presentation {
 	return presentation{
-		pace:   os.Getenv("ASYNQUI_E2E_PACE") == "1",
 		headed: os.Getenv("ASYNQUI_E2E_HEADED") == "1",
 		gif:    os.Getenv("ASYNQUI_E2E_GIF"),
 	}
 }
 
 func (l presentation) launchOptions() playwright.BrowserTypeLaunchOptions {
-	o := playwright.BrowserTypeLaunchOptions{Headless: new(!l.headed)}
-	if l.pace {
-		o.SlowMo = new(paceSlowMo)
-	}
-	return o
+	return playwright.BrowserTypeLaunchOptions{Headless: new(!l.headed), SlowMo: new(slowMo)}
 }
 
-// viewport is the page size: 1200x750 when paced, Playwright's default
-// otherwise.
-func (l presentation) viewport() *playwright.Size {
-	if l.pace {
-		return &playwright.Size{Width: 1200, Height: 750}
-	}
-	return &playwright.Size{Width: 1280, Height: 720}
-}
+// viewport is the page, video and GIF size.
+func viewport() *playwright.Size { return &playwright.Size{Width: 1200, Height: 750} }
 
 // records reports whether t is the subtest ASYNQUI_E2E_GIF names, by its
 // full name or its last part.

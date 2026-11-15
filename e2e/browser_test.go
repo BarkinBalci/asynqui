@@ -62,7 +62,6 @@ type page struct {
 	t      *testing.T
 	ctx    playwright.BrowserContext
 	expect playwright.PlaywrightAssertions
-	pace   bool
 
 	mu       sync.Mutex
 	problems []string
@@ -88,8 +87,7 @@ const recordCSP = `document.addEventListener("securitypolicyviolation", function
 });`
 
 // newPage opens a tab in a new browser context. The context records a
-// video and a trace (see record) and, in presentation mode, draws the
-// cursor.
+// video and a trace (see record) and draws the cursor.
 func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 	t.Helper()
 	videos := t.TempDir()
@@ -97,8 +95,8 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 		BaseURL:     new(inst.url),
 		Locale:      new("en-US"),
 		Permissions: o.permissions,
-		Viewport:    h.look.viewport(),
-		RecordVideo: &playwright.RecordVideo{Dir: new(videos), Size: h.look.viewport()},
+		Viewport:    viewport(),
+		RecordVideo: &playwright.RecordVideo{Dir: new(videos), Size: viewport()},
 	}
 	if o.timezone != "" {
 		opts.TimezoneId = new(o.timezone)
@@ -108,10 +106,8 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = bctx.Close() })
-	if h.look.pace {
-		if err := bctx.AddInitScript(playwright.Script{Content: new(cursorScript)}); err != nil {
-			t.Fatal(err)
-		}
+	if err := bctx.AddInitScript(playwright.Script{Content: new(cursorScript)}); err != nil {
+		t.Fatal(err)
 	}
 	if len(o.cookies) > 0 {
 		var cs []playwright.OptionalCookie
@@ -135,7 +131,7 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 		recordGIF(t, pg)
 	}
 	pg.SetDefaultTimeout(10000)
-	p := &page{Page: pg, t: t, ctx: bctx, expect: playwright.NewPlaywrightAssertions(5000), pace: h.look.pace}
+	p := &page{Page: pg, t: t, ctx: bctx, expect: playwright.NewPlaywrightAssertions(5000)}
 	pg.OnConsole(func(m playwright.ConsoleMessage) {
 		if m.Type() == "error" {
 			p.problem("console error: " + m.Text())
@@ -269,22 +265,18 @@ func queuePath(c, q, state string) string {
 	return connPath(c) + "/queues/" + q + "?state=" + state
 }
 
-// click clicks loc. In presentation mode the pointer first moves onto
-// it, so the drawn cursor gets there before the click.
+// click clicks loc after moving the pointer onto it, so the drawn
+// cursor gets there before the click.
 func (p *page) click(loc playwright.Locator, what string) {
 	p.t.Helper()
-	if p.pace {
-		p.ok(loc.Hover(), "hover %s", what)
-	}
+	p.ok(loc.Hover(), "hover %s", what)
 	p.ok(loc.Click(), "%s", what)
 }
 
 // check checks the checkbox loc, moving the pointer first as click does.
 func (p *page) check(loc playwright.Locator, what string) {
 	p.t.Helper()
-	if p.pace {
-		p.ok(loc.Hover(), "hover %s", what)
-	}
+	p.ok(loc.Hover(), "hover %s", what)
 	p.ok(loc.Check(), "%s", what)
 }
 
