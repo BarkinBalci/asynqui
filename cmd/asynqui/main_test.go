@@ -187,9 +187,8 @@ func TestNewUpdateChecker(t *testing.T) {
 	}
 }
 
-// TestRunDrain starts the real server, cancels its context and checks the
-// shutdown sequence: readiness turns 503 while the listener still serves for
-// shutdown_delay, then the listener closes and run returns nil.
+// TestRunDrain checks that readiness turns 503 while the listener still serves
+// for shutdown_delay, then the listener closes and run returns nil.
 func TestRunDrain(t *testing.T) {
 	const shutdownDelay = time.Second
 	cfgPath := writeConfig(t, "server: {addr: '127.0.0.1:0', shutdown_delay: 1s}\n")
@@ -244,7 +243,6 @@ func TestRunDrain(t *testing.T) {
 	start := time.Now()
 	cancel()
 
-	// During shutdown_delay the listener stays open and readiness is 503.
 	deadline := time.Now().Add(time.Second)
 	for {
 		code, body, err := get("/health/readiness")
@@ -312,8 +310,7 @@ func TestRunListenError(t *testing.T) {
 	}
 }
 
-// writeConfig writes a minimal valid config plus extra YAML and returns its
-// path.
+// writeConfig writes a minimal valid config plus extra YAML.
 func writeConfig(t *testing.T, extra string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "asynqui.yaml")

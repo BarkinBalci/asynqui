@@ -5,8 +5,7 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web"
 )
 
-// registrySource lists the registry's connections for web, which uses
-// each *conn.Conn through its own interfaces.
+// registrySource lists the registry's connections for web.
 type registrySource struct {
 	reg *conn.Registry
 }
