@@ -7,39 +7,25 @@ How the code is organised and the rules it follows. Product behaviour is specifi
 - Mat Ryer, [How I write HTTP services in Go after 13 years](https://grafana.com/blog/2024/02/09/how-i-write-http-services-in-go-after-13-years/).
 - The [Google Go Style Guide](https://google.github.io/styleguide/go/), on top of Effective Go.
 
-We do **not** follow `golang-standards/project-layout` or Clean/hexagonal architecture. asynq already owns the domain, and asynqui is a UI over it.
+asynqui does **not** follow `golang-standards/project-layout` or Clean/hexagonal architecture: asynq owns the domain, and asynqui is a UI over it.
 
 ## Layout
 
 ```
-asynqui/
-├── cmd/asynqui/
-│   ├── main.go                # tiny main; run(ctx, args, lookupEnv, stdout, stderr): wiring and lifecycle
-│   └── flags.go               # flags + ASYNQUI_* env, precedence
-├── internal/
-│   ├── config/                # YAML load, ${ENV} interpolation, defaults, validation
-│   ├── conn/                  # Registry: name → inspector/redis; health loop; per-connection cache
-│   ├── auth/                  # none | basic | proxy | oidc; session cookie
-│   ├── authz/                 # roles and per-connection policy: Role(user, conn), Can(...)
-│   ├── update/                # GitHub release check: startup + every 24h, Latest() tag
-│   └── web/
-│       ├── server.go          # NewServer(deps...) http.Handler
-│       ├── routes.go          # every URL, in one file, with its required role
-│       ├── handle_*.go        # one file per area: queues, tasks, servers, schedulers, info, auth, health
-│       ├── middleware.go
-│       ├── format/            # the only place numbers, dates and durations are formatted
-│       ├── chart/             # SVG chart geometry: nice axis scales, path data (no text)
-│       ├── views/             # .templ: layout.templ, components/, pages/ (+ generated *_templ.go, committed)
-│       └── static/            # files/: css, htmx, app.js, fonts, logo; //go:embed files
-├── tools/go.mod               # Task, templ and golangci-lint, run with go tool -modfile=tools/go.mod
-├── docs/
-├── config.example.yaml        # every key; loads without env vars
-├── config.dev.yaml            # task run: localhost:6379, auth none, admin
-├── Taskfile.yml
-├── .goreleaser.yaml           # release builds, archives, checksums, changelog, images
-├── Dockerfile                 # release image: GoReleaser's prebuilt binary on distroless
-├── Dockerfile.dev             # local image built from source (task docker)
-└── .github/workflows/         # ci.yml; release.yml on vX.Y.Z* tags
+cmd/asynqui/        main, run(): flags, wiring and lifecycle
+internal/
+  config/           YAML load, interpolation, defaults, validation
+  conn/             connection registry, health loop, per-connection cache, asynq reads and actions
+  auth/             none | basic | proxy | oidc, session cookie
+  authz/            roles and per-connection policy
+  update/           GitHub release check
+  web/              server, routes, middleware, one handle_*.go per area
+    format/         the only place numbers, dates and durations are formatted
+    chart/          SVG chart geometry (no text)
+    views/          templ: layout, components/, pages/ (generated *_templ.go committed)
+    static/         embedded css, htmx, app.js, fonts, logo
+e2e/                browser tests (build tag e2e)
+tools/go.mod        dev tools, run with go tool -modfile=tools/go.mod
 ```
 
 ### Dependency direction (one way, no cycles)
@@ -51,253 +37,79 @@ cmd/asynqui → web → conn, auth, authz → config
 ```
 
 - Nothing imports `web`.
-- `update` imports no other internal package; `web` sees it only through its `UpdateSource` interface (`Latest() (version string, ok bool)`, the newer release's tag) and builds the release-notes link itself from its `releasesURL`, `/tag/` and the escaped tag. `cmd/asynqui` passes a nil interface (never a nil `*update.Checker`) when the check is off or the build is not a release.
+- `web` sees `update` only through its `UpdateSource` interface.
 - `views` imports only its own components and `web/format`.
-- `format`, `chart` and `config` import no other internal package.
+- `format`, `chart`, `config` and `update` import no other internal package.
 
 ## Rules
 
-1. **No globals; dependencies are explicit.** The only package-level variables are `main.version` (set by `-ldflags`) and the embedded `static.FS`. Sentinel errors (`var ErrX = errors.New(...)`) count as constants and are allowed; nothing else is. Handlers are constructors that return `http.Handler`, e.g. `func handleQueueList(reg *conn.Registry, …) http.Handler`. Per-handler setup runs once, inside the closure.
+1. **No globals; dependencies are explicit.** The only package-level variables are `main.version` (set by `-ldflags`), the embedded `static.FS` and sentinel errors (`var ErrX = errors.New(...)`). Handlers are constructors that return `http.Handler`; per-handler setup runs once, inside the closure.
 2. **`routes.go` is the map.** Every method, path and required role lives in that one file.
 3. **Packages are named for what they do.** No `utils`, `common`, `helpers`, `models` or `pkg/`.
 4. **Thin layers.** A handler fetches through `conn`, builds a plain view-model struct and renders a templ component. Templates never call Redis and contain no business logic.
-5. **One handler per page, for full pages and fragments.** When `HX-Request` is set (polling, sorting, paging), the handler renders only the fragment. Otherwise it renders the full page. Every URL works without htmx and is bookmarkable.
+5. **One handler per page, for full pages and fragments.** With `HX-Request` the handler renders only the fragment, otherwise the full page. Every URL works without htmx and is bookmarkable.
 6. **Small interfaces, declared where they're used,** and only where a test needs a fake.
-7. **Errors and logs:** wrap errors with `%w`, log with `log/slog` (structured), and run every Redis call under the request context. Never log secrets.
-8. **UI text lives in templ.** Go code never builds user-facing strings. It returns typed errors or codes (`errors.Is`/`errors.As`) that templates map to copy. English only.
-9. **Formatting goes through `web/format`.** No `fmt.Sprintf("%d")`, `time.Format` or `humanize` calls in handlers or templates outside it.
-10. **CSS:** one hand-written stylesheet using CSS custom properties taken from the canvas style guide. Dark mode swaps tokens under `[data-theme=dark]`, and `[data-theme=system]` follows `prefers-color-scheme`. No Tailwind and no CSS build step.
-11. **CSP-clean markup.** No inline `<script>`, `<style>`, `style=""` or `on*=` attributes; use classes, SVG attributes and `app.js`.
-12. **Minimal dependencies.** Use the standard library where it is good enough (see Libraries).
+7. **Errors and logs:** wrap errors with `%w`, log with `log/slog`, run every Redis call under the request context. Never log secrets.
+8. **UI text lives in templ.** Go code never builds user-facing strings. It returns typed errors or codes (`errors.Is`/`errors.As`) that templates map to copy.
+9. **Formatting goes through `web/format`.** No `fmt.Sprintf("%d")`, `time.Format` or `humanize` calls in handlers or templates.
+10. **CSS:** one hand-written stylesheet with custom properties from the canvas style guide. Dark mode swaps tokens under `[data-theme=dark]`; `[data-theme=system]` follows `prefers-color-scheme`. No Tailwind and no CSS build step.
+11. **CSP-clean markup.** No inline `<script>`, `<style>`, `style=""` or `on*=` attributes; use classes, SVG attributes and `app.js`. No form may lead off-origin (requirements §7 "HTTP"), so SSO sign-in and proxy sign-out are links.
+12. **Minimal dependencies.** Prefer the standard library. No third-party router, DI framework, mock framework or assertion library. The frontend is vendored and embedded: no npm, no build step, no chart library.
 
 ## Wiring and lifecycle
 
-All dependencies are built in `run()` and passed down explicitly. There is no DI framework (no wire, fx or dig). Product rules for startup, shutdown and precedence are in [requirements.md §7](requirements.md#7-operational).
-
-```go
-func main() {
-	err := run(context.Background(), os.Args, os.LookupEnv, os.Stdout, os.Stderr)
-	// nil → exit 0; usageError → exit 2 (flag already printed); else print to stderr, exit 1
-}
-
-func run(ctx context.Context, args []string, lookupEnv func(string) (string, bool), stdout, stderr io.Writer) error {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	opts, err := parseFlags(args, lookupEnv, stderr) // flag > env; -h → opts.help, -version → print; return nil
-	ver := buildVersion(version, debug.ReadBuildInfo) // -ldflags, else the go command's module version, else "dev"
-	// --- fail fast: everything below can fail and runs before Listen ---
-	cfg, err := config.Load(opts.configPath, lookupEnv, overrides) // file > default; flags/env override
-	policy, err := authz.New(cfg.Authz)                           // both take the validated config types
-	authn, err := auth.New(ctx, cfg, policy.Groups(), logger)     // OIDC discovery happens here
-	reg, err := conn.NewRegistry(cfg.Connections, logger)          // no Redis I/O; fails only on unreadable TLS files
-	checker := newUpdateChecker(cfg.UpdateCheck, ver, logger)      // *update.Checker; nil when off or not a release
-	var updates web.UpdateSource                                  // stays a nil interface without a checker
-	if checker != nil { updates = checker }
-	defer reg.Close()                                             // stops the health loops, then closes the clients
-	srv := &http.Server{
-		Handler:     handler, // web.NewServer(web.Deps{Logger, Config, Auth, Policy, Conns: reg, Ready, Version, Updates}); fails on a bad trusted origin
-		BaseContext: func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
-		// ReadHeaderTimeout 10s, ReadTimeout 30s, WriteTimeout 60s, IdleTimeout 120s
-	}
-	ln, err := lc.Listen(ctx, "tcp", cfg.Server.Addr)
-	go srv.Serve(ln); reg.Start(ctx)                         // health loops in the background
-	if checker != nil { go checker.Run(checkCtx) }          // checkCtx derives from ctx; a defer cancels and joins it
-
-	<-ctx.Done() // or a Serve error
-	stop()                           // a second signal now force-quits
-	ready.Drain()                    // readiness 503, terminal
-	time.Sleep(cfg.Server.ShutdownDelay) // default 5s, 0 skips
-	srv.Shutdown(10s timeout)        // on timeout: srv.Close(), return error
-}
-```
-
-- `lookupEnv` (not `getenv`) so interpolation can tell an unset variable from an empty one.
-- `overrides` carries only the flags seen by `fs.Visit` and the non-empty `ASYNQUI_*` variables, so the file wins over defaults but not over them.
-- `BaseContext` is detached from the signal: in-flight requests keep their context until `Shutdown` drains them.
+- `main` calls `run(ctx, args, lookupEnv, stdout, stderr)`, which builds every dependency and passes it down explicitly. Everything that can fail runs before the listener opens.
+- Use `lookupEnv`, not `getenv`, so interpolation can tell an unset variable from an empty one.
+- `BaseContext` is `context.WithoutCancel(ctx)`: in-flight requests keep their context until `Shutdown` drains them.
 - `web.Readiness` has one transition, `Drain()`. Its zero value is ready.
 
-## Routes
+Startup, shutdown and precedence rules are in [requirements.md §7](requirements.md#7-operational).
 
-Go 1.22+ `http.ServeMux` patterns only. There is no third-party router. Paths below are relative to `base_path`.
+## Routing and middleware
 
-```go
-func addRoutes(mux *http.ServeMux, d deps) {
-	// probes (no auth, not logged)
-	mux.Handle("GET /health/liveness", handleLiveness())
-	mux.Handle("GET /health/readiness", handleReadiness(d.ready))
-
-	// auth
-	mux.Handle("GET /login", handleLogin(d))
-	mux.Handle("POST /login", handleLoginSubmit(d))            // basic form; 404 for every other provider
-	mux.Handle("GET /login/sso", handleSSO(d))                 // oidc "Sign in with SSO" link: starts the flow
-	mux.Handle("GET /auth/callback", handleOIDCCallback(d))
-	mux.Handle("POST /logout", handleLogout(d))
-
-	// preferences: no-JS fallback of the theme and refresh controls (no auth)
-	mux.Handle("POST /prefs", handlePrefs(d))
-
-	// pages (viewer)
-	mux.Handle("GET /{$}", view(d, handleOverview(d)))
-	mux.Handle("GET /c/{conn}", view(d, handleQueues(d)))                        // ?sort=size&dir=desc&range=14d&queue=
-	mux.Handle("GET /c/{conn}/queues/{queue}", view(d, handleQueue(d)))           // ?state=retry&dir=desc&page=2&size=20, ?state=aggregating&group=
-	mux.Handle("GET /c/{conn}/queues/{queue}/find", view(d, handleFindTask(d)))    // ?id=; Find task lookup, a page without JS
-	mux.Handle("GET /c/{conn}/queues/{queue}/tasks/{id}", view(d, handleTask(d))) // ?payload=raw
-	mux.Handle("GET /c/{conn}/servers", view(d, handleServers(d)))
-	mux.Handle("GET /c/{conn}/servers/{id}", view(d, handleServer(d)))
-	mux.Handle("GET /c/{conn}/schedulers", view(d, handleSchedulers(d)))
-	mux.Handle("GET /c/{conn}/schedulers/{id}", view(d, handleSchedulerEntry(d)))
-	mux.Handle("GET /c/{conn}/info", view(d, handleRedisInfo(d)))
-	mux.Handle("POST /c/{conn}/recheck", view(d, handleRecheck(d)))              // Overview "Retry now"
-
-	// actions (operator)
-	mux.Handle("POST /c/{conn}/queues/pause", op(d, handleQueueAction(d, pages.VerbPause)))  // form: queue=a&queue=b&next=
-	mux.Handle("POST /c/{conn}/queues/resume", op(d, handleQueueAction(d, pages.VerbResume)))
-	mux.Handle("POST /c/{conn}/queues/pause", …)                                             // + from=queue: the Queue page's Pause/Resume
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/run", op(d, handleTaskAction(d, conn.TaskRun)))  // id=a&id=b or all=1&state= (+ group=g&group=h for aggregating); next=, from=task
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/archive", op(d, handleTaskAction(d, conn.TaskArchive))) // + confirm=1
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/cancel", op(d, handleTaskAction(d, conn.TaskCancel))) // ids only
-
-	// admin
-	mux.Handle("POST /c/{conn}/queues/{queue}/tasks/delete", admin(d, handleTaskAction(d, conn.TaskDelete))) // + confirm=1
-	mux.Handle("POST /c/{conn}/queues/delete", admin(d, handleQueueAction(d, pages.VerbDelete))) // + confirm=1
-
-	// assets
-	mux.Handle("GET /static/", handleStatic())
-
-	// everything else: 404 through renderError
-	mux.Handle("/", handleNotFound(d))
-}
-```
-
-- **Base path:** `NewServer` mounts the app mux on an outer mux at `<base>/` with `http.StripPrefix(base, …)`. Everything else under the outer mux is 404. With an empty base the app mux is the root.
-- **Links:** one helper, `d.url(segments ...string) string` (a method, so it does not shadow `net/url`), builds every link, redirect and cookie path: it prefixes `base_path` and escapes each segment with `url.PathEscape`. Templates never concatenate paths. Query strings use `url.Values`.
-- **Wrappers:** `view`, `op` and `admin` read the identity set by the auth middleware and resolve `{conn}`.
-  - No identity: `authn.Challenge` (303 to login, or 401 + `HX-Redirect` for htmx, or 401 for `proxy`/`none`).
-  - Hidden connection or unknown name: 404.
-  - Insufficient role: 403.
-- **Auth middleware** only identifies; it never rejects. A proxy request with untrusted identity headers is marked as rejected, and the wrappers answer it with 401.
-- **Global middleware**, applied once in `NewServer`, outermost first: request logging (skips `/health/*`) → panic recovery (logs `debug.Stack()`, writes 500 only if the header is unsent) → security headers (CSP, nosniff, Referrer-Policy) → `http.CrossOriginProtection` (+ `server.trusted_origins` via `AddTrustedOrigin`) → authentication → app mux.
-- **Gotchas:** `GET /static/` is a prefix match, while `GET /c/{conn}` is exact. `GET /{$}` matches only `/`. A more specific pattern wins regardless of registration order. Conflicting patterns panic at startup.
-
-### Probes
-
-- `/health/liveness` answers "is the process alive?". If it fails, a restart might help.
-- `/health/readiness` answers "should this instance receive traffic?". It is 200 while serving and turns 503 for good when shutdown starts, `shutdown_delay` before the listener closes, so load balancers drain first.
-- Neither checks Redis. A Redis outage is shown in the UI per connection; it must not make the orchestrator restart or unroute every replica.
-
-## Libraries
-
-**Runtime (Go)**
-
-| Need | Library |
-|---|---|
-| Queue data and actions | `github.com/hibiken/asynq`: Inspector for reads and actions |
-| PING, INFO, the direct reads of `conn/keys.go` | `github.com/redis/go-redis/v9` (already a dependency of asynq) |
-| HTML components | `github.com/a-h/templ`; codegen runs through `go tool -modfile=tools/go.mod templ` |
-| Config | `go.yaml.in/yaml/v3`, the maintained successor to the archived `gopkg.in/yaml.v3` |
-| OIDC | `github.com/coreos/go-oidc/v3` + `golang.org/x/oauth2` |
-| Basic-auth hashes | `golang.org/x/crypto/bcrypt` |
-| Login rate limit | `golang.org/x/time/rate` token buckets |
-| Version strings (update check, footer) | `golang.org/x/mod`: `semver`, `module` |
-| Session cookie | `github.com/gorilla/securecookie` |
-| CSRF | stdlib `http.CrossOriginProtection` (Go 1.25+), based on `Sec-Fetch-Site`, so no tokens are needed |
-| Routing, logging, flags | stdlib `net/http`, `log/slog`, `flag` |
-| Coalescing, bounded fan-out | `golang.org/x/sync`: `singleflight` in `conn`'s cache (typed keys, panic recovery inside the shared fetch), `errgroup` for the per-queue reads |
-
-**Frontend** (vendored and embedded; no npm and no build step)
-
-- **htmx 2.x:** one vendored file.
-- **Charts:** server-rendered SVG from templ, with no chart library. `web/chart` computes the scales and path data. The SVG stretches to its box (`preserveAspectRatio="none"`, non-scaling strokes); axis labels are HTML at fixed fractions of the height (every axis has three equal steps of a round size); colours come from CSS classes; each day has a hover band with a native `<title>` tooltip; a visually hidden table carries the same data.
-- **Fonts:** Inter and JetBrains Mono, self-hosted (OFL).
-- **`app.js`:** one small file for:
-  - copy to clipboard
-  - row selection: the "N selected" toolbar, enabling its buttons (on any selection, on a selected row's `data-state`, or only when every selected row has a flag such as `data-empty`, with a `data-blocked-title` otherwise), select-all (and Gmail-style "select all N" for tasks)
-  - confirmation dialogs (`<dialog>`)
-  - the theme toggle
-  - polling timers, paused while the tab is hidden
-  - local-time rendering of `<time>` elements
-  - toasts
-
-**Test and tooling**
-
-| Need | Library |
-|---|---|
-| Real Redis | `github.com/testcontainers/testcontainers-go` (+ redis module) |
-| HTML assertions | `github.com/PuerkitoBio/goquery` |
-| Diffs | `github.com/google/go-cmp` (no assertion library) |
-| Browser smoke tests | `github.com/mxschmitt/playwright-go` (playwright-community/playwright-go moved there at v0.6100.0), axe-core vendored in `e2e/testdata` |
-| Lint | golangci-lint v2, pinned with a `tool` directive in `tools/go.mod` |
-| Releases | GoReleaser |
+- **Base path:** `NewServer` mounts the app mux under `<base>/` with `http.StripPrefix`; everything outside it is 404.
+- **Links:** one helper, `d.url(segments ...string)`, builds every link, redirect and cookie path. It prefixes `base_path` and escapes each segment with `url.PathEscape`. Templates never concatenate paths; query strings use `url.Values`.
+- **Auth middleware** only identifies the user and never rejects a request. A proxy request with untrusted identity headers is marked as rejected.
+- **Wrappers:** `view`, `op` and `admin` read that identity and resolve `{conn}`: no identity gets `authn.Challenge`, a hidden or unknown connection 404, an insufficient role 403.
+- **Global middleware**, outermost first: request logging, panic recovery, security headers, `http.CrossOriginProtection`, authentication, app mux.
 
 ## Data access and Redis load
 
-- **`conn.Registry`:** one per process. It holds a `*asynq.Inspector` and a `redis.UniversalClient` per connection, sharing one go-redis client (one pool), all created at startup without Redis I/O. asynqui never enqueues, so it has no `asynq.Client`.
-- **Timeouts:** each connection's `dial_timeout` (5s), `read_timeout` (3s) and `write_timeout` (3s) go to its Redis client. There is no global Redis timeout. Our own commands (PING, INFO) also run under a context deadline; Inspector calls take no context, so only these socket timeouts bound them.
-- **Per-connection cache:** each snapshot (Overview stats, queue list, servers, …) is cached for **1s**, keyed by connection and snapshot, and concurrent fetches of it are shared. N viewers polling the same connection cost at most one Redis round per second.
-- **Health loop:** one goroutine per connection sends PING every 10s and stores the result (reachable, unreachable + error, or unknown before the first result). The Overview, sidebar and badges only read it. `handleRecheck` runs a check synchronously and stores it.
-- **Concurrency:** connections are fetched in parallel. A failing connection renders "Connection failed" and does not block the page.
-- **Page budget:** the Overview waits at most 1.5s for summaries (`context.WithTimeout`). A card that misses it renders as "Checking"; the fetch goes on in conn's cache, so the next poll has it. If a reachable connection's Summary fails, the card and the sidebar both show it down.
-- **Overview cost:** `GetQueueInfo` per queue (one snapshot, shared with the Connection page's table), plus `Servers()` per connection. Instance-wide INFO is fetched only by the Info page.
-- **Queue and Task page cost:** one queue's `GetQueueInfo` (a 1s snapshot per queue, after an SMEMBERS existence check) plus one page of the tab's tasks (a snapshot per state, direction, page and size). The scheduled, retry, archived and completed tabs cost an SMEMBERS, one range read of the state's sorted set (see "Direct Redis reads") and a `GetTaskInfo` per row (at most 100, 8 at a time); the Pending tab is one `ListPendingTasks`; the Active tab is one `ListActiveTasks` and takes each task's start time from the Servers page's `Servers()` snapshot; the Aggregating tab reads `Groups`, and a group's page adds `ListAggregatingTasks` (a snapshot per group, page and size). The Task page reads `GetTaskInfo` (a snapshot per task). Every task action drops the connection's cached snapshots. A queue delete reads the queue's `GetQueueInfo` afresh first (Size must be 0).
-- **Direct Redis reads:** the Inspector cannot list a state in reverse, so the task tables' time sort reads asynq's keys directly. This happens in one place, `internal/conn/keys.go`, which documents every key it touches and its score, and the asynq version it was checked against (v0.26.0): the sorted sets `asynq:{q}:scheduled` and `asynq:{q}:retry` (score: process time), `asynq:{q}:archived` (score: when archived, by a worker or the Inspector) and `asynq:{q}:completed` (score: completion + retention). Pending and active tasks are listed through the Inspector only. The key format is copied from asynq's `internal/base`, never imported. Only plain range reads are allowed: one ZRANGE/ZREVRANGE WITHSCORES per page, then each ID is hydrated with the public `GetTaskInfo`; no writes, scripts, scans or client-side sorting. A row whose `GetTaskInfo` fails with an error reply is left out with a WARN; a missing queue or an unreachable server fails the page and stops further reads. `TestIntegrationKeys` (in `internal/conn`) pins the layout against the asynq in go.mod: it schedules, fails, archives (by hand and by a worker) and completes real tasks and checks the raw sets' order and scores and the pages in both directions, so an asynq layout change fails CI. Re-check both when bumping asynq.
-- **Connection page cost:** the same queue snapshot, plus `History` per queue for the chart (one snapshot per queue and range). The two are read in parallel and the page waits at most 5s for them; a miss renders "Checking" (in the chart body for the history). A successful pause, resume or delete drops the connection's cached snapshots, so the next read shows it.
-- **Servers, Schedulers and Info pages cost:** one snapshot each of `Inspector.Servers` (shared by the list and the detail page), `Inspector.SchedulerEntries` (shared likewise), and `INFO`. The Scheduler entry page adds one snapshot per entry and history page: `ListSchedulerEnqueueEvents` for the page, a one-event read past it to know whether an older page exists (asynq gives no count), and `GetTaskInfo` per event in the entry's queue (each result reused for 10s), so a task ID links only while the task exists; an entry without a `Queue` option has no known queue and costs no lookups. Each page waits at most 5s (both reads of the entry page share it); a miss renders "Checking". Only a network error or timeout (`conn.Unreachable`) marks the connection down; an error reply is shown inline.
-- **Backend label:** "Redis info" or "Valkey info" comes from a per-connection value that costs no INFO per page: the health loop reads `INFO server` each time a connection becomes reachable, while the backend is still unknown, and every 6th check (once a minute), and every `INFO` read for the Info page refreshes it. Before the first detection the label is "Redis info".
-- **Read-only page polling** (Servers, Server detail, Schedulers, Scheduler entry, Info) follows the Connection page; all of these pages and the Connection, Queue and Task pages share one frame, `pages.Live`, and one read helper, `readLive`: a `*-page` wrapper is the `hx-sync` scope, a hidden `*-poll` element polls with `hx-swap="none"`, and answers swap out of band the poll element, the `#live-state` banner, the data regions, the Updated time and the sidebar list. The regions are `#servers-table`, `#schedulers-table` and `#info-cards`; on the detail pages the heading, ID, Copy ID and payload are rendered once, and polls swap `#server-state`, `#server-workers`, `#server-details`, `#entry-history` and `#entry-details`, so nothing flickers. Filters stay outside the regions. A poll that finds no data keeps the regions and shows the banner; a page rendered without its regions (no data, or the item not found) polls with `?poll=init` and gets the whole body (`#server-body`, `#entry-body`), as does a poll that finds the item gone. The raw INFO block is sent only with the page (or an init poll), so polls never reset its scroll or selection.
+- **`conn.Registry`** holds a `*asynq.Inspector` and a go-redis client per connection, created at startup without Redis I/O. asynqui uses no `asynq.Client`.
+- **Timeouts:** Inspector calls take no context, so only the connection's socket timeouts bound them. Our own commands (PING, INFO) also run under a context deadline.
+- **Snapshots:** every read goes through the connection's 1s cache, keyed by snapshot, with concurrent fetches shared. Every action drops the connection's cached snapshots.
+- **Page budget:** a page waits a bounded time for its reads. A miss renders "Checking"; the fetch goes on in the cache, so the next poll has it.
+- **Down vs error:** only a network error or timeout (`conn.Unreachable`) marks a connection down. An error reply is shown inline.
+- **Health:** one goroutine per connection stores the PING result; pages only read it, and `handleRecheck` runs a check synchronously. The health loop also detects the backend (Redis or Valkey) from `INFO server`.
+- **Direct Redis reads:** the Inspector cannot list a state in reverse, so the task tables' time sort reads asynq's sorted sets directly. This happens only in `internal/conn/keys.go`, which documents each key and its score. The key format is copied from asynq's `internal/base`, never imported. Only plain range reads are allowed: one ZRANGE/ZREVRANGE per page, then each ID is hydrated with the public `GetTaskInfo`. No writes, scripts, scans or client-side sorting. `TestIntegrationKeys` pins the layout against the asynq in `go.mod`; re-check both when bumping asynq.
 
 ## Frontend conventions
 
-- **`views/layout.templ`:** the page shell (sidebar, top bar, theme attribute from the cookie).
-- **`views/components/`:** shared pieces (table, toolbar, badge, stat card, code block, dialog, toast, sidebar, time). These map 1:1 to the style guide.
-- **`views/pages/`:** one file per page. Each takes one view-model struct.
-- **Forms:** actions are `<form method="post">`, enhanced with `hx-post`. Destructive and "all" actions go through a confirmation dialog.
-- **htmx config** (set in `app.js`, before any request): `htmx.config.allowEval = false`, `htmx.config.includeIndicatorStyles = false` (it would inject an inline `<style>`). No `hx-on` or `js:` attributes.
-- **Polling:** `hx-trigger="every 5s [document.visibilityState === 'visible']"` cannot be used, because trigger filters need eval. `app.js` owns visibility gating instead: it starts the interval timers, skips ticks while `document.hidden`, and fires one refresh on `visibilitychange` to visible. With "Off", no timer runs.
-- **Polled regions keep focus:** a poll never replaces a whole region. The Overview grid has `hx-swap="none"`, and the response replaces each card, the heading badge, the Updated time and the sidebar list out of band by id (`hx-swap-oob`). htmx refocuses the element with the same id after a swap, so every focusable element in a polled region has a stable id; ids use one prefix per element kind (`card-`, `open-`, `retry-`, `nav-`), so connection names cannot make them collide.
-- **Connection page requests:** `#queues-page` wraps the page and is the single `hx-sync` scope of its requests. The poll (`hx-sync="#queues-page:abort"`) is dropped while another request is in flight and aborted when a user request starts; sorts, range and picker changes inherit `this:queue last`; actions use `queue all`, so none is cut off.
-- **Connection page polling:** a hidden `#queues-poll` element polls the page URL with `hx-swap="none"`; the server recognises it by `HX-Trigger`. Every answer replaces, out of band, the poll element itself (so its URL follows the sort and chart state), the health badge, the state banner, the Updated time and the sidebar list. A poll then replaces the table region and only the chart body (`#tp-chart`), never the chart controls, so an open select stays open. When a poll finds no data while the page shows a table, the table and its selection stay and the banner says why. A page rendered without data polls with `?poll=init`, which gets every region. Sort links, the range buttons and the queue picker (user requests) get every region, controls included, and push their URL, so all state is in the query (`?sort=&dir=&range=&queue=`) and bookmarkable. The toolbar, filter input and dialog sit outside the swapped regions.
-- **Queue page requests:** `#queue-page` is the `hx-sync` scope, as on the Connection page. The hidden `#queue-poll` replaces, out of band, the badge, the Pause/Resume button, the stats, each tab's count, the table, the "select all" banner and the pager (on the Aggregating tab's group list: the group table only); never the tabs, the toolbar, the rows-per-page select or the dialogs. Tab, sort, group, page and size changes and actions are user requests: their answer replaces the whole `#task-card`. An action's answer renders the row checkboxes without `hx-preserve`, so the selection clears.
-- **"Select all N":** the header checkbox selects the page; once every row is selected `app.js` shows the banner, whose button sets the form's hidden `all=1`. The toolbar then counts the state's total, and each button opens its "all" confirmation dialog (`data-confirm-all`) instead of acting on the rows. Not offered on Active.
-- **Task page polling:** `#task-poll` carries the shown state (`?seen=`); its answer replaces the badge and the last error, result and details cards, and the actions only when the state changed. The payload card is never replaced. A deleted task replaces the page body with "Task not found" and stops polling.
-- **Selection survives polls without server state:** row checkboxes (and select-all) carry `hx-preserve` and a stable id (`qsel-` plus the hex of the queue name), so htmx keeps the very same elements, checked state included, when it swaps in a new table; `app.js` recomputes the toolbar right after each swap, re-applies the filter at once, and gives focus back to the element that had it (htmx briefly takes preserved elements out of the document, which drops their focus). The checkboxes belong to an empty action form through their `form` attribute, so the table need not sit inside a form.
-- **Actions:** toolbar buttons submit that form (`formaction`, plus `hx-post` with `hx-swap="none"`). The htmx answer is a user-request answer plus error toasts appended to `#toasts` out of band. Without JS it is always a redirect back (post, redirect, get); failures ride in the short-lived `asynqui_flash` cookie, which the page shows as toasts once and clears, so a reload never posts again. A delete opens a `<dialog>` whose confirm button posts `confirm=1`; without JS the first post answers with a confirmation page.
-- **No cross-origin forms:** the CSP `form-action 'self'` also applies to a form's redirects, so anything that leaves the origin (SSO, proxy sign out) is a link.
-- **Time:** the `time` component renders `<time datetime="RFC3339 UTC">` with the absolute UTC text from `format`. `app.js` rewrites it to local relative text with the absolute local time in `title`, and re-renders relative text on each tick.
-- **Assets:** served by `http.FileServerFS` under `/static/<hash>/…`, the hash covering every embedded file, with `Cache-Control: immutable`; any change moves every URL, and the stylesheet's relative font URLs resolve as written. Another hash, a directory or a missing file is 404 (no listings). `//go:embed files` (without `all:`), so dotfiles are never embedded.
+- **Views:** `views/layout.templ` is the page shell. `views/components/` holds shared pieces that map 1:1 to the style guide. `views/pages/` has one file per page, each taking one view-model struct.
+- **htmx config** (set in `app.js` before any request): `allowEval = false`, `includeIndicatorStyles = false` (it would inject an inline `<style>`). No `hx-on` or `js:` attributes.
+- **Polling timers:** trigger filters such as `every 5s [document.visibilityState === 'visible']` need eval, so `app.js` owns the timers: it skips ticks while the tab is hidden and fires one refresh when it becomes visible. With "Off" no timer runs.
+- **Polling (`pages.Live`):** every connection page has a `*-page` wrapper that is the `hx-sync` scope of its requests, and a hidden `*-poll` element that polls with `hx-swap="none"` and `hx-sync="#…-page:abort"`, so a poll yields to any user request. The server tells a poll by `HX-Trigger`. Its answer replaces, out of band by id, the poll element itself, the data regions, the state banner, the Updated time and the sidebar list. User requests (sort, tab, page, range) use `this:queue last`, actions `queue all`. The Overview grid follows the same out-of-band scheme.
+- **Polls never replace what the user is using:** controls, filters, toolbars, dialogs, the payload card and the raw INFO block sit outside the swapped regions or are rendered once. A poll that finds no data keeps the regions and shows the banner. A page rendered without its regions polls with `?poll=init` and gets the whole body.
+- **Stable ids:** htmx refocuses the element with the same id after a swap, so every focusable element in a polled region has a stable id, with one prefix per element kind so names cannot collide.
+- **Selection:** row checkboxes carry `hx-preserve` and a stable id, so a swapped-in table keeps them checked. They belong to an empty action form through their `form` attribute. `app.js` recomputes the toolbar after each swap and restores focus. An action's answer renders the checkboxes without `hx-preserve`, so the selection clears.
+- **Actions:** `<form method="post">`, enhanced with `hx-post` and `hx-swap="none"`; error toasts are appended to `#toasts` out of band. Without JS the answer is always a redirect back, with failures in the `asynqui_flash` cookie. A confirm button posts `confirm=1`; without JS the first post answers with a confirmation page.
+- **Time:** render timestamps with the `time` component; `app.js` localises them.
+- **Assets:** served under `/static/<hash>/…` with `Cache-Control: immutable`, the hash covering every embedded file. `//go:embed files` (without `all:`), so dotfiles are never embedded.
 
 ## Testing
 
-1. **Component tests:** render templ components with fixture view models and assert on HTML with goquery (columns, badges, empty states, disabled buttons per role).
-2. **Integration tests** (`internal/conn`, testcontainers): the conn reads and actions against real Redis, Valkey and asynq. `TestIntegrationKeys` is the one test of asynq's key layout (see "Direct Redis reads"). They skip without Docker, unless `ASYNQUI_REQUIRE_DOCKER=1`, which makes a missing Docker fail them instead; CI and the release workflow's test job set it, so the key layout test never skips there.
-3. **Handler tests:** `httptest` through the full stack against a real Redis from testcontainers. They cover:
-   - full page vs `HX-Request` fragment
-   - role enforcement (403/404)
-   - actions mutating Redis
-   - "not found" and "Connection failed" states
-   - the checks every page shares (access by role, CSRF, ids of focusables in polled regions, the answers' shape, `hx-sync` scopes, path escaping) run once over a route table (`internal/web/routes_test.go`)
-4. **Browser tests** (`e2e/`, build tag `e2e`; see [contributing](contributing.md#browser-tests)): playwright-go drives Chromium against the built binary and a seeded Redis, for the behaviour in `app.js` and htmx that Go tests cannot run, plus an axe-core and CSP check of every page. Each test records a video, and a failed one its trace.
+1. **Component tests:** render templ components with fixture view models and assert on the HTML with goquery.
+2. **Integration tests** (`internal/conn`, testcontainers): reads and actions against real Redis, Valkey and asynq. They skip without Docker unless `ASYNQUI_REQUIRE_DOCKER=1`, which makes them fail instead; CI and the release workflow set it.
+3. **Handler tests:** `httptest` through the full stack: full page vs fragment, role enforcement, actions, "not found" and "Connection failed" states. The checks every page shares (access by role, CSRF, ids of focusables in polled regions, answer shape, `hx-sync` scopes, path escaping) run over the route table in `internal/web/routes_test.go`; add new routes there.
+4. **Browser tests** (`e2e/`, see [contributing](contributing.md#browser-tests)): the `app.js` and htmx behaviour Go tests cannot run, plus an axe-core and CSP check of every page.
 
 Other conventions:
-- **No mock frameworks.** Use small hand-written fakes for error paths and a fake OIDC provider built on `httptest.Server`.
-- **Time:** inject `now func() time.Time` where output depends on the clock.
-- **Style:** tests are table-driven. Subtests never share mutable state: each builds its own fixtures, so any of them can run alone or in parallel.
-- **`run()`** has an end-to-end test on `127.0.0.1:0`: it reads the bound address from the "listening" log line, cancels the context and checks that readiness is 503 while the listener still serves during `shutdown_delay`, then that the listener closes and `run` returns nil.
-- **Race detector:** CI runs `go test -race`. It needs cgo and a C compiler, so locally it is `task test-race`; `task test` and `task check` run without it.
-- **Out of scope for v1:** pixel-diff visual regression.
+- Use small hand-written fakes, and a fake OIDC provider built on `httptest.Server`.
+- Inject `now func() time.Time` where output depends on the clock.
+- Tests are table-driven. Subtests never share mutable state, so any of them can run alone or in parallel.
+- `run()` has an end-to-end test on `127.0.0.1:0`, including the drain.
 
-## Tooling and CI
+## Tooling
 
-- **Tools module:** `tools/go.mod` pins Task, templ and golangci-lint with `tool` directives. Run them as `go tool -modfile=tools/go.mod <tool>`; the main `go.mod` lists only runtime and test dependencies.
-- **Go version:** `go 1.27.0` in `go.mod` and `tools/go.mod`, both with `toolchain go1.27.3`. CI installs `1.27.x`.
-- **Taskfile:** `task` lists the tasks (`generate`, `lint`, `test`, `test-race`, `e2e`, `demo-gif`, `run`, `build`, `docker`, `tidy`, `check`). `generate` is skipped when no `.templ` file changed. `build` stamps `main.version` from `git describe`. `check` runs the CI check job without `-race`; keep it in sync with `ci.yml`.
-- **CI** (`.github/workflows/ci.yml`, actions pinned by commit SHA): `go mod tidy -diff` for both modules, templ generate + `git status --porcelain` must be empty, vet, golangci-lint, `go test -race` with `ASYNQUI_REQUIRE_DOCKER=1` (integration tests fail rather than skip without Docker), static build. A separate `e2e` job runs the browser tests with a Redis service container.
-- **Release** (`.github/workflows/release.yml`, on `v*` tags, actions pinned by SHA, only `contents: write` and `packages: write`): tests, then GoReleaser at a pinned version (keep it in sync with the header of `.goreleaser.yaml`). Check the config with `go run github.com/goreleaser/goreleaser/v2@<version> check`.
-
-## Documentation plan
-
-- **README.md:** what asynqui is, a screenshot, and the quickstart.
-- **`config.example.yaml`:** every option with comments. CI checks that it parses and validates.
-- **`docs/`:** requirements (behaviour, config reference), architecture (this file), [deployment](deployment.md) and [contributing](contributing.md) now; authentication and authorization guides later.
-- **Changelog:** GoReleaser writes it into each GitHub release from the commit messages; there is no `CHANGELOG.md`.
-- **pkg.go.dev:** shows only the `cmd/asynqui` package comment, which points to the README.
-- **A docs site:** Hugo on GitHub Pages, added only once `docs/` outgrows plain Markdown.
+- Dev tools are pinned in `tools/go.mod` with `tool` directives and run as `go tool -modfile=tools/go.mod <tool>`; the main `go.mod` lists only runtime and test dependencies.
+- `task check` mirrors the CI check job; keep `Taskfile.yml` and `.github/workflows/ci.yml` in sync.
