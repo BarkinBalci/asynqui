@@ -13,13 +13,3 @@ body:
     id: solution
     attributes:
       label: Proposed solution
-    validations:
-      required: true
-  - type: checkboxes
-    id: limitations
-    attributes:
-      label: Limitations
-      description: Some things are limited by what asynq supports.
-      options:
-        - label: I checked the README's [Limitations](https://github.com/BarkinBalci/asynqui#limitations) section
-          required: false

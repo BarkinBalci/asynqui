@@ -4,7 +4,7 @@ Development tasks are in `Taskfile.yml`, and `task` lists them. Install [Task](h
 
 ## Reporting issues
 
-Report bugs and request features with the [issue forms](https://github.com/BarkinBalci/asynqui/issues/new/choose). Report security issues as [SECURITY.md](SECURITY.md) describes, not in an issue. Some things asynq doesn't support, so check the README's [Limitations](README.md#limitations) before you ask for a feature.
+Report bugs and request features with the [issue forms](https://github.com/BarkinBalci/asynqui/issues/new/choose). Report security issues as [SECURITY.md](SECURITY.md) describes, not in an issue.
 
 ## Documentation
 
