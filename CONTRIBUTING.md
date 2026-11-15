@@ -2,6 +2,10 @@
 
 Development tasks are in `Taskfile.yml`, and `task` lists them. Install [Task](https://taskfile.dev/installation/) or run it as `go tool -modfile=tools/go.mod task`. Before you push, run `task check`. It runs the same checks as CI.
 
+## Reporting issues
+
+Report bugs and request features with the [issue forms](https://github.com/BarkinBalci/asynqui/issues/new/choose). Report security issues as [SECURITY.md](SECURITY.md) describes, not in an issue. Some things asynq doesn't support, so check the README's [Limitations](README.md#limitations) before you ask for a feature.
+
 ## Documentation
 
 | Document | Covers |
