@@ -471,17 +471,14 @@ const shotScale = 2.0
 // shotReady is gifReady with no htmx request in flight.
 const shotReady = `() => (` + gifReady + `)() && !document.querySelector(".htmx-request")`
 
-// screenshot saves p as imagesDir/<name>-<theme>.png, theme being the
-// page's data-theme, once it has settled. It does nothing without
-// ASYNQUI_E2E_SCREENSHOTS.
+// screenshot saves p as imagesDir/<name>.png once it has settled. It does
+// nothing without ASYNQUI_E2E_SCREENSHOTS.
 func (h *harness) screenshot(p *page, name string) {
 	p.t.Helper()
 	if !h.look.screenshots {
 		return
 	}
 	p.settle()
-	theme, err := p.Locator("html").GetAttribute("data-theme")
-	p.ok(err, "data-theme")
 	b, err := p.Screenshot(playwright.PageScreenshotOptions{
 		Type:       playwright.ScreenshotTypePng,
 		Caret:      playwright.ScreenshotCaretInitial,
@@ -493,7 +490,7 @@ func (h *harness) screenshot(p *page, name string) {
 	var out bytes.Buffer
 	enc := png.Encoder{CompressionLevel: png.BestCompression}
 	p.ok(enc.Encode(&out, img), "encode screenshot")
-	file := filepath.Join(imagesDir, name+"-"+theme+".png")
+	file := filepath.Join(imagesDir, name+".png")
 	p.ok(os.WriteFile(file, out.Bytes(), 0o600), "write %s", file)
 	p.t.Logf("wrote %s: %d KB", file, out.Len()>>10)
 }

@@ -86,7 +86,7 @@ func testAccessibility(t *testing.T, h *harness) {
 				pg.prepare(p)
 			}
 			time.Sleep(200 * time.Millisecond) // app.js renders times, reveals copy buttons
-			if pg.shot != "" {
+			if pg.shot != "" && theme == "light" {
 				h.screenshot(p, pg.shot)
 			}
 			if !p.evalBool(`() => typeof window.axe === "object"`) {
