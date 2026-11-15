@@ -13,11 +13,8 @@
 
 </div>
 
-Status: under active development towards v0.1.0.
-
 ## Features
 
-- Many Redis or Valkey instances and logical databases from one deployment, with an overview across all of them
 - Login with basic auth, reverse-proxy headers or OIDC
 - Roles per connection for users and groups
 - A single static binary or a container image
