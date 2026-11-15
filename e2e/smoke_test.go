@@ -223,6 +223,23 @@ func testSortDuringPoll(t *testing.T, h *harness) {
 	}
 }
 
+// At 1440px with the sidebar open, every column of the queues table fits
+// its card, so nothing is clipped behind the horizontal scroll.
+func testQueuesTableFits(t *testing.T, h *harness) {
+	p := h.newPage(t, h.open, pageOpts{})
+	p.ok(p.SetViewportSize(1440, 900), "viewport")
+	p.open(connPath)
+	p.ok(p.Locator("#queues").WaitFor(), "queues table")
+	over, _ := p.eval(`async () => {
+		await document.fonts.ready;
+		const s = document.getElementById("queues").closest(".tbl-scroll");
+		return s.scrollWidth - s.clientWidth;
+	}`).(int)
+	if over > 0 {
+		t.Errorf("queues table is %dpx wider than its card", over)
+	}
+}
+
 // A poll swaps only the chart body, never the queue picker: an open
 // select is the same element, focused, with its value, afterwards.
 func testPickerSurvivesPoll(t *testing.T, h *harness) {

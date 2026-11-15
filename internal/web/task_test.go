@@ -82,7 +82,7 @@ func TestTaskPage(t *testing.T) {
 	}
 	want := map[string]string{
 		"Queue": "default", "State": "Retry", "Retried": "3 / 25", "Last failed": "Nov 8, 00:40:52",
-		"Next process at": "Nov 8, 00:44:32(Nov 8, 00:44:32)", "Timeout": "30s", "Deadline": "—", "Group": "—",
+		"Next process at": "Nov 8, 00:44:32 (Nov 8, 00:44:32)", "Timeout": "30s", "Deadline": "—", "Group": "—",
 		"Headers": "a: btrace: t-1",
 	}
 	if diff := cmp.Diff(want, details(doc)); diff != "" {

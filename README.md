@@ -1,27 +1,34 @@
-# asynqui
+<div align="center">
 
-A web dashboard for [asynq](https://github.com/hibiken/asynq) that works across
-**multiple Redis instances and logical databases** from one deployment. Think
-asynqmon, plus:
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+  <img alt="asynqui" src="docs/images/logo-light.svg" width="280">
+</picture>
 
-- many connections side by side, with an overview of all of them
-- authentication (basic, reverse-proxy headers, OIDC) and per-connection roles
-- Valkey detection, dark mode, and a single static binary with no external assets
+<p>A web dashboard for <a href="https://github.com/hibiken/asynq">asynq</a> across many Redis and Valkey instances.</p>
 
-> Status: under active development towards v0.1.0.
+[![CI](https://github.com/BarkinBalci/asynqui/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BarkinBalci/asynqui/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/BarkinBalci/asynqui)](https://github.com/BarkinBalci/asynqui/releases) [![Go version](https://img.shields.io/github/go-mod/go-version/BarkinBalci/asynqui)](go.mod) [![License](https://img.shields.io/github/license/BarkinBalci/asynqui)](LICENSE)
 
-<!-- TODO: screenshots (Overview, Queue page; light and dark). -->
+<img alt="asynqui in use: the Overview, a connection's queues, then three tasks on a queue's Retry tab selected and run" src="docs/images/demo.gif">
+
+</div>
+
+## Features
+
+- Login with basic auth, reverse-proxy headers or OIDC
+- Roles per connection for users and groups
+- A single static binary or a container image
 
 ## Quickstart
 
-Start from [config.example.yaml](config.example.yaml). It loads as is (no login,
-read-only `viewer` role); set `authz.default: admin` for full control without
-login, or configure an auth provider.
+Start from [config.example.yaml](config.example.yaml). It loads as is, with no
+login and the read-only `viewer` role. Set `authz.default: admin` for full
+control without login, or configure an auth provider.
 
 ### Binary
 
 Download an archive for your platform from
-[Releases](https://github.com/BarkinBalci/asynqui/releases) and check it against
+[Releases](https://github.com/BarkinBalci/asynqui/releases), check it against
 `checksums.txt`, then:
 
 ```sh
@@ -31,8 +38,8 @@ cp config.example.yaml asynqui.yaml   # edit connections
 
 ### Docker
 
-The image reads its config from `/etc/asynqui/config.yaml` and runs as a non-root
-user:
+The image reads its config from `/etc/asynqui/config.yaml` and runs as a
+non-root user:
 
 ```sh
 docker run --rm -p 8080:8080 \
@@ -40,8 +47,8 @@ docker run --rm -p 8080:8080 \
   ghcr.io/barkinbalci/asynqui:latest
 ```
 
-Inside a container, `localhost` is the container itself: point
-`connections[].addr` at a reachable Redis host.
+Inside a container, `localhost` is the container itself, so point
+`connections[].addr` at a reachable Redis or Valkey host.
 
 ### Kubernetes
 
@@ -85,14 +92,19 @@ Needs Go 1.27+. Tools are pinned in `tools/go.mod`. Tasks run with
 `go tool -modfile=tools/go.mod task`.
 
 ```sh
-task            # list tasks
-task run        # localhost:6379, no login, admin (config.dev.yaml)
-task build      # bin/asynqui, version from git describe
-task docker     # asynqui:dev image from source (Dockerfile.dev)
+task              # list tasks
+task run          # localhost:6379, no login, admin (config.dev.yaml)
+task build        # bin/asynqui, version from git describe
+task docker       # asynqui:dev image from source (Dockerfile.dev)
 task lint test
-task test-race  # needs cgo and a C compiler
-task check      # the CI check job
+task test-race    # needs cgo and a C compiler
+task check        # the CI check job
+task e2e          # browser tests
+task demo-gif     # regenerate docs/images/demo.gif
 ```
+
+The browser tests and the demo GIF need Chromium and a throwaway Redis; see
+[contributing](docs/contributing.md).
 
 ## Documentation
 

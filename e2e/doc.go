@@ -10,4 +10,7 @@
 // They need Chromium installed for playwright-go and a throwaway Redis,
 // which they flush: ASYNQUI_E2E_REDIS=host:port, or testcontainers when it
 // is unset. See docs/contributing.md.
+//
+// The demo build tag holds TestDemoGIF instead, which regenerates the
+// README's docs/images/demo.gif on the same harness.
 package e2e

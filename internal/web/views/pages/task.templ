@@ -187,8 +187,7 @@ templ taskDetails(m Task, oob bool) {
 				if m.NextProcessAt.IsZero() {
 					—
 				} else {
-					@components.TimeAbs(m.NextProcessAt)
-					<span class="muted rel">(<time datetime={ format.TimeAttr(m.NextProcessAt) }>{ format.TimeText(m.NextProcessAt) }</time>)</span>
+					@components.TimeWithRel(m.NextProcessAt, format.TimeText(m.NextProcessAt))
 				}
 			</dd>
 			<dt>Timeout</dt>

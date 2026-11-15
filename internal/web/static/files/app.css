@@ -517,14 +517,16 @@ html:not(.js) .js-only{display:none}
 /* data tables */
 .tbl-scroll{overflow-x:auto}
 .tbl{width:100%;border-collapse:collapse;font-size:13px}
-.tbl th{padding:10px 16px;background:var(--th-bg);border-bottom:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600;text-align:left;white-space:nowrap}
-.tbl td{padding:11px 16px;border-bottom:1px solid var(--divider);white-space:nowrap;vertical-align:middle}
+.tbl th{padding:10px 12px;background:var(--th-bg);border-bottom:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600;text-align:left;white-space:nowrap}
+.tbl td{padding:11px 12px;border-bottom:1px solid var(--divider);white-space:nowrap;vertical-align:middle}
 .tbl tbody tr:last-child td{border-bottom:0}
 .tbl tbody tr:has(.cb:checked){background:var(--selected)}
 .tbl .num{text-align:right;font-variant-numeric:tabular-nums}
 .tbl .strong{font-weight:600}
-.tbl tfoot td,.tbl tfoot th{padding:11px 16px;border-top:1px solid var(--border);border-bottom:0;background:var(--th-bg);color:var(--text);font-size:13px;font-weight:600}
+.tbl tfoot td,.tbl tfoot th{padding:11px 12px;border-top:1px solid var(--border);border-bottom:0;background:var(--th-bg);color:var(--text);font-size:13px;font-weight:600}
 .tbl .empty{white-space:normal}
+.tbl :is(th,td):first-child{padding-left:16px}
+.tbl :is(th,td):last-child{padding-right:16px}
 .cb-col{width:36px}
 .tbl th.cb-col,.tbl td.cb-col{padding-right:0}
 .cb{width:16px;height:16px;margin:0;vertical-align:middle;accent-color:var(--accent);cursor:pointer}
@@ -673,7 +675,6 @@ html:not(.js) .js-only{display:none}
 .raw-card pre{max-height:300px}
 .c-type{font-weight:500}
 .c-payload{color:var(--text-2)}
-.run-rel{margin-left:4px;font-weight:400}
 .pager{display:inline-flex;align-items:center;gap:6px;font-size:13px}
 .pager .muted{margin-right:4px}
 .pager-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:1px solid var(--control-border);border-radius:var(--radius);color:var(--text-2);font-size:16px;line-height:1}
@@ -685,7 +686,8 @@ span.pager-btn{opacity:.45}
 .info-v{font-size:18px;font-weight:700;letter-spacing:-0.01em;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .info-v.info-mono{font-size:16px}
 .info-n{color:var(--muted);font-size:12px}
-.dl .rel{font-weight:400}
+.rel{font-weight:400;white-space:nowrap}
+.dl time[data-format="absolute"]{white-space:nowrap}
 .headers{margin:0;padding:0;list-style:none}
 .dlg-id{overflow-wrap:anywhere}
 

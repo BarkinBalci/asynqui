@@ -38,6 +38,10 @@ The harness flushes and seeds a Redis with asynq (a worker and a scheduler inclu
 
 The axe-core build is vendored in `e2e/testdata` (never fetched at run time); to upgrade it, replace the directory with the new release's `axe.min.js` and `LICENSE` and update the path in `e2e/a11y_test.go`. The accessibility check fails on any violation, minor ones included.
 
+## Demo GIF
+
+The README's `docs/images/demo.gif` is generated. `task demo-gif` (build tag `demo`) seeds a throwaway Redis with demo data on DBs 0 to 2, which it flushes, records a flow through asynqui in headless Chromium and overwrites the GIF. It needs the same Chromium and `ASYNQUI_E2E_REDIS` as the browser tests: `ASYNQUI_E2E_REDIS=localhost:6379 task demo-gif`. Regenerate it when a page in the flow changes and watch it before committing.
+
 ## Releases
 
 Push a tag `vX.Y.Z` (or `vX.Y.Z-rc.N` for a prerelease) on `main`. `.github/workflows/release.yml` runs the tests, then GoReleaser publishes the GitHub release, the archives and the images.
