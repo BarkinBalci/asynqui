@@ -55,10 +55,10 @@ func parseRefresh(s string) (components.Refresh, bool) {
 	return components.RefreshOff, false
 }
 
-// handlePrefs is the no-JS fallback of the theme and refresh controls: a
-// form post sets the cookie and redirects back to next (checked with
-// auth SafeNext, like the login's). Preferences are not sensitive, so no
-// identity is needed. Unknown values are ignored.
+// handlePrefs is the no-JS fallback of the theme and refresh controls: a form
+// post sets the cookie and redirects back to next (through SafeNext).
+// Preferences are not sensitive, so no identity is needed. Unknown values are
+// ignored.
 func handlePrefs(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
@@ -76,9 +76,8 @@ func handlePrefs(d *deps) http.Handler {
 	})
 }
 
-// setPref writes a preference cookie. It is readable by app.js on purpose
-// (app.js writes the same cookies); it holds no secret. Secure follows
-// auth.session.cookie_secure.
+// setPref writes a preference cookie, readable by app.js, which writes the
+// same cookies. Secure follows auth.session.cookie_secure.
 func (d *deps) setPref(w http.ResponseWriter, name, value string) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: preference cookie, not a credential; HttpOnly would hide it from app.js.
 		Name:     name,

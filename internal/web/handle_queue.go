@@ -312,9 +312,8 @@ func (d *deps) taskRows(m *pages.Queue, name, queue string, tasks []conn.Task, f
 	}
 }
 
-// taskActions fills the toolbar buttons and their dialogs for the view
-// and the viewer's role. Delete and Archive confirm first; Archive is
-// red like Delete, since asynq trims the archive.
+// taskActions fills the toolbar buttons and their dialogs for the view and the
+// viewer's role.
 func (d *deps) taskActions(m *pages.Queue, a access, queue string, v queueView) {
 	if v.groupList() {
 		d.groupActions(m, a, queue)
@@ -344,9 +343,8 @@ func (d *deps) taskActions(m *pages.Queue, a access, queue string, v queueView) 
 	}
 }
 
-// groupActions fills the Aggregating tab's group list toolbar: Run all,
-// Archive all and Delete all of the selected groups (asynq's
-// *AllAggregatingTasks per group), each confirmed in a dialog.
+// groupActions fills the Aggregating tab's group list toolbar, each action
+// confirmed in a dialog.
 func (d *deps) groupActions(m *pages.Queue, a access, queue string) {
 	for _, verb := range tabVerbs(conn.TaskAggregating) {
 		act := d.verbAction(a, queue, verb, pages.TasksFormID)
@@ -360,9 +358,8 @@ func (d *deps) groupActions(m *pages.Queue, a access, queue string) {
 	}
 }
 
-// verbAction is the button posting verb to the task action route, for
-// the viewer's role: Delete needs admin, the others operator. Delete and
-// Archive are red.
+// verbAction is the button posting verb to the task action route, for the
+// viewer's role.
 func (d *deps) verbAction(a access, queue string, verb conn.TaskVerb, form string) components.Action {
 	need, role := components.RoleOperator, authz.RoleOperator
 	if verb == conn.TaskDelete {
@@ -409,10 +406,9 @@ func (d *deps) pager(m *pages.Queue, name, queue string, v queueView, rows int) 
 }
 
 // queuePageAction runs the Queue page's Pause or Resume (posted to the
-// Connection page's queue action with from=queue) and answers for the
-// Queue page: with htmx its user-request answer plus failure toasts,
-// without JS a redirect back to it. The M5a semantics stand: Pause skips
-// a queue already paused and Resume a running one.
+// Connection page's queue action with from=queue) and answers for the Queue
+// page: with htmx its user-request answer plus failure toasts, without JS a
+// redirect back to it.
 func (d *deps) queuePageAction(w http.ResponseWriter, r *http.Request, a access, verb pages.QueueVerb, queue string, v queueView) {
 	failures := d.runQueueAction(r.Context(), a.conn, verb, []string{queue})
 	d.answerAction(w, r, a.conn.Name(), func() templ.Component {

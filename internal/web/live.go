@@ -14,10 +14,8 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// The connection pages (Connection, Queue, Task, Servers, Server detail,
-// Schedulers, Scheduler entry, Redis info) share one request and polling
-// scheme, pages.Live: a hidden poll element, out-of-band answers, and a
-// banner when a poll finds no data while the page shows some.
+// The connection pages share one request and polling scheme, pages.Live (see
+// docs/architecture.md, "Frontend conventions").
 
 // pollInit is the poll URL's ?poll= value for a page without data
 // regions: the answer then renders every region.
@@ -62,9 +60,8 @@ func (d *deps) pageContext(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(ctx, d.pageBudget)
 }
 
-// readLive runs fetch under ctx (see pageContext), unless the connection
-// is known to be down. A read that misses the budget is "Checking"; it
-// goes on in conn's cache, so the next poll usually has it.
+// readLive runs fetch under ctx (see pageContext), unless the connection is
+// known to be down. A read that misses the budget is "Checking".
 func readLive[T any](ctx context.Context, a access, fetch func(ctx context.Context) (T, error)) (T, liveRead) {
 	var zero T
 	if a.health.State == conn.StateDown {

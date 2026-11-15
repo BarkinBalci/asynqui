@@ -9,13 +9,9 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// The flash cookie carries the failures of an action posted without JS
-// across its redirect (post, redirect, get), so the page can show them as
-// toasts and a reload never posts again. It lives for a minute, is scoped
-// to the connection's page and is read once. It holds display data only
-// (queue and task names, counts and error text, which templ escapes). It
-// is plain base64 JSON, not signed: it is bounded and validated, so a
-// forged one can only show a toast.
+// The flash cookie carries the failures of an action posted without JS across
+// its redirect, and is read once. It is unsigned: it holds display data only,
+// bounded and validated, so a forged one can only show a toast.
 const (
 	flashCookie   = "asynqui_flash"
 	flashMaxAge   = 60

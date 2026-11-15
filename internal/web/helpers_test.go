@@ -54,9 +54,9 @@ type fakeConns struct {
 	actErrs map[string]error
 	acted   []string
 
-	// infra are the Servers, Schedulers and Info reads (infra_test.go).
+	// infra are the Servers, Schedulers and Info reads.
 	infra fakeInfra
-	// tasks backs the TaskSource methods (tasks_helpers_test.go).
+	// tasks backs the TaskSource methods.
 	tasks *fakeTasks
 }
 

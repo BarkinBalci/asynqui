@@ -24,7 +24,7 @@ import (
 // QueueSource is what the Connection page needs from a connection.
 type QueueSource interface {
 	// Queues lists the queues, sorted by name. It may be served from a
-	// short-lived cache shared with Summary.
+	// short-lived cache.
 	Queues(ctx context.Context) ([]conn.Queue, error)
 	// History returns the daily counters of the last days days, oldest
 	// first, for one queue or, with queue empty, summed over all of them.
@@ -41,9 +41,8 @@ type QueueSource interface {
 // latencyWarn is the queue latency the table highlights.
 const latencyWarn = 30 * time.Second
 
-// defaultPageBudget bounds how long a connection page waits for its data.
-// A read that misses it renders "Checking"; it goes on in conn's cache, so
-// the next poll usually has it.
+// defaultPageBudget bounds how long a connection page waits for its data; a
+// read that misses it renders "Checking".
 const defaultPageBudget = 5 * time.Second
 
 // maxActionForm bounds the body of a queue action post.
@@ -55,9 +54,7 @@ const defaultRange = 14
 // rangeChoices are the chart's ranges in days, in control order.
 func rangeChoices() []int { return []int{7, 14, 30, 90} }
 
-// queuesSort is the queues table's sort: every column, by Size
-// descending by default; names and states sort ascending first, numbers
-// descending.
+// queuesSort is the queues table's sort.
 func queuesSort() sortSpec {
 	return sortSpec{
 		cols: []string{"name", "state", "size", "pending", "active", "scheduled", "retry", "archived",
@@ -301,15 +298,11 @@ func (d *deps) queueActions(m *pages.Queues, a access) {
 	m.DeleteDialog = components.Dialog{ID: pages.DeleteDialogID, ConfirmURL: del, Form: pages.QueuesFormID, Danger: true}
 }
 
-// handleQueueAction serves POST /c/{conn}/queues/{pause,resume,delete}
-// with a queue= list. The route's wrapper has checked the role.
-//
-// With htmx it answers like a user request (the table shows the result)
-// plus a toast per failed queue. Without JS it redirects back to the page
-// (post, redirect, get), carrying any failures in a short-lived cookie
-// that the page shows as toasts, so a reload never posts again. A delete
-// needs confirm=1: the dialog sends it; without JS the first post answers
-// with a confirmation page that does.
+// handleQueueAction serves POST /c/{conn}/queues/{pause,resume,delete} with a
+// queue= list. With htmx it answers like a user request plus a toast per
+// failed queue; without JS it redirects back with the failures in the flash
+// cookie. A delete needs confirm=1; without JS the first post answers with a
+// confirmation page.
 func handleQueueAction(d *deps, verb pages.QueueVerb) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := accessFrom(r.Context())
@@ -373,18 +366,10 @@ func uniqueValues(in []string) []string {
 	return out
 }
 
-// runQueueAction applies verb to each queue in turn and returns the
-// failures. Pause skips queues already paused and Resume queues already
-// running (the toolbar acts on the selection's matching queues), going by
-// the connection's cached queue list; a queue it does not know is left to
-// the source to reject.
-//
-// Cost: one Queues read (usually from the 1s cache the page just filled),
-// then per queue one Inspector call, and for pause and resume one more
-// SMEMBERS for conn's existence check. Since the list may be up to a
-// second old, a queue paused meanwhile by someone else reaches asynq,
-// which refuses it; that shows as a "Could not pause" toast with asynq's
-// error text.
+// runQueueAction applies verb to each queue in turn and returns the failures.
+// Pause skips queues already paused and Resume queues already running, going
+// by the cached queue list; a queue it does not know is left to the source to
+// reject.
 func (d *deps) runQueueAction(ctx context.Context, c Conn, verb pages.QueueVerb, names []string) []pages.ActionFailure {
 	state := map[string]bool{} // paused, by name
 	if verb != pages.VerbDelete {

@@ -25,9 +25,7 @@ type ServerSource interface {
 // longRunning is the running time the workers table highlights.
 const longRunning = 10 * time.Minute
 
-// serversSort is the servers table's sort: every column but Queues, by
-// Busy descending by default; names and states sort ascending first,
-// numbers and times descending.
+// serversSort is the servers table's sort.
 func serversSort() sortSpec {
 	return sortSpec{
 		cols:    []string{"host", "pid", "state", "busy", "started"},
@@ -39,8 +37,7 @@ func serversSort() sortSpec {
 	}
 }
 
-// workersSort is the active workers table's sort: Started or Running for,
-// Running for descending (longest first) by default.
+// workersSort is the active workers table's sort.
 func workersSort() sortSpec {
 	return sortSpec{
 		cols:      []string{"started", "running"},

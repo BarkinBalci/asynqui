@@ -8,13 +8,9 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// addRoutes registers every route with the role it needs. This file is the
-// map of the application: see docs/architecture.md for the full table.
-// Paths are relative to base_path; NewServer mounts the mux under it.
-//
-// ServeMux notes: "GET /static/" is a prefix match while "GET /c/{conn}" is
-// exact; "GET /{$}" matches only "/"; the most specific pattern wins regardless
-// of registration order; conflicting patterns panic at startup.
+// addRoutes registers every route with the role it needs (see
+// docs/architecture.md, "Routes"). Paths are relative to base_path; NewServer
+// mounts the mux under it.
 func addRoutes(mux *http.ServeMux, d *deps) {
 	// probes (no auth, not logged)
 	mux.Handle("GET /health/liveness", handleLiveness())

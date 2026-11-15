@@ -21,8 +21,7 @@ type OverviewSource interface {
 }
 
 // handleOverview serves GET /: one card per visible connection. With
-// HX-Request (a poll) it answers with out-of-band swaps only: each card,
-// the heading badge, the Updated time and the sidebar list.
+// HX-Request (a poll) it answers with out-of-band swaps only.
 func handleOverview(d *deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m := d.overview(r, accessFrom(r.Context()))
@@ -73,10 +72,9 @@ func (d *deps) overview(r *http.Request, a access) pages.Overview {
 	}
 }
 
-// cards builds the Overview cards. Summaries of reachable connections are
-// fetched in parallel within the page budget, so one slow connection costs
-// at most the budget. A card whose summary misses the budget shows
-// "Checking"; conn keeps fetching into its cache for the next poll.
+// cards builds the Overview cards, fetching the summaries of reachable
+// connections in parallel within the page budget. A card whose summary misses
+// it shows "Checking".
 func (d *deps) cards(ctx context.Context, conns []visibleConn) []components.ConnCard {
 	ctx, cancel := context.WithTimeout(ctx, d.budget)
 	defer cancel()

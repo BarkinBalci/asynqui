@@ -55,7 +55,6 @@ func TestQueuesPage(t *testing.T) {
 		t.Errorf("active sub-nav = %q", got)
 	}
 
-	// Default sort: Size desc.
 	if diff := cmp.Diff([]string{"default", "low", "image-resize", "critical"}, rowNames(doc)); diff != "" {
 		t.Errorf("rows (-want +got):\n%s", diff)
 	}
@@ -72,7 +71,6 @@ func TestQueuesPage(t *testing.T) {
 		t.Errorf("headers (-want +got):\n%s", diff)
 	}
 
-	// A row: state badge, numbers, latency, memory; colors by class.
 	row := doc.Find("#queues-rows tr").FilterFunction(func(_ int, s *goquery.Selection) bool {
 		return strings.Contains(s.Find("td:nth-child(2)").Text(), "low")
 	})
@@ -92,7 +90,6 @@ func TestQueuesPage(t *testing.T) {
 		t.Errorf("paused row = %q", text(paused))
 	}
 
-	// Total in tfoot: sums, latency "—".
 	var foot []string
 	doc.Find("#queues tfoot tr").Children().Each(func(_ int, s *goquery.Selection) { foot = append(foot, text(s)) })
 	wantFoot := []string{"", "Total", "", "1,731", "900", "31", "615", "21", "164", "—", "75.0 MB", "340,542", "759"}
@@ -100,14 +97,12 @@ func TestQueuesPage(t *testing.T) {
 		t.Errorf("total (-want +got):\n%s", diff)
 	}
 
-	// Polling: a hidden element fetches the page into out-of-band swaps.
 	poll := doc.Find("[data-poll]")
 	for attr, want := range map[string]string{"id": "queues-poll", "hx-get": "/c/main", "hx-trigger": "asynqui-refresh", "hx-swap": "none"} {
 		if got, _ := poll.Attr(attr); got != want {
 			t.Errorf("poll %s = %q, want %q", attr, got, want)
 		}
 	}
-	// Selection: checkboxes belong to the action form and survive swaps.
 	doc.Find("#queues-rows input.cb, #qsel-all").Each(func(_ int, s *goquery.Selection) {
 		if _, ok := s.Attr("hx-preserve"); !ok {
 			t.Errorf("%v lacks hx-preserve", s.AttrOr("id", ""))

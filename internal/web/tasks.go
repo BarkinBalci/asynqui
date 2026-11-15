@@ -7,18 +7,15 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/conn"
 )
 
-// TaskSource is what the Queue and Task pages need from a connection.
-// Its TaskState and TaskVerb are conn's; pages has the same enums in the
-// same order (pages.TaskState(s) maps one onto the other), since views do
+// TaskSource is what the Queue and Task pages need from a connection. pages
+// has conn's TaskState and TaskVerb enums in the same order, since views do
 // not import conn.
 type TaskSource interface {
 	// QueueInfo reads one queue's counters. An unknown queue is
 	// conn.ErrQueueNotFound.
 	QueueInfo(ctx context.Context, queue string) (conn.QueueInfo, error)
-	// ListTasks lists one page (1-based) of the queue's tasks in state.
-	// The sortable states come by their time: soonest or oldest first,
-	// latest first with desc. Active and pending tasks come in asynq's
-	// order. Aggregating tasks are listed per group (ListGroupTasks).
+	// ListTasks lists one page (1-based) of the queue's tasks in state; see
+	// conn.Conn.ListTasks.
 	ListTasks(ctx context.Context, queue string, state conn.TaskState, page, size int, desc bool) ([]conn.Task, error)
 	// Groups lists the queue's aggregation groups.
 	Groups(ctx context.Context, queue string) ([]conn.Group, error)
@@ -35,14 +32,6 @@ type TaskSource interface {
 	AllAction(ctx context.Context, queue string, verb conn.TaskVerb, state conn.TaskState) (int, error)
 	GroupAction(ctx context.Context, queue, group string, verb conn.TaskVerb) (int, error)
 }
-
-// The actions each state offers, as asynq supports them. Run is valid for
-// scheduled, retry, archived and aggregating tasks, Archive for pending,
-// scheduled, retry and aggregating ones, Delete for any but active ones,
-// and Cancel (CancelProcessing) only for active ones. asynq has no "all"
-// variant of Cancel, and per the user's decision the Active tab has no
-// "select all N" either. The "all" variants of aggregating tasks act on
-// one group (asynq's *AllAggregatingTasks).
 
 // tabVerbs are the actions for a state, in button order: the Queue page
 // toolbar's and the Task page's. Every one of them also has an "all"
@@ -71,10 +60,8 @@ func allowsAll(s conn.TaskState, verb conn.TaskVerb) bool {
 	return slices.Contains(tabVerbs(s), verb)
 }
 
-// sortable reports whether the state's table sorts by its time column:
-// scheduled and retry by the next process time, archived by when it was
-// archived, completed by when its result expires. Tasks applies desc for
-// these states only.
+// sortable reports whether the state's table sorts by its time column (see
+// conn.Conn.ListTasks).
 func sortable(s conn.TaskState) bool {
 	switch s {
 	case conn.TaskScheduled, conn.TaskRetry, conn.TaskArchived, conn.TaskCompleted:

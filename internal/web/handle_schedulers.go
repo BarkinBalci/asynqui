@@ -32,8 +32,7 @@ const historyPageSize = 20
 // maxEnqueueEvents is how many enqueue events asynq keeps per entry.
 const maxEnqueueEvents = 1000
 
-// historyMaxPage is the last history page: ceil(1000/size). Pages past
-// it are out of range.
+// historyMaxPage is the last history page; pages past it are out of range.
 const historyMaxPage = (maxEnqueueEvents + historyPageSize - 1) / historyPageSize
 
 // Payload previews in the schedulers table: the cell and its title.
@@ -42,9 +41,7 @@ const (
 	payloadTitleRunes = 300
 )
 
-// entriesSort is the schedulers table's sort: every column but Payload and
-// Options, by Next run ascending by default; every column sorts ascending
-// first.
+// entriesSort is the schedulers table's sort.
 func entriesSort() sortSpec {
 	return sortSpec{
 		cols:      []string{"id", "spec", "type", "next", "last"},
