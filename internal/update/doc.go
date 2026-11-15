@@ -1,3 +1,2 @@
-// Package update checks GitHub for a newer asynqui release
-// (docs/requirements.md §7, "Update check").
+// Package update checks GitHub for a newer asynqui release.
 package update

@@ -8,9 +8,8 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// addRoutes registers every route with the role it needs (see
-// docs/architecture.md, "Routes"). Paths are relative to base_path; NewServer
-// mounts the mux under it.
+// addRoutes registers every route with the role it needs. Paths are relative
+// to base_path; NewServer mounts the mux under it.
 func addRoutes(mux *http.ServeMux, d *deps) {
 	// probes (no auth, not logged)
 	mux.Handle("GET /health/liveness", handleLiveness())

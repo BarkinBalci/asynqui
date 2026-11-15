@@ -14,8 +14,9 @@ import (
 	"github.com/BarkinBalci/asynqui/internal/web/views/pages"
 )
 
-// The connection pages share one request and polling scheme, pages.Live (see
-// docs/architecture.md, "Frontend conventions").
+// The connection pages share one request and polling scheme, pages.Live: a
+// hidden poll element, out-of-band answers, and a banner when a poll finds no
+// data while the page shows some.
 
 // pollInit is the poll URL's ?poll= value for a page without data
 // regions: the answer then renders every region.
