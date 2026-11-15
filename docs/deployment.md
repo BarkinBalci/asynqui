@@ -1,8 +1,20 @@
-# Deploying asynqui
+# Deploying and operating asynqui
 
-What the deployment around asynqui must get right. Behaviour and every config key are in [requirements.md](requirements.md).
+What the deployment around asynqui must get right. Flags, environment variables and every config key are in [configuration.md](configuration.md); providers, sessions and roles in [authentication.md](authentication.md).
 
-## Container image
+## Install
+
+### Binary archives
+
+Each release on [GitHub Releases](https://github.com/BarkinBalci/asynqui/releases) has static binaries for linux, darwin and windows on amd64 and arm64, as archives (`tar.gz`, `zip` on Windows) with LICENSE, README.md and config.example.yaml, plus `checksums.txt` (SHA-256). Check an archive before unpacking it:
+
+```sh
+sha256sum --ignore-missing -c checksums.txt
+```
+
+Tags with a prerelease part (`0.2.0-rc.1`) are published as GitHub prereleases.
+
+### Container image
 
 `ghcr.io/barkinbalci/asynqui` is multi-arch (linux/amd64, linux/arm64) and built on `gcr.io/distroless/static-debian12:nonroot`. Tags: the exact version (`0.1.0`), `0.1` and `latest`; prereleases get only their exact version. Pin the exact version in production.
 
@@ -14,7 +26,7 @@ What the deployment around asynqui must get right. Behaviour and every config ke
 
 ## Kubernetes example
 
-Secrets come from the environment through interpolation (`${NAME}`), so the ConfigMap holds no secrets.
+[oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) runs as a sidecar in the same pod and signs users in; asynqui uses `auth.provider: proxy` and listens on loopback, so only the sidecar can reach it. The Service and the probes go through the sidecar, which lets `/health/` through without sign-in. Secrets come from the environment through interpolation (`${NAME}`), so the ConfigMap holds no secrets.
 
 ```yaml
 apiVersion: v1
@@ -24,6 +36,7 @@ metadata:
 data:
   config.yaml: |
     server:
+      addr: 127.0.0.1:8080
       shutdown_delay: 5s
     connections:
       - name: prod
@@ -32,7 +45,9 @@ data:
     auth:
       provider: proxy
       proxy:
-        trusted_proxies: ["10.0.0.10/32"]
+        user_header: X-Forwarded-Email
+        groups_header: X-Forwarded-Groups
+        trusted_proxies: ["127.0.0.1/32"]
     authz:
       bindings:
         - groups: [platform]
@@ -56,12 +71,40 @@ spec:
       securityContext:
         runAsNonRoot: true
         seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        # A native sidecar: it starts first and stops after asynqui.
+        - name: oauth2-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6
+          restartPolicy: Always
+          args:
+            - --http-address=0.0.0.0:4180
+            - --upstream=http://127.0.0.1:8080/
+            - --provider=oidc
+            - --oidc-issuer-url=https://login.example.com/realms/acme
+            - --client-id=asynqui
+            - --redirect-url=https://asynqui.example.com/oauth2/callback
+            - --email-domain=example.com
+            - --skip-auth-route=GET=^/health/
+          env:
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: asynqui, key: oidc-client-secret }
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef: { name: asynqui, key: cookie-secret }
+          ports:
+            - name: http
+              containerPort: 4180
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
       containers:
         - name: asynqui
           image: ghcr.io/barkinbalci/asynqui:0.1.0
-          ports:
-            - name: http
-              containerPort: 8080
           env:
             - name: REDIS_PASSWORD
               valueFrom:
@@ -71,9 +114,9 @@ spec:
               mountPath: /etc/asynqui
               readOnly: true
           livenessProbe:
-            httpGet: { path: /health/liveness, port: http }
+            httpGet: { path: /health/liveness, port: 4180 }
           readinessProbe:
-            httpGet: { path: /health/readiness, port: http }
+            httpGet: { path: /health/readiness, port: 4180 }
             periodSeconds: 2
             failureThreshold: 2
           resources:
@@ -96,16 +139,31 @@ spec:
   ports:
     - name: http
       port: 80
-      targetPort: http
+      targetPort: 4180
 ```
+
+- Native sidecars (`restartPolicy: Always` on an init container) need Kubernetes 1.29 or later.
+- oauth2-proxy replaces the `X-Forwarded-*` identity headers it sets, so a client cannot send its own.
+- The probes and the Service use the sidecar's port, 4180, so they reach asynqui through the sidecar.
 
 ## Probes
 
-`/health/liveness` and `/health/readiness` ([requirements §7](requirements.md#probes)) live under `server.base_path`: with `base_path: /asynq` they are `/asynq/health/liveness` and `/asynq/health/readiness`. Neither depends on Redis, so a Redis outage does not unroute or restart replicas.
+Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control: no-store`, live under `server.base_path` and are excluded from request logs. With `base_path: /asynq` they are `/asynq/health/liveness` and `/asynq/health/readiness`.
+
+- `GET <base>/health/liveness`: 200 whenever the process can serve HTTP. No dependency checks.
+- `GET <base>/health/readiness`: 200 while serving, 503 `shutting down` from the start of shutdown until exit. There is no "starting" state, because the listener opens only after [startup](configuration.md#startup) succeeds.
+
+Neither depends on Redis, so a Redis outage does not unroute or restart replicas.
 
 ## Graceful shutdown
 
-On SIGTERM asynqui turns readiness 503, keeps serving for `server.shutdown_delay`, then shuts down with a 10s timeout ([requirements §7](requirements.md#shutdown)).
+On the first SIGINT or SIGTERM:
+
+1. Signal handling is reset, so a **second signal force-quits** immediately.
+2. Readiness turns 503 `shutting down`. This is terminal.
+3. Wait `server.shutdown_delay` (default 5s; `0` skips the wait). The listener stays open and serves normally, so load balancers see the 503 and stop routing first.
+4. Shut down with a **10s** timeout: the listener closes and in-flight requests finish. Request contexts are not canceled by the signal.
+5. If the timeout expires, remaining connections are force-closed and the process exits 1.
 
 - **`terminationGracePeriodSeconds` must exceed `shutdown_delay` + 10s.** If you raise `shutdown_delay`, raise the grace period too.
 - `shutdown_delay` should be at least readiness `periodSeconds` × `failureThreshold` plus your load balancer's deregistration lag, so no new requests arrive after the listener closes.
@@ -115,63 +173,31 @@ On SIGTERM asynqui turns readiness 503, keeps serving for `server.shutdown_delay
 
 ### Preserve Host
 
-CSRF protection compares the browser's `Origin` with the request's `Host`, so the proxy must pass the original `Host` header through (nginx: `proxy_set_header Host $host;`). If the UI is reached under a different origin than the Host asynqui sees, list that origin in `server.trusted_origins`.
+Cross-origin protection compares the browser's `Origin` with the request's `Host` on every unsafe method, so the proxy must pass the original `Host` header through (nginx: `proxy_set_header Host $host;`). If the UI is reached under a different origin than the Host asynqui sees, list that origin in `server.trusted_origins`. An invalid origin there fails startup.
 
 ### Sub-path
 
 With `server.base_path: /asynq`, forward `/asynq/...` **without** stripping the prefix. asynqui serves every route, including probes and static files, under the prefix.
 
-### `auth.provider: proxy`
+### Timeouts
 
-asynqui trusts identity headers only when the TCP peer is in `auth.proxy.trusted_proxies` ([requirements §3](requirements.md#proxy)). Both of the following are required:
+asynqui's server timeouts are: read header 10s, read 30s, write 60s, idle 120s. A response never takes longer than the write timeout, so a proxy read timeout of 60s or more never cuts one off. Keep the proxy's idle keep-alive timeout towards asynqui below 120s.
 
-1. **Strip client-supplied identity headers at the proxy.** The proxy must remove any incoming `user_header` and `groups_header` from the client request before setting its own. Otherwise a user can send `X-Forwarded-User: admin` through the trusted proxy.
+## TLS
 
-   ```nginx
-   # nginx + oauth2-proxy: overwrite, never pass through
-   proxy_set_header X-Forwarded-User   $upstream_http_x_auth_request_user;
-   proxy_set_header X-Forwarded-Groups $upstream_http_x_auth_request_groups;
-   ```
+Serve over HTTPS. Cookies are `Secure` unless `auth.session.cookie_secure: false`, which is only for local plain HTTP ([Cookies](authentication.md#cookies)).
 
-2. **Only the proxy can reach asynqui.** Keep `trusted_proxies` as narrow as possible: a single `/32` (or `/128`) per proxy instance, never a whole node or pod range. On Kubernetes, add a NetworkPolicy so that only the proxy pods can connect:
+## Security headers
 
-   ```yaml
-   apiVersion: networking.k8s.io/v1
-   kind: NetworkPolicy
-   metadata:
-     name: asynqui-from-proxy-only
-   spec:
-     podSelector:
-       matchLabels: { app: asynqui }
-     policyTypes: [Ingress]
-     ingress:
-       - from:
-           - podSelector:
-               matchLabels: { app: auth-proxy }
-         ports:
-           - port: 8080
-   ```
-
-   Check that your CNI still lets the kubelet's probes through.
-
-### `auth.provider: basic`
-
-The login rate limit ([requirements §3](requirements.md#basic)) counts per TCP peer address as well as per username. Behind a proxy every user shares the proxy's address, so one user's failed attempts can lock out the others.
-
-## Cookies and TLS
-
-- Serve over HTTPS. Session cookies are `Secure` unless `auth.session.cookie_secure: false`, which is only for local plain HTTP.
-- Generate keys with `openssl rand -hex 32` and pass them through environment variables (`hash_key: ${ASYNQUI_SESSION_HASH_KEY}`).
-- Sessions cannot be revoked server-side. To sign everyone out, rotate the keys without keeping the old pair in `previous_keys`. To rotate without signing anyone out, move the old pair to `previous_keys` and remove it after `ttl`.
-
-## `auth.provider: none`
-
-There is no login, and everyone gets `authz.default`. Put asynqui behind something that authenticates, or bind it to `127.0.0.1`.
+asynqui sends a strict Content-Security-Policy with `frame-ancestors 'none'`, so the UI cannot be embedded in an iframe. Don't inject or override the CSP at the proxy.
 
 ## Update check
 
-A release build asks GitHub for the latest release at startup and then daily, and shows a dot next to the version in the sidebar when a newer one exists. What it sends and when is in [requirements §7](requirements.md#update-check).
+A release build asks GitHub for the latest release at startup and then daily, and shows a dot next to the version in the sidebar when a newer one exists.
 
-- The server makes the request. It needs egress to `api.github.com:443` and honours `HTTPS_PROXY`.
-- Failures are logged at debug level and change nothing.
+- With `update_check: true` and a release version, the server sends `GET https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h, until shutdown starts. A release version is a semantic version without a prerelease part: `dev`, release candidates (`0.2.0-rc.1`), `git describe` or dirty builds (`v0.1.0-3-gabc1234-dirty`) and pseudo-versions never check.
+- The request sends no credentials, config or user data. GitHub sees the server's IP address (or its proxy's) and the asynqui version, from `User-Agent: asynqui/{version}`. It is server-side, so the CSP is unchanged.
+- It needs egress to `api.github.com:443` and honours `HTTPS_PROXY`.
+- It times out after 5s. A failure (network, non-200, malformed JSON) is logged at debug level, changes nothing and keeps the last result.
+- Drafts, prereleases and tags that are not a semantic version without a prerelease part are ignored. A release newer than the running version (by major, minor, patch) is remembered by its tag and logged once at info; an equal or older one clears it. The footer links to `https://github.com/BarkinBalci/asynqui/releases/tag/{tag}`.
 - Set `update_check: false` to disable it, e.g. where egress is restricted.
