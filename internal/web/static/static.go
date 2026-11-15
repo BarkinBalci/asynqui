@@ -26,10 +26,9 @@ var FS embed.FS
 const hashLen = 12
 
 // Assets serves a file tree under "<hash>/", hash being a content hash of
-// every file: any change to any file moves every URL, so responses are
-// cacheable forever, and a stylesheet's relative url(...) references
-// resolve as they are. Build it with New; it is immutable and safe for
-// concurrent use.
+// every file, so responses are cacheable forever and a stylesheet's relative
+// url(...) references resolve as they are. Build it with New; it is immutable
+// and safe for concurrent use.
 type Assets struct {
 	names map[string]bool // every file, by name
 	hash  string
@@ -70,9 +69,8 @@ func Embedded() (*Assets, error) {
 }
 
 // Path returns a file's path under the content hash ("app.css" →
-// "3f9a2c1b7d0e/app.css"). It panics on an unknown name: asset names are
-// fixed at build time, so a miss is a programming error caught by any test
-// that renders a page.
+// "3f9a2c1b7d0e/app.css"). It panics on an unknown name, a programming error
+// that any test rendering a page catches.
 func (a *Assets) Path(name string) string {
 	if !a.names[name] {
 		panic(fmt.Sprintf("static: unknown asset %q", name))

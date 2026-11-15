@@ -1,10 +1,6 @@
-// asynqui client script: htmx configuration, theme and auto-refresh
-// controls, visibility-gated polling, local times, copy buttons, the
-// client-side filters, row selection (with "select all N" for tasks),
-// confirmation dialogs, the Find task dialog and toasts.
-// Loaded with defer after htmx, so htmx exists and the config below is
-// applied before htmx initialises on DOMContentLoaded.
-// Everything here is progressive enhancement: pages read fine without it.
+// asynqui client script. Loaded with defer after htmx, so the config below
+// applies before htmx initialises on DOMContentLoaded. Everything here is
+// progressive enhancement: pages read fine without it.
 (function () {
 	"use strict";
 
@@ -61,9 +57,9 @@
 
 	// ---- polling ----
 	// Regions marked data-poll carry hx-trigger="asynqui-refresh". One timer
-	// fires that event at the chosen interval; ticks are skipped while the
-	// tab is hidden and one refresh fires when it becomes visible again.
-	// With "off" no timer runs, so no polling requests are sent at all.
+	// fires that event at the chosen interval, skipping ticks while the tab is
+	// hidden, and one refresh fires when it becomes visible again. With "off"
+	// no timer runs.
 	var pollTimer = null;
 
 	function intervalMs() {
@@ -169,9 +165,8 @@
 	// ---- copy buttons ----
 	// <button data-copy="text" hidden> copies its value: the full ID, never
 	// the shortened text shown. <button data-copy-from="#id"> copies that
-	// element's text (a code block), so large text is not repeated in an
-	// attribute. Copy buttons are rendered hidden and shown only where the
-	// Clipboard API exists (secure contexts), so no button does nothing.
+	// element's text. Copy buttons are shown only where the Clipboard API
+	// exists (secure contexts).
 	function revealCopy(scope) {
 		if (!navigator.clipboard) {
 			return;
@@ -226,17 +221,14 @@
 	// Row checkboxes belong to a form by their form attribute and sit in a
 	// <tr data-state>. A [data-toolbar=form-id] bar shows "N selected"
 	// ([data-sel-label], count in [data-sel-count]) and enables its
-	// buttons: data-enable="any" when a row is selected, "state" when a
-	// selected row's data-state equals the button's data-state, "every"
-	// when every selected row has the attribute data-{data-flag} (else
-	// the button's title is its data-blocked-title). Buttons
-	// rendered disabled for the viewer's role have no data-enable and stay
-	// disabled. The header [data-select-all=form-id] checkbox selects the
-	// visible rows.
+	// buttons by data-enable: "any" selected row, "state" when a selected
+	// row's data-state equals the button's, "every" when every selected row
+	// has data-{data-flag} (else the title is data-blocked-title). Buttons
+	// without data-enable stay disabled. The header
+	// [data-select-all=form-id] checkbox selects the visible rows.
 	//
-	// The checkboxes carry hx-preserve, so htmx keeps them (and their
-	// checked state) when a poll or a sort replaces the table; this only
-	// recomputes the toolbar afterwards.
+	// The checkboxes carry hx-preserve, so they keep their checked state
+	// when a swap replaces the table; this only recomputes the toolbar.
 	function rowBoxes(formId) {
 		var out = [];
 		var boxes = document.querySelectorAll("input[type=checkbox][name]");
@@ -383,14 +375,12 @@
 	});
 
 	// ---- task tables: "select all N" ----
-	// The [data-select-banner=form-id] banner of a task table shows once
-	// every row of the page is selected. Its [data-select-everything]
-	// button sets the form's [data-everything] field to "1": the toolbar
-	// then counts the banner's data-total, and a button with
-	// data-confirm-all opens that dialog (the *All* actions) instead of
-	// acting on the rows. Unchecking a row or [data-clear-everything]
-	// leaves the mode. syncEverything runs on every selection update and
-	// returns the "all" count while the mode is on.
+	// The [data-select-banner=form-id] banner of a task table shows once every
+	// row of the page is selected. Its [data-select-everything] button sets
+	// the form's [data-everything] field to "1": the toolbar then counts the
+	// banner's data-total, and a button with data-confirm-all opens that
+	// dialog instead of acting on the rows. Unchecking a row or
+	// [data-clear-everything] leaves the mode.
 	function byForm(selector, attr, formId) {
 		var els = document.querySelectorAll(selector);
 		for (var i = 0; i < els.length; i++) {
@@ -633,10 +623,9 @@
 	// ---- after htmx swaps (including out-of-band ones) ----
 	// Right after each swap, synchronously: re-apply the filters (so
 	// filtered-out rows never flash back), recompute the toolbars, and give
-	// focus back to the element that had it. An hx-preserve'd checkbox is
-	// the same element after the swap, but htmx takes it out of the
-	// document while swapping, which drops its focus; htmx itself only
-	// refocuses elements it replaced.
+	// focus back to the element that had it. htmx takes an hx-preserve'd
+	// checkbox out of the document while swapping, which drops its focus, and
+	// refocuses only elements it replaced.
 	var focusBefore = null;
 	document.addEventListener("htmx:beforeSwap", function () {
 		focusBefore = document.activeElement;
