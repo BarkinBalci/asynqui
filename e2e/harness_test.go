@@ -121,15 +121,11 @@ func buildApp(t *testing.T) string {
 	return bin
 }
 
-// appVersion returns ASYNQUI_E2E_VERSION if set. Otherwise it returns the
-// output of git describe without its "v", so a checkout at a release tag
-// reports that release, or "" outside git or without a reachable tag.
+// appVersion returns the latest release tag without its "v", or "" outside
+// git or without one.
 func appVersion(t *testing.T) string {
 	t.Helper()
-	if v := os.Getenv("ASYNQUI_E2E_VERSION"); v != "" {
-		return v
-	}
-	cmd := exec.CommandContext(t.Context(), "git", "describe", "--tags")
+	cmd := exec.CommandContext(t.Context(), "git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "--exclude", "*-*")
 	cmd.Dir = ".."
 	out, err := cmd.Output()
 	if err != nil {
