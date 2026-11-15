@@ -1,6 +1,6 @@
 # asynqui architecture
 
-How the code is organised and the rules it follows. Product behaviour is specified in [requirements.md](requirements.md).
+How the code is organised and the rules it follows. Product behaviour is specified in [design.md](design.md).
 
 **References:**
 - Go's [Organizing a Go module](https://go.dev/doc/modules/layout), the "server project" layout.
@@ -52,8 +52,8 @@ cmd/asynqui → web → conn, auth, authz → config
 7. **Errors and logs:** wrap errors with `%w`, log with `log/slog`, run every Redis call under the request context. Never log secrets.
 8. **UI text lives in templ.** Go code never builds user-facing strings. It returns typed errors or codes (`errors.Is`/`errors.As`) that templates map to copy.
 9. **Formatting goes through `web/format`.** No `fmt.Sprintf("%d")`, `time.Format` or `humanize` calls in handlers or templates.
-10. **CSS:** one hand-written stylesheet with custom properties from the canvas style guide. Dark mode swaps tokens under `[data-theme=dark]`; `[data-theme=system]` follows `prefers-color-scheme`. No Tailwind and no CSS build step.
-11. **CSP-clean markup.** No inline `<script>`, `<style>`, `style=""` or `on*=` attributes; use classes, SVG attributes and `app.js`. No form may lead off-origin (requirements §7 "HTTP"), so SSO sign-in and proxy sign-out are links.
+10. **CSS:** one hand-written stylesheet, `app.css`, whose custom properties are the design tokens. Dark mode swaps tokens under `[data-theme=dark]`; `[data-theme=system]` follows `prefers-color-scheme`. No Tailwind and no CSS build step.
+11. **CSP-clean markup.** No inline `<script>`, `<style>`, `style=""` or `on*=` attributes; use classes, SVG attributes and `app.js`. No form may lead off-origin ([design §7](design.md#7-http)), so SSO sign-in and proxy sign-out are links.
 12. **Minimal dependencies.** Prefer the standard library. No third-party router, DI framework, mock framework or assertion library. The frontend is vendored and embedded: no npm, no build step, no chart library.
 
 ## Wiring and lifecycle
@@ -62,8 +62,17 @@ cmd/asynqui → web → conn, auth, authz → config
 - Use `lookupEnv`, not `getenv`, so interpolation can tell an unset variable from an empty one.
 - `BaseContext` is `context.WithoutCancel(ctx)`: in-flight requests keep their context until `Shutdown` drains them.
 - `web.Readiness` has one transition, `Drain()`. Its zero value is ready.
+- Flags count as set only when `flag.FlagSet.Visit` reports them, so a flag given with its default value still wins over the environment.
+- Shutdown is `http.Server.Shutdown` under the 10s timeout, then `Close`.
 
-Startup, shutdown and precedence rules are in [requirements.md §7](requirements.md#7-operational).
+Startup and precedence rules are in [configuration.md](configuration.md#startup), shutdown in [deployment.md](deployment.md#graceful-shutdown).
+
+## Authentication
+
+- **Cookies:** the session and OIDC flow cookies are signed and encrypted with `gorilla/securecookie`. `previous_keys` become extra codecs (`securecookie.CodecsFromPairs`) that only decode.
+- **OIDC:** go-oidc's `Verifier` checks the ID token's issuer, audience, expiry and signature; the nonce and the other claim checks in [design §3](design.md#oidc) run after it.
+- **Client address:** proxy trust and the login rate limit use `r.RemoteAddr`, never `X-Forwarded-For`.
+- **Return-to:** `next` is cleaned with `path.Clean` before the prefix check.
 
 ## Routing and middleware
 
@@ -78,6 +87,7 @@ Startup, shutdown and precedence rules are in [requirements.md §7](requirements
 - **`conn.Registry`** holds a `*asynq.Inspector` and a go-redis client per connection, created at startup without Redis I/O. asynqui uses no `asynq.Client`.
 - **Timeouts:** Inspector calls take no context, so only the connection's socket timeouts bound them. Our own commands (PING, INFO) also run under a context deadline.
 - **Snapshots:** every read goes through the connection's 1s cache, keyed by snapshot, with concurrent fetches shared. Every action drops the connection's cached snapshots.
+- **Scheduler history:** the task-existence lookups behind its task links are cached for 10s per task.
 - **Page budget:** a page waits a bounded time for its reads. A miss renders "Checking"; the fetch goes on in the cache, so the next poll has it.
 - **Down vs error:** only a network error or timeout (`conn.Unreachable`) marks a connection down. An error reply is shown inline.
 - **Health:** one goroutine per connection stores the PING result; pages only read it, and `handleRecheck` runs a check synchronously. The health loop also detects the backend (Redis or Valkey) from `INFO server`.
