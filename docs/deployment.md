@@ -2,6 +2,27 @@
 
 What the deployment around asynqui must get right. Flags, environment variables and every config key are in [configuration.md](configuration.md); providers, sessions and roles in [authentication.md](authentication.md).
 
+## Prerequisites
+
+- **Redis or Valkey:** Redis 4.0 or later, the minimum [asynq](https://github.com/hibiken/asynq) requires, or Valkey. Standalone only, no Sentinel or Cluster.
+- **asynq:** asynqui reads asynq's key layout directly, so it is built and tested against asynq v0.26.0.
+- **Redis ACL (optional):** a least-privilege user needs the commands below, every key under `asynq:*` and the `asynq:cancel` channel, which Cancel publishes to. ACL users need Redis 6.2 or later; `client|setinfo` names a Redis 7.2 command, so drop it on older servers.
+
+  ```sh
+  redis-cli ACL SETUSER asynqui on '>PASSWORD' \
+    resetkeys '~asynq:*' resetchannels '&asynq:cancel' -@all \
+    +ping +info +select +hello '+client|setinfo' \
+    +eval +evalsha \
+    +get +set +setnx +del +exists \
+    +hget +hmget +hset +hvals \
+    +llen +lpush +lrange +lrem \
+    +smembers +sismember +srem \
+    +zadd +zcard +zrange +zrevrange +zrangebyscore +zscore +zrem +zremrangebyrank +zremrangebyscore \
+    '+memory|usage' +publish
+  ```
+
+  Then set `connections[].username: asynqui` and the password.
+
 ## Install
 
 ### Binary archives
@@ -201,3 +222,9 @@ A release build asks GitHub for the latest release at startup and then daily, an
 - It times out after 5s. A failure (network, non-200, malformed JSON) is logged at debug level, changes nothing and keeps the last result.
 - Drafts, prereleases and tags that are not a semantic version without a prerelease part are ignored. A release newer than the running version (by major, minor, patch) is remembered by its tag and logged once at info; an equal or older one clears it. The footer links to `https://github.com/BarkinBalci/asynqui/releases/tag/{tag}`.
 - Set `update_check: false` to disable it, e.g. where egress is restricted.
+
+## Upgrading
+
+- Read the notes of every release you skip on [GitHub Releases](https://github.com/BarkinBalci/asynqui/releases). Breaking changes are marked with `!` in the changelog (`feat!: …`).
+- The config is strict: a renamed or removed key stops startup with an error naming it, so fix the config before rolling out.
+- Pin the exact image tag and change it deliberately.
