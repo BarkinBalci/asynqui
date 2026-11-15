@@ -5,7 +5,7 @@
   <img alt="asynqui" src="docs/images/logo-light.svg" width="280">
 </picture>
 
-<p>A web dashboard for <a href="https://github.com/hibiken/asynq">asynq</a> across many Redis and Valkey instances.</p>
+<p>An <a href="https://github.com/hibiken/asynq">asynq</a> dashboard for all your Redis and Valkey instances.</p>
 
 [![CI](https://github.com/BarkinBalci/asynqui/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BarkinBalci/asynqui/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/BarkinBalci/asynqui)](https://github.com/BarkinBalci/asynqui/releases) [![Go version](https://img.shields.io/github/go-mod/go-version/BarkinBalci/asynqui)](go.mod) [![License](https://img.shields.io/github/license/BarkinBalci/asynqui)](LICENSE)
 
