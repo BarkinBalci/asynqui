@@ -2,17 +2,18 @@
 
 Dev tasks live in `Taskfile.yml`; run `task` to list them. Install [Task](https://taskfile.dev/installation/) or run it as `go tool -modfile=tools/go.mod task`. Run `task check` before pushing; it runs the CI check job.
 
-Code conventions are in [architecture.md](docs/architecture.md). Each topic has one owning doc; link to the owner instead of repeating it.
+## Documentation
 
-| Doc | Owns |
+| Document | Covers |
 |---|---|
-| [configuration.md](docs/configuration.md) | flags, environment, precedence, startup, logging, the config file and every key |
-| [authentication.md](docs/authentication.md) | providers, sessions, roles and bindings, cookies |
-| [deployment.md](docs/deployment.md) | install, Kubernetes, probes, shutdown, reverse proxy, update check |
-| [design.md](docs/design.md) | the behaviour spec: pages, UI rules, sign-in flow, HTTP behaviour |
-| [architecture.md](docs/architecture.md) | code layout, rules and internals |
-| CONTRIBUTING.md | the dev workflow |
-| [releasing.md](docs/releasing.md) | cutting a release |
+| [configuration.md](docs/configuration.md) | Flags, environment variables, the config file and every key |
+| [authentication.md](docs/authentication.md) | Sign-in providers, sessions, roles, cookies |
+| [deployment.md](docs/deployment.md) | Installing and running asynqui in production |
+| [design.md](docs/design.md) | How asynqui behaves: pages, UI rules, sign-in, HTTP |
+| [architecture.md](docs/architecture.md) | How the code is organised and the conventions it follows |
+| [releasing.md](docs/releasing.md) | Cutting a release |
+
+When you change behaviour, update the document that describes it. If another document needs the same information, link to it rather than copying it.
 
 ## Local development
 
