@@ -1,9 +1,6 @@
-# Local image built from source:
-#   docker build -f Dockerfile.dev -t asynqui:dev .
-#   task docker
-# Releases use Dockerfile, which copies GoReleaser's prebuilt binaries.
+# Local image built from source (task docker). Releases use Dockerfile.
 
-# golang:1.27.3-trixie, multi-arch index.
+# Multi-arch index digests.
 FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS build
 ARG TARGETOS
 ARG TARGETARCH
@@ -15,7 +12,6 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/asynqui ./cmd/asynqui
 
-# gcr.io/distroless/static-debian12:nonroot, multi-arch index.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build --chmod=0555 /out/asynqui /usr/bin/asynqui
 USER 65532:65532

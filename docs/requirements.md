@@ -2,7 +2,7 @@
 
 asynqui is an open-source web dashboard for [asynq](https://github.com/hibiken/asynq) that covers **several Redis instances and logical databases** in a single deployment. v1 targets feature parity with asynqmon. The visual reference is the design canvas: <https://claude.ai/artifact/HbfWPswwsqyV498Lrfpfnu>.
 
-This document is the source of truth for behaviour. When this file and the canvas disagree, this file wins; update the canvas afterwards. Every config key and default is listed in §8.
+This document is the source of truth for behaviour. When it and the canvas disagree, this file wins. Every config key and default is listed in §8.
 
 ## 1. Scope
 
@@ -21,8 +21,8 @@ This document is the source of truth for behaviour. When this file and the canva
 - Audit log.
 - Metrics or Prometheus integration.
 - Alerting.
-- Per-queue RBAC. The config shape leaves room for it later.
-- Editing scheduler entries. asynq has no API for it.
+- Per-queue RBAC.
+- Editing scheduler entries (no asynq API).
 - Connection env tags or colours.
 - Localisation. The UI is English only, with no i18n framework.
 - Server-side session revocation (§3).
@@ -36,7 +36,7 @@ This document is the source of truth for behaviour. When this file and the canva
   - TLS: on/off, CA file, client cert/key, `insecure_skip_verify`, server name
   - ACL username and password
   - `dial_timeout` (default 5s), `read_timeout` (3s), `write_timeout` (3s), per connection. There is no global Redis timeout.
-- **Backend detection:** auto-detected from `INFO server`. If `server_name:valkey` is present, label it "Valkey info" and show `valkey_version` with "Redis-compatible `redis_version`" underneath. Otherwise label it "Redis info" and show `redis_version`.
+- **Backend detection:** auto-detected from `INFO server`. If `server_name:valkey` is present, label it "Valkey info" and show `valkey_version` with "Redis-compatible `redis_version`" underneath. Otherwise, and until the first detection, label it "Redis info" and show `redis_version`.
 - **Where the DB number appears:** only in the sidebar's second line, `host:port/db`. Breadcrumbs, headings, titles and Overview cards show the name only.
 - **Health:**
   - A background loop sends PING to every connection every 10s, bounded by that connection's timeouts. The first round starts at startup without blocking it.
@@ -44,20 +44,18 @@ This document is the source of truth for behaviour. When this file and the canva
   - Until the first PING finishes, the connection is *unknown*: muted dot, no badge.
   - The Overview, sidebar and page badges read the cached result and never PING themselves.
   - "Retry now" (§6.1) runs a check immediately and updates the cache.
-- **Load:** see §7 "Redis load".
 
 ## 3. Authentication
 
 `auth.provider` is one of `none` (default), `basic`, `proxy` or `oidc`. Startup fails on any provider error, including OIDC discovery (§7 "Startup").
 
 ### Common rules
-- **Middleware:** the authentication middleware only identifies the user. It never rejects a request. The route wrappers (`view`, `op`, `admin`) decide:
-  - no identity, `basic`/`oidc`: 303 to `<base>/login?next=<path>`; for htmx requests, 401 with `HX-Redirect: <base>/login?next=<current page>` so the whole page navigates instead of swapping in a fragment.
-  - no identity, or rejected identity headers, `proxy`: 401.
+- **No identity:**
+  - `basic`/`oidc`: 303 to `<base>/login?next=<path>`; for htmx requests, 401 with `HX-Redirect: <base>/login?next=<current page>`, so the whole page navigates instead of swapping in a fragment.
+  - `proxy` (no identity, or rejected identity headers): 401.
   - Probes and `/static/` need no identity.
 - **Return-to (`next`):** accepted only if it is a same-origin relative path under `base_path` (starts with `<base>/`, not `//`, no scheme or host), at most 1 KB, with no backslash, control character or encoded `.`, `/` or `\` (`%2e`, `%2f`, `%5c`). The path is cleaned (`path.Clean`, keeping a trailing slash) before the prefix check, and the cleaned, re-encoded URL is what is used; fragments are dropped. Anything else falls back to `<base>/`. For htmx requests it comes from `HX-Current-URL` (path and query only), or is `<base>/` without one. Challenges send `Cache-Control: no-store`.
-- **Logout:** `basic` and `oidc`: Sign out posts to `POST /logout`, which clears the session cookie and redirects to the login page (OIDC: local logout only). `proxy`: Sign out is a plain link straight to `auth.proxy.logout_url`, with no server round trip. (A form whose response redirects to another origin would be blocked by the CSP `form-action 'self'`, §7.)
-- **Sign out visibility:** shown for `basic` and `oidc`; for `proxy` only when `logout_url` is set; never for `none`.
+- **Sign out:** for `basic` and `oidc` it posts to `POST /logout`, which clears the session cookie and redirects to the login page (OIDC: local logout only). For `proxy` it is shown only when `logout_url` is set, as a plain link to it. It is never shown for `none`.
 
 ### `none`
 - No login and no session. Every request is anonymous, so bindings never match and everyone gets `authz.default`.
@@ -66,9 +64,9 @@ This document is the source of truth for behaviour. When this file and the canva
 - Startup logs a WARN when the listen address is not loopback (empty host, `0.0.0.0`, `::` or any non-loopback IP or hostname other than `localhost`).
 
 ### `basic`
-- Login form (username + password). Users are listed in config with **bcrypt** hashes and optional `groups`. All hashes must use the same bcrypt cost (startup fails otherwise; rehash at one cost), so a failed login takes the same time whichever user was tried. Usernames that differ only in ASCII case are rejected at startup.
+- Login form (username + password). Users are listed in config with **bcrypt** hashes and optional `groups`. All hashes must use the same bcrypt cost, or startup fails, so a failed login takes the same time whichever user was tried. Usernames that differ only in ASCII case are rejected at startup.
 - Unknown usernames are compared against a dummy hash, so a miss costs the same as a hit.
-- **Rate limit:** `POST /login` attempts per client IP (`r.RemoteAddr`, IPv6 per /64) and per username: a burst of 5, then 1 every 12s. Further attempts get 429 and "Too many attempts. Try again later." Behind a proxy every user shares the proxy's IP, so one user's failures can lock out the others. Failed logins are logged with the username only when it exists.
+- **Rate limit:** `POST /login` attempts per client IP (`r.RemoteAddr`, IPv6 per /64) and per username: a burst of 5, then 1 every 12s. Further attempts get 429 and "Too many attempts. Try again later." Failed logins are logged with the username only when it exists.
 - bcrypt reads at most 72 bytes. Passwords longer than 72 bytes are rejected at login.
 - Every request re-checks the session's user against the current config: a user removed from config is signed out, and groups always come from config.
 - Invalid credentials show "Invalid username or password."
@@ -84,7 +82,7 @@ This document is the source of truth for behaviour. When this file and the canva
 - Header stripping and network isolation are the deployer's job: see [deployment.md](deployment.md).
 
 ### `oidc`
-- Authorization-code flow with **PKCE (S256)**. "Sign in with SSO" is a link to `GET /login/sso?next=…`, which sets the flow cookie and redirects to the IdP. The IdP returns to `GET /auth/callback`. It is a navigation, not a form post, because the CSP `form-action 'self'` (§7) also applies to a form's redirects; the state, nonce and PKCE verifier in the flow cookie are what protect the flow. `POST /login` is the basic form only and is 404 for `oidc`.
+- Authorization-code flow with **PKCE (S256)**. "Sign in with SSO" is a link to `GET /login/sso?next=…`, which sets the flow cookie and redirects to the IdP. The IdP returns to `GET /auth/callback`. `POST /login` is 404 for every provider but `basic`.
 - **Flow cookie:** state, nonce, PKCE verifier and `next` are kept in an encrypted cookie `asynqui_oidc`: 10 minute lifetime, `Path=<base>/auth/callback`, `HttpOnly`, `SameSite=Lax`, `Secure` per `cookie_secure`. It is deleted by a callback whose `state` matches; a forged callback leaves it, so it cannot cancel a login in progress.
 - **ID token:** verified with go-oidc's Verifier (issuer, audience = `client_id`, expiry, RS256 and other asymmetric algorithms only) and the nonce. `sub` must be non-empty; `azp` must equal `client_id` when present or when `aud` has several entries; `iat` may be at most 5 minutes in the future.
 - **Username:** the `username_claim` (default `email`). When it is `email`, `email_verified` must be `true` (the boolean, or the string `"true"` as Amazon Cognito sends it), otherwise login fails. Userinfo claims are used only when the userinfo `sub` is present and equals the ID token's.
@@ -97,10 +95,10 @@ This document is the source of truth for behaviour. When this file and the canva
 ### Session cookie (`basic`, `oidc`)
 - Name `asynqui_session`, `Path=<base_path>` (`/` when `base_path` is empty), `HttpOnly`, `SameSite=Lax`, `Secure` unless `auth.session.cookie_secure: false` (default `true`; set `false` only for local plain HTTP).
 - Signed and encrypted with `gorilla/securecookie`. Keys are hex in config: `hash_key` decodes to 32 or 64 bytes, `block_key` to 32 bytes. Both are validated at startup and never auto-generated.
-- **Rotation:** `previous_keys` (list of `{hash_key, block_key}`) still decode existing cookies; new cookies always use the current pair (`securecookie.CodecsFromPairs`).
+- **Rotation:** `previous_keys` (list of `{hash_key, block_key}`) still decode existing cookies; new cookies always use the current pair.
 - **TTL:** absolute from sign-in, default 12h. There is no sliding renewal.
 - **Payload:** identity claims only, never tokens, plus the provider name: a cookie minted by another provider (e.g. a `basic` deployment sharing the keys) is rejected. Basic sessions store no groups. Cookie values over 4096 bytes are rejected before decoding; when several `asynqui_session` cookies arrive, the first valid one is used.
-- **No server-side revocation.** Signing out clears the cookie in that browser only. To invalidate every session, rotate the keys without keeping the old pair in `previous_keys`. For `basic`, removing a user from config also signs them out.
+- **No server-side revocation.** Signing out clears the cookie in that browser only. For `basic`, removing a user from config also signs them out. Key rotation is in [deployment.md](deployment.md#cookies-and-tls).
 
 ### Login page
 - The username/password form appears only for `basic`.
@@ -142,8 +140,7 @@ authz:
 | **Delete tasks** (single, bulk, "all", all of an aggregation group) | | | ✓ |
 | **Delete queue** | | | ✓ |
 
-- **Insufficient role:** the button renders **disabled**, with a native `title` tooltip of "Requires admin" ("Requires admin on {conn}" on the Task page). There is no lock icon and no explanatory text.
-- **Viewers:** buttons the user can never use are still shown, disabled. This keeps the layout stable.
+- **Insufficient role:** the button is still shown, **disabled**, with a native `title` of "Requires {role}" ("Requires {role} on {conn}" on the Task page). There is no lock icon and no explanatory text.
 
 ## 5. Global UI
 
@@ -163,15 +160,14 @@ authz:
 - **Current connection:** expanded inside a tinted container with its sub-nav: Queues, Servers, Schedulers, and "Redis info" or "Valkey info".
 - **Active item:** tinted background, semibold, no accent bar. Hover and active backgrounds are inset on both sides.
 - **Pinned footer:**
-  - `v{version}` on the left, followed by an accent dot when a newer GitHub release exists. Both link to the release notes. A development build whose version names a commit (Go pseudo-version, `git describe`, GoReleaser snapshot) shows `dev {shortsha}` (at most 7 hex digits) with the full version in the title; other prereleases and `dev` are shown as is.
+  - `v{version}` on the left, followed by an accent dot when a newer GitHub release exists (§7 "Update check"). With an update, both link to the newer release's notes; otherwise to the running release's notes. A development build whose version names a commit (Go pseudo-version, `git describe`, GoReleaser snapshot) shows `dev {shortsha}` (at most 7 hex digits) with the full version in the title; other prereleases and `dev` are shown as is.
   - A muted "Source ↗" link on the right.
   - There is no GitHub logo, Docs link or Report-issue link.
-  - The update check (§7 "Update check") is cached for 24h, fails silently, and can be disabled with `update_check: false`. With an update, the version and dot link to the newer release's notes; otherwise to the running release's notes.
 
 ### Top bar (every page, every control 36px tall)
 - **Breadcrumbs:** `Overview / {conn} / {section} / {item}`. Every segment except the last is a link.
 - **"Updated Ns ago":** muted text.
-- **Auto refresh:** a segmented control with Off / 2s / 5s / 10s. The default comes from config (`refresh.default`, 5s). The choice is stored in a cookie. "Off" means no polling requests at all.
+- **Auto refresh:** a segmented control with Off / 2s / 5s / 10s. The default comes from `refresh.default`. The choice is stored in a cookie. "Off" means no polling requests at all.
 - **Theme:** a segmented control with three icon buttons (System, the default; Light; Dark). The choice is stored in a cookie, and the server renders the `data-theme` attribute so there is no flash on load.
 - **Account menu:** `{user}` followed by the muted role for the current connection (the highest role on the Overview), then ▾. The menu holds Sign out. Hidden when auth is `none`.
 
@@ -179,7 +175,6 @@ authz:
 - htmx re-fetches only the data regions of the page at the chosen interval.
 - Polling pauses while the tab is hidden and resumes immediately when the tab is visible again.
 - It never resets the user's selection, sort, page or open dialog.
-- Data is served from the per-connection 1s cache (§7 "Redis load").
 
 ### Copy and visual rules
 - **Minimal copy:** no helper or explanatory text. Empty states are one short line.
@@ -192,10 +187,7 @@ authz:
 - **Tokens:** colours, spacing and type follow the canvas "Style guide" board. Dark mode swaps CSS custom properties.
 - **Errors:** an action that fails shows its error in a toast, bottom right, which goes away after 8s or when dismissed (the dismiss button needs JS). An action request that fails without an answer (network error, 403, 500) shows "Request failed".
 
-### Localization and time
-- **English only** in v1. No i18n framework.
-- **UI strings** live only in `.templ` files. Go code never builds user-facing text; it returns typed errors or codes that templates map to copy.
-- **Formatting:** every number, date and duration is formatted by `internal/web/format`.
+### Time
 - **Timestamps:** rendered as `<time datetime="2026-11-08T00:11:52Z">` (RFC 3339, UTC) whose text is the absolute UTC time ("Nov 8, 00:11:52"). `app.js` converts each to the viewer's local time zone: relative text ("3m ago", "in 2m 40s") with the absolute local time in `title`, or the absolute local time where the design shows an absolute time. Without JS the UTC absolute time stays.
 - **Daily counters:** "today" means asynq's UTC calendar day. The label is plain "today", with no UTC note.
 
@@ -204,10 +196,10 @@ authz:
 2. **Row click** opens the detail page. Row links are styled as links.
 3. **Gmail-style select all** (task tables): the header checkbox selects the current page and shows a banner, "All N on this page are selected. Select all {total} {state} tasks". Once clicked, the banner reads "All {total} {state} tasks are selected. Clear selection", and actions then apply to the whole state through the `*All*` APIs. Not on the Active tab (no `*All*` cancel in asynq).
 4. **Sorting:**
-   - The queues table sorts by any column.
-   - The scheduled, retry, archived and completed task tables sort by their state's time column only, both ways (§6.3). Active, Pending and Aggregating tables do not sort.
-   - Servers: every column except Queues is sortable.
-   - Schedulers: every column except Payload and Options is sortable.
+   - Queues: every column.
+   - Task tables: only the scheduled, retry, archived and completed tables, by their state's time column, both ways (§6.3).
+   - Servers: every column except Queues. Server workers: Started and Running for.
+   - Schedulers: every column except Payload and Options.
    - Sort state lives in the URL query.
 5. **Totals:** the Total row sits in `<tfoot>`.
 6. **Pagination** (task tables): rows per page 20/50/100, "1–20 of 340", ‹ ›. Page and size live in the URL query.
@@ -215,7 +207,7 @@ authz:
 
 ## 6. Pages
 
-URLs follow docs/architecture.md and are shown here without `base_path`. Every link the server generates carries `base_path`, and every path segment (connection, queue, task, server and entry IDs) is escaped with `url.PathEscape`. Every page works without JavaScript for reading. htmx enhances it with polling, partial swaps and selection.
+Paths are shown without `base_path` (§7 "HTTP"). Every page works without JavaScript for reading. htmx enhances it with polling, partial swaps and selection.
 
 ### 6.1 Overview `/`
 - **Heading:** "All connections". A red "N unreachable" badge appears when N > 0.
@@ -237,14 +229,14 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 ### 6.2 Connection → Queues `/c/{conn}`
 - **Header:** "Queues", the address (mono, muted) and a Healthy or Unreachable badge.
 - **Toolbar:** a "Filter queues" input (client-side, by name), a "N selected" label (only while rows are selected), and Pause, Resume and Delete.
-  - Pause and Resume need operator, Delete needs admin. A role that cannot use one gets it disabled with the native `title` "Requires operator" or "Requires admin".
-  - Pause is enabled only if any selected queue is running, and pauses only those; Resume likewise for paused queues. Delete is enabled only when every selected queue is empty (Size 0, which counts completed and aggregating tasks, as asynq reports it); otherwise it is disabled with the native `title` "Queue is not empty".
-  - Delete asks first in a dialog listing the selected queues. Only empty queues can be deleted: the server reads the queue's Size afresh and refuses one above 0, then calls asynq's `DeleteQueue` without force (asynq's own check skips completed and aggregating tasks, whose keys a delete would orphan). A queue with tasks fails with "Queue {name} is not empty". There is no force delete. A queue that gains or loses tasks between the page's last refresh and the click shows that state until the next refresh. An aggregating task enqueued between that fresh Size read and the delete is orphaned; the window is a single round trip.
+  - Pause and Resume need operator, Delete needs admin (§4).
+  - Pause is enabled only if any selected queue is running, and pauses only those; Resume likewise for paused queues. Delete is enabled only when every selected queue is empty (Size 0); otherwise it is disabled with the native `title` "Queue is not empty".
+  - Delete asks first in a dialog listing the selected queues. The server reads the queue's Size afresh and refuses one above 0 with "Queue {name} is not empty", then calls asynq's `DeleteQueue` without force. asynq's own emptiness check skips completed and aggregating tasks, whose keys a delete would orphan, so the Size check comes first. There is no force delete. A queue that gains or loses tasks after the page's last refresh shows its old state until the next one. An aggregating task enqueued between the Size read and the delete is orphaned.
   - Without JS the buttons still post; Delete then answers with a confirmation page. After an action without JS the page redirects back (no re-post on reload), showing any failures as toasts carried in the one-minute `asynqui_flash` cookie.
   - Failures show one toast per queue ("Queue {name} not found", "Queue {name} is not empty", or "Could not pause {name}" with the error in mono). Success just refreshes the table. The selection is kept.
 - **Table:** checkbox, then Queue (link), State (Running/Paused badge), Size, Pending, Active, Scheduled, Retry, Archived, Latency, Memory, Processed today, Failed today.
   - Every column sorts, server-side; default Size desc. A column sorts ascending first for Queue and State, descending for numbers; ties go by name. Sort state is `?sort=&dir=` in the URL.
-  - Latency shows tenths of a second under a minute ("12.6s"), and "—" for a paused queue, which sorts last. Over 30s it is red. Memory is asynq's sampled `QueueInfo.MemoryUsage`, in binary units ("41.8 MB"). Size is asynq's `QueueInfo.Size`, which in asynq v0.26.0 counts every stored task, completed and aggregating ones included.
+  - Latency shows tenths of a second under a minute ("12.6s"), and "—" for a paused queue, which sorts last. Over 30s it is red. Memory is asynq's sampled `QueueInfo.MemoryUsage`, in binary units ("41.8 MB"). Size is asynq's `QueueInfo.Size`, which counts every stored task, completed and aggregating ones included.
   - Retry and Archived are coloured when non-zero, Failed today red when non-zero.
   - The `<tfoot>` Total row sums everything except Latency, which shows "—".
   - Empty state: "No queues".
@@ -266,13 +258,13 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 - **Tabs, each with a count:** Active, Pending (default), Aggregating, Scheduled, Retry, Archived, Completed.
 - **Find task:** a secondary "Find task" button in the header opens a dialog "Find task in {queue}" with one Task ID field. The lookup is `GetTaskInfo(queue, id)`, an exact ID in this queue: a match opens the Task page, a miss shows "Task not found" inline. `/` opens it outside text fields, the field is focused, Enter submits, Escape closes it and focus returns to the button. Without JS the button links to a page with the same form (`/c/{conn}/queues/{queue}/find`).
 - **Table:** checkbox, Task ID (shortened, mono, links to the task), Type, Payload (mono, truncated to one line), then the columns that depend on the tab.
-- **Sort:** on the scheduled, retry, archived and completed tabs the state's time column sorts both ways, server-side, with the existing sort header (`?dir=asc|desc`, `aria-sort`). The link flips the direction, goes back to page 1 and keeps the size; pager links and the rows-per-page select keep the direction; tab links reset it. It works without JS.
+- **Sort:** on the scheduled, retry, archived and completed tabs the state's time column sorts both ways, server-side (`?dir=asc|desc`, `aria-sort`). The link flips the direction, goes back to page 1 and keeps the size; pager links and the rows-per-page select keep the direction; tab links reset it. It works without JS.
   - Scheduled: Process at (asynq's process time), soonest first by default.
   - Retry: Next retry, soonest first by default.
   - Archived: Archived at (when asynq archived it), newest first by default.
   - Completed: Result kept until (asynq orders completed tasks by when their result expires, `CompletedAt` + retention, not by completion time), latest first by default.
   - Pending and Active: asynq's order (oldest first), never sorted; `?dir=` is ignored. Aggregating: asynq's order within a group.
-  - The Inspector cannot list in reverse, so the sorted tabs read Redis directly: one range read of the state's sorted set for the page, then `GetTaskInfo` per row (architecture: "Direct Redis reads"). A task that leaves the state between the two reads is left out, and so is one whose read fails with an error reply (logged as a WARN), so a page may show fewer rows. A queue that is gone or a server that cannot be reached fails the page as usual.
+  - The sorted tabs read one page of the state's sorted set, then `GetTaskInfo` per row ([architecture](architecture.md#data-access-and-redis-load)). A task that leaves the state between the two reads is left out, and so is one whose read fails with an error reply (logged as a WARN), so a page may show fewer rows. A queue that is gone or a server that cannot be reached fails the page as usual.
 
 | Tab | Columns | Bulk actions | "All" actions |
 |---|---|---|---|
@@ -286,12 +278,12 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 | Aggregating, one group | — | Run now, Archive, Delete | Run all, Archive all, Delete all (of the group) |
 
 - **asynq limits:** `TaskInfo` has no enqueue time, so Pending has no time column. Archived at is the task's score in asynq's archived set, read with the page (a task archived by hand has no Last failed time).
-- **Archive:** every Archive and Archive all button is red (danger) and asks first. Its dialog (and the no-JS confirmation page) says: "asynq keeps at most 10,000 archived tasks for 90 days; beyond that, tasks are removed." (asynq v0.26.0 trims the archive to 10,000 tasks and 90 days on every archive.)
+- **Archive:** every Archive and Archive all button is red (danger) and asks first. Its dialog (and the no-JS confirmation page) says: "asynq keeps at most 10,000 archived tasks for 90 days; beyond that, tasks are removed."
 - **Active:** no "select all N" and no "Cancel all" (asynq has no `CancelProcessing` for a state); Cancel sends `CancelProcessing` per selected task.
 
 - **Aggregating tab:** lists groups (`Groups(queue)`) with their sizes, each with a checkbox and a link to the group's tasks (`?state=aggregating&group=`). Empty state: "No aggregating tasks".
   - The toolbar's Run all, Archive all and Delete all act on the selected groups, one asynq `RunAllAggregatingTasks(queue, group)`, `ArchiveAllAggregatingTasks` or `DeleteAllAggregatingTasks` per group, after a dialog ("Run all tasks in the selected groups") listing them; without JS the confirmation page is titled "Run all tasks in {group}" or "Run all tasks in N groups". The notice reports the sum asynq returns; a failing group gets a toast ("Could not run all tasks in {group}").
-  - A group's tasks (`ListAggregatingTasks(queue, group)`) list like any task table, with "Groups / {group}" above the toolbar linking back. Run now, Archive and Delete act on the selection (asynq's `RunTask`, `ArchiveTask`, `DeleteTask`, which accept aggregating tasks though their docs do not say so; kept as in asynqmon), and "select all N" offers the group's Run all, Archive all and Delete all; its copy names the group ("Select all 8 tasks in {group}", "Run all 8 tasks in {group}", empty state "No tasks in {group}"). The pager counts the group's size.
+  - A group's tasks (`ListAggregatingTasks(queue, group)`) list like any task table, with "Groups / {group}" above the toolbar linking back. Run now, Archive and Delete act on the selection (asynq's `RunTask`, `ArchiveTask` and `DeleteTask` accept aggregating tasks, though undocumented), and "select all N" offers the group's Run all, Archive all and Delete all; its copy names the group ("Select all 8 tasks in {group}", "Run all 8 tasks in {group}", empty state "No tasks in {group}"). The pager counts the group's size.
   - Roles: Delete and Delete all need admin, the others operator. Polling and selection follow the other tabs: a poll swaps the group list (or the group's table, banner and pager), never the toolbar or dialogs.
 - **After an action:** an inline result notice ("Archived 12 tasks"). The table refreshes and the selection clears. Failures show one toast per task ("Task {shortId} not found", "Could not run {shortId}" with asynq's error).
 - **Pagination:** a page past the end (tasks moved on) shows the last page, or the first when the state has no tasks.
@@ -317,7 +309,7 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - Missing values show "—".
   - `TaskInfo` has no unique key and no enqueue time, so neither is shown.
 - **Actions** follow asynq: Run now for scheduled, retry, archived and aggregating tasks; Archive for pending, scheduled, retry and aggregating ones; Delete for any but active ones; Cancel for active ones. Archive and Delete ask first in a dialog (Archive with the archive warning, §6.3) and are red. Deleting the task returns to its queue's tab (an aggregating task's group).
-- **Unknown or deleted ID:** shows "Task not found".
+- **Unknown or deleted ID:** shows "Task not found". A task deleted while its page is open shows it on the next poll, and polling stops.
 - **IDs "." and "..":** asynq accepts any custom task ID, but a path segment of `.` or `..` is resolved away by browsers and by Go's router, so such a task has no reachable Task page; it still lists and its actions still work from the Queue page.
 - **Last error "attempt N":** asynq counts a failure in Retried when it schedules a retry, not when it archives. So it is Retried for a retry task, Retried + 1 for an archived one, and for a task run back to pending Retried + 1 when its retries were used up, else Retried.
 
@@ -328,14 +320,14 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - PID
   - State: "Active" or "Stopped", from `ServerInfo.Status`
   - Busy: `n / concurrency` with a small bar
-  - Queues: `name weight` tokens, not sortable
+  - Queues: `name weight` tokens
   - Started: relative
 - **Default sort:** Busy desc.
 - **Empty state:** "No servers running".
 
 ### 6.6 Server detail `/c/{conn}/servers/{id}`
 - **Header:** the host (h1), a state badge, the server ID (mono) with Copy ID. The header is rendered once; polls refresh the badge, the workers and the details.
-- **Active workers ({n}) table:** Task ID (links to the task), Type, Queue, Started (absolute), Running for. Sortable by Started and Running for, default Running for desc. Running for ≥10m is shown amber and semibold.
+- **Active workers ({n}) table:** Task ID (links to the task), Type, Queue, Started (absolute), Running for. Default sort Running for desc. Running for ≥10m is shown amber and semibold.
 - **Details:** PID, Started, Concurrency, Busy, Queues (with weights), Strict priority (Yes/No).
 - **Unknown ID:** shows "Server not found" (404).
 
@@ -345,12 +337,12 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - Entry ID (shortened, a row link)
   - Spec: the cron spec in mono
   - Task type
-  - Payload (mono, a one-line preview cut on the server, not sortable)
-  - Options (`name=value` tokens such as `queue=critical max_retry=3`, not sortable)
+  - Payload (mono, a one-line preview cut on the server)
+  - Options (`name=value` tokens such as `queue=critical max_retry=3`)
   - Next run, Last run: relative, with absolute in the title
 - **Default sort:** Next run asc.
 - **Entry identity:** entries are identified by **entry ID**, which the scheduler regenerates on restart. Duplicate task types are allowed and shown as separate rows.
-- **Pending a user decision:** a muted human description of the spec ("every day at 06:00"). It needs a cron describer (a dependency, or hand-written English in Go), so it is not built.
+- There is no human-readable description of the spec; asynq does not provide one.
 
 ### 6.8 Scheduler entry `/c/{conn}/schedulers/{id}`
 - **Breadcrumb:** ends with the short entry ID.
@@ -362,15 +354,14 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 - **Enqueue history table:**
   - Enqueued at (absolute), newest first
   - Task ID (links to the task while it still exists, otherwise plain text). Existence is checked with `GetTaskInfo` in the entry's queue and reused for 10s; a failed check shows plain text.
-  - Paginated through `ListSchedulerEnqueueEvents`, 20 per page, "21–40" with ‹ ›. asynq keeps the newest 1000 events, so pages past ceil(1000/20) = 50 are out of range: nothing is read and the page links back to the last one.
+  - Paginated through `ListSchedulerEnqueueEvents`, 20 per page, "21–40" with ‹ ›. asynq keeps the newest 1000 events, so a page past the 50th reads nothing and links back to the last one.
 - **Details:** Spec, Queue, Options (without the queue), Next run and Last run (absolute, then the muted relative time).
 - **Queue:** the entry's `Queue` option. **asynq limitation:** a queue set on the task itself (`asynq.NewTask(…, asynq.Queue("x"))`) is not recorded in the entry, so an entry without a `Queue` option has an unknown queue. It shows "—" (never "default"), and its history task IDs are not linked.
 - **Stale or unknown ID:** shows "Entry not found" (404) with a link back to Schedulers.
-- **Dropped (no asynq API):**
-  - History **Status** and **Error** columns: an asynq enqueue event holds only the task ID and the time, and failed enqueues are not recorded.
-  - **Sortable Enqueued at:** asynq lists events newest first and gives no count, so oldest first would mean reading all 1000.
-  - **Scheduler (host + pid):** an asynq scheduler entry does not carry its scheduler's host or PID.
-  - The spec description is pending (§6.7).
+- **Not shown (asynq has no data for them):**
+  - History **Status** and **Error**: an enqueue event holds only the task ID and the time, and failed enqueues are not recorded.
+  - **Sorting by Enqueued at:** asynq lists events newest first and gives no count.
+  - **Scheduler host and PID:** an entry does not carry them.
 
 ### 6.9 Redis / Valkey info `/c/{conn}/info`
 - **Title:** "Redis info" or "Valkey info", per §2, with the address underneath.
@@ -382,7 +373,7 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
   - Used memory / peak (with maxmemory underneath)
   - maxmemory-policy
   - Keyspace db{n}: keys, plus "with expiry" underneath
-  - TLS: On/Off, plus the version of the last handshake (recorded by `tls.Config.VerifyConnection`) and whether the server certificate is verified underneath
+  - TLS: On/Off, plus the version of the last handshake and whether the server certificate is verified underneath
   - ACL user ("default" when none is configured)
 - **Instance-wide values:** memory, clients and uptime belong to the whole instance. They appear **only** on this page, never on the Overview or Queues pages, because several connections can share one instance.
 - **Raw INFO card:** the `INFO` output in a code block (height-capped) with a copy button. The Keyspace and Keysizes lines of other DBs are left out, since other connections may own them. Polls refresh the cards only; the raw block is the page load's snapshot.
@@ -393,7 +384,7 @@ URLs follow docs/architecture.md and are shown here without `base_path`. Every l
 ### Command line
 - A single static binary.
 - **Flags:** `-config`, `-addr`, `-log-level`, `-version`. `-h` prints usage to stderr and exits 0. `-version` prints `asynqui {version}` to stdout and exits 0 without reading the config.
-- **Version:** stamped at build time into `main.version` (`-ldflags "-X main.version=…"`): GoReleaser writes the tag without its `v` (`0.1.0`), `task build` writes `git describe` output. Without `-ldflags` the version is the main module version the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none (`go run`, `(devel)`).
+- **Version:** release builds report the tag without its `v` (`0.1.0`), `task build` the `git describe` output. A build without a stamped version reports the module version the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none (`go run`).
 - **Exit codes:** 0 after a clean shutdown, `-h` or `-version`; 1 on a startup, serve or shutdown error (message on stderr); 2 on a usage error (unknown flag or positional argument).
 
 ### Precedence
@@ -424,7 +415,7 @@ On the first SIGINT or SIGTERM:
 4. `http.Server.Shutdown` with a **10s** timeout: the listener closes and in-flight requests finish. Request contexts are not canceled by the signal.
 5. If the timeout expires, remaining connections are force-closed and the process exits 1.
 
-`shutdown_delay` + 10s must stay below the orchestrator's grace period (Kubernetes `terminationGracePeriodSeconds`; the default 30s fits the default 15s). See [deployment.md](deployment.md).
+`shutdown_delay` + 10s must stay below the orchestrator's grace period ([deployment.md](deployment.md#graceful-shutdown)).
 
 ### Probes
 Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control: no-store`, live under `<base>/health/` and are excluded from request logs.
@@ -433,10 +424,11 @@ Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control:
 
 ### HTTP
 - **Base path:** `server.base_path` applies to every route, including `/health/*` and `/static/`, to cookie paths and to every redirect. Requests outside it get 404.
+- **Paths:** every generated link carries `base_path`, and every path segment (connection, queue, task, server and entry IDs) is escaped with `url.PathEscape`.
 - **Server timeouts:** read header 10s, read 30s, write 60s, idle 120s.
 - **Security headers** on every response:
   - `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'`. There is no `unsafe-inline` or `unsafe-eval`, so templates have no inline `<script>`, `<style>` or `style=""`.
-  - `form-action 'self'` also covers the redirects of a form submission, so no form may lead off-origin: SSO sign-in and proxy sign-out are links (§3).
+  - `form-action 'self'` also covers the redirects of a form submission, so no form may lead off-origin: SSO sign-in and proxy sign-out are links.
   - `X-Content-Type-Options: nosniff`
   - `Referrer-Policy: same-origin`
   - `Cross-Origin-Opener-Policy: same-origin`
@@ -444,18 +436,17 @@ Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control:
 - **Errors:** unknown paths get 404. Error responses are never cached (`Cache-Control: no-store`). For a signed-in page request they are a page inside the layout (breadcrumb `Overview / Not found`); for htmx and non-GET requests plain text; without an identity a standalone page with no sidebar, so connection names are never shown to strangers.
 - **Preference cookies** (`asynqui_theme`, `asynqui_refresh`): `Path=<base_path>`, one year, `SameSite=Lax`, `Secure` per `auth.session.cookie_secure`, readable by `app.js`.
 - **Flash cookie** (`asynqui_flash`): the failures of an action posted without JS, for the page after its redirect. `Path=<base>/c/{conn}`, 60s, `HttpOnly`, `SameSite=Lax`, `Secure` per `cookie_secure`; read once, then cleared. It holds display text only and is not signed.
-- **CSRF:** `http.CrossOriginProtection` on every unsafe method. Extra allowed origins come from `server.trusted_origins` (each is passed to `AddTrustedOrigin`; an invalid origin fails startup). The proxy must preserve the `Host` header ([deployment.md](deployment.md)).
+- **CSRF:** `http.CrossOriginProtection` on every unsafe method. Extra allowed origins come from `server.trusted_origins`; an invalid origin fails startup. The proxy must preserve the `Host` header ([deployment.md](deployment.md#preserve-host)).
 - **Panics and render failures:** recovered, logged (panics with the stack), answered with 500 "Something went wrong" unless the response has already started.
 
 ### Logging
-- Structured JSON via `log/slog` to stdout. Level from §7 "Precedence".
+- Structured JSON to stdout. Level from §7 "Precedence".
 - One line per request (method, path, status, duration), except probes.
 - Secrets (passwords, keys, client secret, cookies, tokens) are never logged.
 
 ### Redis load
 - Each connection has a cache with a **1s TTL** that coalesces concurrent fetches, per snapshot. Every viewer shares the same fetches, whatever the number of viewers or their refresh interval.
 - Connections are fetched in parallel. One slow or failing connection never blocks a page.
-- Polling "Off" sends no polling requests at all.
 
 ### Update check
 - With `update_check: true` and a release version, the server sends `GET https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h, until shutdown starts. A release version is a semantic version without a prerelease part: `dev`, release candidates (`0.2.0-rc.1`), `git describe` or dirty builds from `task build` (`v0.1.0-3-gabc1234-dirty`) and pseudo-versions never check.
@@ -464,11 +455,9 @@ Both need no auth, return `text/plain` (`ok` or the reason) with `Cache-Control:
 - Drafts, prereleases and tags that are not a semantic version without a prerelease part are ignored. A release newer than the running version (by major, minor, patch) is remembered by its tag and logged once at info; an equal or older one clears it. The footer links to `https://github.com/BarkinBalci/asynqui/releases/tag/{tag}`, with the tag path-escaped.
 
 ### Releases
-- A tag matching `v[0-9]+.[0-9]+.[0-9]+*` runs `.github/workflows/release.yml`: a `test` job (`contents: read`, `go test -race`), then a `goreleaser` job that needs it (`contents: write` and `packages: write` only) and runs GoReleaser (`.goreleaser.yaml`). The concurrency group `release` runs one release at a time and never cancels one halfway.
-- Releases come only from the main line; there are no backport releases ([contributing.md](contributing.md#releases)).
-- Binaries: linux, darwin and windows on amd64 and arm64, `CGO_ENABLED=0`, `-trimpath`, `-s -w`. Archives (`tar.gz`, `zip` on Windows) include LICENSE, README.md and config.example.yaml, with `checksums.txt` (SHA-256). Builds and archives are reproducible: file times are the tagged commit's, and archive entries are owned by root with fixed modes.
-- The changelog in the GitHub release is grouped by conventional-commit prefix (features, fixes, performance, documentation, other); `test:`, `ci:`, `chore:` and `build:` commits are left out. Tags with a prerelease part are published as GitHub prereleases.
-- Image: `ghcr.io/barkinbalci/asynqui` for linux/amd64 and linux/arm64 on distroless `static-debian12:nonroot` (pinned by digest), tagged `{version}`, `{major}.{minor}` and `latest` (prereleases only `{version}`). The binary is copied with mode 0555; its `created` label is the commit date. It runs as UID 65532, exposes 8080, sets `ASYNQUI_CONFIG=/etc/asynqui/config.yaml`, and has no `HEALTHCHECK` (no shell; use the probes).
+- Each release publishes static binaries for linux, darwin and windows on amd64 and arm64, as archives (`tar.gz`, `zip` on Windows) with LICENSE, README.md and config.example.yaml, plus `checksums.txt` (SHA-256), and the container image ([deployment.md](deployment.md#container-image)). Builds and archives are reproducible.
+- Tags with a prerelease part are published as GitHub prereleases.
+- How to cut a release: [contributing.md](contributing.md#releases).
 
 ## 8. Configuration
 
@@ -498,7 +487,7 @@ YAML, path from §7 "Precedence". [config.example.yaml](../config.example.yaml) 
 | `server.trusted_origins` | `[]` | Origins like `https://ops.example.com`. |
 | `log.level` | `info` | `debug`, `info`, `warn`, `error`. |
 | `refresh.default` | `5s` | `off`, `2s`, `5s`, `10s`. Initial auto-refresh for visitors without the cookie. |
-| `update_check` | `true` | GitHub release check at startup and every 24h, fails silently (§7 "Update check"). |
+| `update_check` | `true` | §7 "Update check". |
 | `connections` | — | Required, at least one. |
 | `connections[].name` | — | Required, unique, `^[a-z0-9][a-z0-9._-]{0,62}$`. |
 | `connections[].addr` | — | Required, `host:port`. |

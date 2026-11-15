@@ -1,16 +1,16 @@
 # Deploying asynqui
 
-Behaviour is specified in [requirements.md](requirements.md) (§7 Operational, §8 Configuration). This page covers what the deployment around asynqui must get right.
+What the deployment around asynqui must get right. Behaviour and every config key are in [requirements.md](requirements.md).
 
 ## Container image
 
 `ghcr.io/barkinbalci/asynqui` is multi-arch (linux/amd64, linux/arm64) and built on `gcr.io/distroless/static-debian12:nonroot`. Tags: the exact version (`0.1.0`), `0.1` and `latest`; prereleases get only their exact version. Pin the exact version in production.
 
 - Runs as UID/GID 65532 and listens on 8080.
-- Reads its config from `/etc/asynqui/config.yaml` (set through `ASYNQUI_CONFIG`; `-config` overrides it). Mount the file read-only.
-- UID 65532 must be able to read it: mode `0644`, or `0640` with group 65532. On SELinux hosts add `:z` to the bind mount (`-v "$PWD/asynqui.yaml:/etc/asynqui/config.yaml:ro,z"`). On Kubernetes, ConfigMap volumes are world-readable by default; for a Secret with a restrictive `defaultMode`, set `fsGroup: 65532` in the pod's `securityContext`.
+- Reads its config from `/etc/asynqui/config.yaml` (`ASYNQUI_CONFIG`; `-config` overrides it). Mount the file read-only.
+- UID 65532 must be able to read it: mode `0644`, or `0640` with group 65532. On SELinux hosts add `:z` to the bind mount. For a Kubernetes Secret with a restrictive `defaultMode`, set `fsGroup: 65532`.
 - Flags go after the image name, e.g. `docker run ... ghcr.io/barkinbalci/asynqui:0.1.0 -log-level debug`.
-- There is no shell, so there is no Docker `HEALTHCHECK`. Use the HTTP probes below; Docker Compose users can probe from another container or rely on the orchestrator.
+- There is no shell, so there is no Docker `HEALTHCHECK`. Use the HTTP probes.
 
 ## Kubernetes example
 
@@ -45,15 +45,14 @@ metadata:
   name: asynqui
   labels: { app: asynqui }
 spec:
-  replicas: 2 # stateless: sessions live in the cookie, so replicas need only the same config
+  replicas: 2 # stateless: replicas need only the same config
   selector:
     matchLabels: { app: asynqui }
   template:
     metadata:
       labels: { app: asynqui }
     spec:
-      # Must exceed shutdown_delay (5s) + the 10s shutdown timeout.
-      terminationGracePeriodSeconds: 30
+      terminationGracePeriodSeconds: 30 # see Graceful shutdown
       securityContext:
         runAsNonRoot: true
         seccompProfile: { type: RuntimeDefault }
@@ -76,7 +75,7 @@ spec:
           readinessProbe:
             httpGet: { path: /health/readiness, port: http }
             periodSeconds: 2
-            failureThreshold: 2 # 2 × 2s stays under shutdown_delay
+            failureThreshold: 2
           resources:
             requests: { cpu: 10m, memory: 32Mi }
             limits: { memory: 128Mi }
@@ -102,26 +101,21 @@ spec:
 
 ## Probes
 
-Probe paths include `server.base_path`: with `base_path: /asynq` they are `/asynq/health/liveness` and `/asynq/health/readiness`.
-
-- `/health/liveness` answers 200 whenever the process serves HTTP.
-- `/health/readiness` answers 200 while serving and 503 from the start of shutdown.
-
-Readiness never depends on Redis, so a Redis outage does not unroute or restart replicas.
+`/health/liveness` and `/health/readiness` ([requirements §7](requirements.md#probes)) live under `server.base_path`: with `base_path: /asynq` they are `/asynq/health/liveness` and `/asynq/health/readiness`. Neither depends on Redis, so a Redis outage does not unroute or restart replicas.
 
 ## Graceful shutdown
 
-On SIGTERM asynqui turns readiness 503, keeps serving for `server.shutdown_delay` (default 5s), then shuts down with a 10s timeout. A second SIGTERM or SIGINT force-quits.
+On SIGTERM asynqui turns readiness 503, keeps serving for `server.shutdown_delay`, then shuts down with a 10s timeout ([requirements §7](requirements.md#shutdown)).
 
-- **`terminationGracePeriodSeconds` must exceed `shutdown_delay` + 10s.** The Kubernetes default of 30s fits the default 15s. If you raise `shutdown_delay`, raise the grace period too.
+- **`terminationGracePeriodSeconds` must exceed `shutdown_delay` + 10s.** If you raise `shutdown_delay`, raise the grace period too.
 - `shutdown_delay` should be at least readiness `periodSeconds` × `failureThreshold` plus your load balancer's deregistration lag, so no new requests arrive after the listener closes.
-- Set `shutdown_delay: 0` only when nothing routes by readiness (e.g. a single local instance).
+- Set `shutdown_delay: 0` only when nothing routes by readiness.
 
 ## Reverse proxy
 
 ### Preserve Host
 
-CSRF protection (`http.CrossOriginProtection`) compares the browser's `Origin` with the request's `Host`. The proxy must pass the original `Host` header through (nginx: `proxy_set_header Host $host;`; most ingress controllers do this by default). If the UI is reached under a different origin than the Host asynqui sees, list that origin in `server.trusted_origins`.
+CSRF protection compares the browser's `Origin` with the request's `Host`, so the proxy must pass the original `Host` header through (nginx: `proxy_set_header Host $host;`). If the UI is reached under a different origin than the Host asynqui sees, list that origin in `server.trusted_origins`.
 
 ### Sub-path
 
@@ -129,7 +123,7 @@ With `server.base_path: /asynq`, forward `/asynq/...` **without** stripping the 
 
 ### `auth.provider: proxy`
 
-asynqui trusts identity headers only when the TCP peer (`r.RemoteAddr`) is in `auth.proxy.trusted_proxies`. `X-Forwarded-For` is never used. Both of the following are required, not optional:
+asynqui trusts identity headers only when the TCP peer is in `auth.proxy.trusted_proxies` ([requirements §3](requirements.md#proxy)). Both of the following are required:
 
 1. **Strip client-supplied identity headers at the proxy.** The proxy must remove any incoming `user_header` and `groups_header` from the client request before setting its own. Otherwise a user can send `X-Forwarded-User: admin` through the trusted proxy.
 
@@ -158,31 +152,26 @@ asynqui trusts identity headers only when the TCP peer (`r.RemoteAddr`) is in `a
            - port: 8080
    ```
 
-   The kubelet's probes are not affected by this policy on most CNIs; check yours.
-
-Requests from an untrusted address that carry identity headers get 401, as do trusted requests with an empty user header.
+   Check that your CNI still lets the kubelet's probes through.
 
 ### `auth.provider: basic`
 
-The login rate limit (a burst of 5 attempts, then 1 every 12s) is keyed by `r.RemoteAddr`. Behind a proxy every user shares the proxy's address, so one user's failed attempts can lock out others until it refills.
+The login rate limit ([requirements §3](requirements.md#basic)) counts per TCP peer address as well as per username. Behind a proxy every user shares the proxy's address, so one user's failed attempts can lock out the others.
 
 ## Cookies and TLS
 
 - Serve over HTTPS. Session cookies are `Secure` unless `auth.session.cookie_secure: false`, which is only for local plain HTTP.
 - Generate keys with `openssl rand -hex 32` and pass them through environment variables (`hash_key: ${ASYNQUI_SESSION_HASH_KEY}`).
-- Sessions cannot be revoked server-side. To sign everyone out, rotate the keys without keeping the old pair in `previous_keys`. To rotate without signing anyone out, move the old pair to `previous_keys` and remove it after `ttl` (default 12h).
+- Sessions cannot be revoked server-side. To sign everyone out, rotate the keys without keeping the old pair in `previous_keys`. To rotate without signing anyone out, move the old pair to `previous_keys` and remove it after `ttl`.
 
 ## `auth.provider: none`
 
-Everyone gets `authz.default` (viewer unless set). asynqui logs a WARN at startup when it listens on a non-loopback address with no authentication. Put it behind something that authenticates, or bind it to `127.0.0.1`.
+There is no login, and everyone gets `authz.default`. Put asynqui behind something that authenticates, or bind it to `127.0.0.1`.
 
 ## Update check
 
-With `update_check: true` (the default), a release build asks `https://api.github.com/repos/BarkinBalci/asynqui/releases/latest` at startup and then every 24h. A newer release puts a dot next to the version in the sidebar, linking to its release notes.
+A release build asks GitHub for the latest release at startup and then daily, and shows a dot next to the version in the sidebar when a newer one exists. What it sends and when is in [requirements §7](requirements.md#update-check).
 
-- The request is made by the server, not the browser, so the CSP does not change. It needs egress to `api.github.com:443` and honours `HTTPS_PROXY`.
-- It sends no credentials, config, connection names or user data. GitHub sees the server's IP address (or its egress proxy's) and the asynqui version, from `User-Agent: asynqui/<version>`.
-- Failures (no egress, rate limits, the 5s timeout) are logged at debug level and change nothing. Drafts, prereleases and non-semver tags are ignored.
-- Builds without a release version never check: `dev` and pseudo-versions from `go run` or `go build`, release candidates, and `task build` output from an untagged or dirty tree.
-
-Set `update_check: false` to disable it, e.g. in air-gapped clusters or where egress is restricted.
+- The server makes the request. It needs egress to `api.github.com:443` and honours `HTTPS_PROXY`.
+- Failures are logged at debug level and change nothing.
+- Set `update_check: false` to disable it, e.g. where egress is restricted.
