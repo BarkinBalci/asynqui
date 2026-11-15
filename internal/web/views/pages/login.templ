@@ -1,0 +1,106 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// LoginError says why the last sign-in failed; the page maps it to text.
+type LoginError int
+
+// Login errors, one per auth.Failure.
+const (
+	LoginOK LoginError = iota
+	LoginBadRequest
+	LoginInvalidCredentials
+	LoginTooManyAttempts
+	LoginSSOFailed
+	LoginSessionTooLarge
+	LoginInternal
+)
+
+// loginErrorID ties the error message to the fields it is about.
+const loginErrorID = "login-error"
+
+// Login is the sign-in page. Basic shows the username/password form; oidc
+// shows "Sign in with SSO", a link to SSOURL (a navigation, not a form, so
+// the CSP form-action 'self' does not block the redirect to the IdP).
+type Login struct {
+	Doc       views.Doc
+	ActionURL string
+	SSOURL    string
+	Next      string
+	Basic     bool
+	SSO       bool
+	Error     LoginError
+	Version   string
+}
+
+templ loginTitle() {
+	Sign in
+}
+
+templ LoginPage(m Login) {
+	@views.Document(m.Doc, loginTitle()) {
+		<div class="login">
+			<main class="login-card" id={ components.ContentID } tabindex="-1">
+				<h1 class="login-head">
+					@components.Logo("24")
+					@components.Wordmark()
+				</h1>
+				if m.Basic {
+					<form class="login-form" method="post" action={ templ.SafeURL(m.ActionURL) }>
+						<input type="hidden" name="next" value={ m.Next }/>
+						<label class="field">
+							Username
+							<input id="login-username" type="text" name="username" autocomplete="username" required autofocus { fieldAttrs(m.Error)... }/>
+						</label>
+						<label class="field">
+							Password
+							<input id="login-password" type="password" name="password" autocomplete="current-password" required { fieldAttrs(m.Error)... }/>
+						</label>
+						@loginError(m.Error)
+						<button class="btn primary" type="submit">Sign in</button>
+					</form>
+				}
+				if m.SSO {
+					<div class="login-form">
+						@loginError(m.Error)
+						<a class="btn" href={ templ.SafeURL(m.SSOURL) }>Sign in with SSO</a>
+					</div>
+				}
+			</main>
+			<div class="login-version">{ m.Version }</div>
+		</div>
+	}
+}
+
+// fieldAttrs marks the fields invalid and points them at the message after
+// a failed sign-in.
+func fieldAttrs(e LoginError) templ.Attributes {
+	if e == LoginOK {
+		return nil
+	}
+	return templ.Attributes{"aria-invalid": "true", "aria-describedby": loginErrorID}
+}
+
+templ loginError(e LoginError) {
+	if e != LoginOK {
+		<div id={ loginErrorID } class="alert" role="alert">
+			switch e {
+				case LoginBadRequest:
+					Invalid request. Try again.
+				case LoginInvalidCredentials:
+					Invalid username or password.
+				case LoginTooManyAttempts:
+					Too many attempts. Try again later.
+				case LoginSSOFailed:
+					Single sign-on failed.
+				case LoginSessionTooLarge:
+					Sign-in failed: too many groups for a session cookie.
+				default:
+					Sign-in failed. Try again.
+			}
+		</div>
+	}
+}

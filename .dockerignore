@@ -1,0 +1,10 @@
+.git
+.github
+.claude
+bin
+dist
+*.test
+*.out
+coverage.*
+asynqui.yaml
+.env

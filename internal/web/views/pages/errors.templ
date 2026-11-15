@@ -1,0 +1,76 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// lastCrumb is a page's last breadcrumb: its heading and title.
+templ lastCrumb(l views.Layout) {
+	if n := len(l.TopBar.Crumbs); n > 0 {
+		@components.CrumbLabel(l.TopBar.Crumbs[n-1])
+	}
+}
+
+// ErrorKind is an error page's cause.
+type ErrorKind int
+
+// Error pages.
+const (
+	ErrorNotFound ErrorKind = iota
+	ErrorForbidden
+	ErrorInternal
+)
+
+// Error is a full-page error inside the app shell, for signed-in users.
+// The handler ends the breadcrumbs with an ErrorCrumb.
+type Error struct {
+	Layout views.Layout
+	Kind   ErrorKind
+}
+
+templ ErrorPage(m Error) {
+	@views.Page(m.Layout, ErrorTitle(m.Kind)) {
+		<div class="page-head">
+			<h1 class="h1">
+				@ErrorTitle(m.Kind)
+			</h1>
+		</div>
+	}
+}
+
+// ErrorDocument is a standalone error page without the app shell: for
+// requests without an identity (the sidebar would list connections) and
+// for failures before or while the shell renders (panics, render errors).
+templ ErrorDocument(d views.Doc, kind ErrorKind, homeURL string) {
+	@views.Document(d, ErrorTitle(kind)) {
+		<div class="login">
+			<main class="login-card" id={ components.ContentID } tabindex="-1">
+				<div class="login-head">
+					@components.Logo("24")
+					@components.Wordmark()
+				</div>
+				<div class="login-form">
+					<h1 class="h1">
+						@ErrorTitle(kind)
+					</h1>
+					<a href={ templ.SafeURL(homeURL) }>
+						@components.SectionName(components.SectionOverview, false)
+					</a>
+				</div>
+			</main>
+		</div>
+	}
+}
+
+// ErrorTitle is an error page's heading, title and last breadcrumb.
+templ ErrorTitle(k ErrorKind) {
+	switch k {
+		case ErrorForbidden:
+			Forbidden
+		case ErrorInternal:
+			Something went wrong
+		default:
+			Not found
+	}
+}

@@ -1,0 +1,159 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// InfoPage is the Redis / Valkey info page. Polls refresh the cards only, so
+// they never reset the raw INFO's scroll position or a text selection in it.
+templ InfoPage(m Info) {
+	@views.Page(m.Layout, lastCrumb(m.Layout)) {
+		<div id={ InfoPageID } class="content-region" hx-sync="this:queue last">
+			@livePoll(m.Live, false)
+			<div class="head-title">
+				<h1 class="h1">
+					@components.SectionName(components.SectionInfo, m.Valkey)
+				</h1>
+				<span class="mono muted">{ m.Addr }</span>
+			</div>
+			@liveBanner(m.Live, infoFailed(), false)
+			@infoCards(m, false)
+			@infoRaw(m, false)
+		</div>
+	}
+}
+
+// InfoPoll answers a poll, out of band. Only a poll from a page without
+// data also gets the raw INFO.
+templ InfoPoll(m Info) {
+	@livePoll(m.Live, true)
+	@liveBanner(m.Live, infoFailed(), true)
+	if !m.Live.Keep {
+		@infoCards(m, true)
+		if !m.Live.Poll || m.Live.Init {
+			@infoRaw(m, true)
+		}
+	}
+	@liveTail(m.Layout)
+}
+
+templ infoCards(m Info, oob bool) {
+	<div id={ InfoCardsID } { components.OOB(oob)... }>
+		if m.Live.State != DataReady {
+			<div class="card">
+				@liveData(m.Live, infoFailed())
+			</div>
+		} else {
+			<section class="info-grid" aria-label="Summary">
+				@infoCard() {
+					<span class="info-l">Version</span>
+					if m.Valkey {
+						<span class="info-v">Valkey { m.Data.Version }</span>
+						<span class="info-n">Redis-compatible { m.Data.RedisVersion }</span>
+					} else {
+						<span class="info-v">Redis { m.Data.Version }</span>
+					}
+				}
+				@infoCard() {
+					<span class="info-l">Mode</span>
+					<span class="info-v">{ dash(m.Data.Mode) }</span>
+				}
+				@infoCard() {
+					<span class="info-l">Uptime</span>
+					<span class="info-v">{ format.Uptime(m.Data.Uptime) }</span>
+				}
+				@infoCard() {
+					<span class="info-l">Connected clients</span>
+					<span class="info-v">{ format.Number(m.Data.ConnectedClients) }</span>
+				}
+				@infoCard() {
+					<span class="info-l">Used memory / peak</span>
+					<span class="info-v">{ format.Bytes(m.Data.UsedMemory) } / { format.Bytes(m.Data.UsedMemoryPeak) }</span>
+					if m.Data.MaxMemory > 0 {
+						<span class="info-n">maxmemory { format.Bytes(m.Data.MaxMemory) }</span>
+					} else {
+						<span class="info-n">No maxmemory</span>
+					}
+				}
+				@infoCard() {
+					<span class="info-l">maxmemory-policy</span>
+					<span class="info-v info-mono mono">{ dash(m.Data.MaxMemoryPolicy) }</span>
+				}
+				@infoCard() {
+					<span class="info-l">Keyspace db{ format.Int(m.Data.DB) }</span>
+					<span class="info-v">
+						{ format.Number(m.Data.Keys) }
+						if m.Data.Keys == 1 {
+							key
+						} else {
+							keys
+						}
+					</span>
+					<span class="info-n">{ format.Number(m.Data.Expires) } with expiry</span>
+				}
+				@infoCard() {
+					<span class="info-l">TLS</span>
+					if m.Data.TLS {
+						<span class="info-v">On</span>
+						<span class="info-n">
+							if v := format.TLSVersion(m.Data.TLSVersion); v != "" {
+								{ v },{ " " }
+								if m.Data.TLSVerified {
+									server cert verified
+								} else {
+									server cert not verified
+								}
+							} else if m.Data.TLSVerified {
+								Server cert verified
+							} else {
+								Server cert not verified
+							}
+						</span>
+					} else {
+						<span class="info-v">Off</span>
+					}
+				}
+				@infoCard() {
+					<span class="info-l">ACL user</span>
+					if m.Data.Username == "" {
+						<span class="info-v info-mono mono">default</span>
+					} else {
+						<span class="info-v info-mono mono">{ m.Data.Username }</span>
+					}
+				}
+			</section>
+		}
+	</div>
+}
+
+templ infoCard() {
+	<div class="info-card">
+		{ children... }
+	</div>
+}
+
+templ infoRaw(m Info, oob bool) {
+	<div id={ InfoRawID } { components.OOB(oob)... }>
+		if m.Live.State == DataReady {
+			<section class="card raw-card" aria-labelledby="raw-title">
+				<div class="cardhead">
+					<h2 class="card-title" id="raw-title">Raw INFO</h2>
+				</div>
+				if m.Valkey {
+					@components.CodeBlock(RawInfoID, m.Data.Raw, "Raw Valkey INFO output", "Copy INFO")
+				} else {
+					@components.CodeBlock(RawInfoID, m.Data.Raw, "Raw Redis INFO output", "Copy INFO")
+				}
+			</section>
+		}
+	</div>
+}
+
+func dash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}

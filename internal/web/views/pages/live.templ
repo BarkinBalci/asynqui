@@ -1,0 +1,194 @@
+package pages
+
+import (
+	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// livePoll is a Live page's poll trigger. Its own hx-sync drops it while
+// another request of the page is in flight and lets a user request abort
+// it. Without a PollURL the page has stopped polling.
+templ livePoll(l Live, oob bool) {
+	if l.PollURL == "" {
+		<div id={ l.PollID } hidden { components.OOB(oob)... }></div>
+	} else {
+		<div id={ l.PollID } data-poll hx-get={ l.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-sync={ "#" + l.PageID + ":abort" } hidden { components.OOB(oob)... }></div>
+	}
+}
+
+// liveBanner shows why a poll that kept the data has none; empty
+// otherwise. failed is the title of a read that failed with an error
+// reply (the connection is up).
+templ liveBanner(l Live, failed templ.Component, oob bool) {
+	<div id={ bannerID(l) } class="state-banner" { components.OOB(oob)... }>
+		if l.Keep {
+			<div class="card">
+				@liveData(l, failed)
+			</div>
+		}
+	</div>
+}
+
+// liveData is the page's data, or why there is none: "Connection failed"
+// when the server could not be reached, failed (with the error) when it
+// answered with an error, or "Checking".
+templ liveData(l Live, failed templ.Component) {
+	switch l.State {
+		case DataFailed:
+			if l.Down {
+				@errorBox(connFailed(), l.Error)
+			} else {
+				@errorBox(failed, l.Error)
+			}
+		case DataChecking:
+			<p class="checking">Checking</p>
+		default:
+			{ children... }
+	}
+}
+
+// liveBody is a detail page's body: why there is no data yet (under
+// heading, if any), notFound as the heading when the item is gone, or the
+// item itself (children).
+templ liveBody(id string, l Live, found bool, heading, notFound, failed templ.Component, oob bool) {
+	<div id={ id } class="content-region" { components.OOB(oob)... }>
+		if l.State != DataReady {
+			if heading != nil {
+				<div class="page-head">
+					<h1 class="h1 h1-mono mono">
+						@heading
+					</h1>
+				</div>
+			}
+			<div class="card">
+				@liveData(l, failed)
+			</div>
+		} else if !found {
+			<div class="page-head">
+				<h1 class="h1">
+					@notFound
+				</h1>
+			</div>
+		} else {
+			{ children... }
+		}
+	</div>
+}
+
+func bannerID(l Live) string {
+	if l.BannerID != "" {
+		return l.BannerID
+	}
+	return LiveStateID
+}
+
+// errorBox is a failed read: its title and the error text.
+templ errorBox(title templ.Component, msg string) {
+	<div class="conn-error page-error">
+		<div class="conn-error-title">
+			@components.IconAlert("16")
+			@title
+		</div>
+		<div class="mono conn-error-text">{ msg }</div>
+	</div>
+}
+
+// Titles of a failed read: one that could not reach the server, then
+// those that failed with an error reply.
+templ connFailed() {
+	Connection failed
+}
+
+templ queuesFailed() {
+	Could not load queues
+}
+
+templ serversFailed() {
+	Could not load servers
+}
+
+templ entriesFailed() {
+	Could not load scheduler entries
+}
+
+templ infoFailed() {
+	Could not read INFO
+}
+
+// liveTail are the regions every answer replaces after the page's own.
+templ liveTail(l views.Layout) {
+	@components.TimeID(components.UpdatedID, l.TopBar.UpdatedAt, true)
+	@components.SidebarConnList(l.Sidebar, true)
+}
+
+// backLink is the "← Servers" style link above a detail page's heading.
+templ backLink(id, url string, s components.Section) {
+	<a id={ id } class="back-link" href={ templ.SafeURL(url) }>
+		@components.IconBack("16")
+		@components.SectionName(s, false)
+	</a>
+}
+
+// queueTokens are a server's queues with their weights. The spaces
+// between tokens are for copying and assistive technology; the flex gap
+// spaces them on screen.
+templ queueTokens(qs []QueueToken) {
+	<span class="tokens">
+		for i, q := range qs {
+			if i > 0 {
+				{ " " }
+			}
+			<span>{ q.Name } <span class="muted">{ format.Number(q.Weight) }</span></span>
+		}
+	</span>
+}
+
+// optionTokens are an entry's options as name=value, space separated.
+templ optionTokens(opts []OptionToken) {
+	<span class="tokens mono">
+		for i, o := range opts {
+			if i > 0 {
+				{ " " }
+			}
+			<span>{ o.Name }={ o.Value }</span>
+		}
+	</span>
+}
+
+templ serverStatus(r ServerRow) {
+	switch r.Status {
+		case StatusActive:
+			@components.Badge(components.ToneOK) {
+				Active
+			}
+		case StatusStopped:
+			@components.Badge(components.ToneWarn) {
+				Stopped
+			}
+		default:
+			@components.Badge(components.ToneNeutral) {
+				{ r.StatusText }
+			}
+	}
+}
+
+templ busy(r ServerRow, wide bool) {
+	<span class={ "busy-cell", templ.KV("busy-wide", wide) }>
+		<span class="num busy-num">{ format.Number(r.Busy) } / { format.Number(r.Concurrency) }</span>
+		@components.BusyBar(r.Busy, r.Concurrency)
+	</span>
+}
+
+// runTime is an absolute time with the muted relative one after it,
+// "Nov 9, 06:00:00 (in 5h 45m)", or "—" for the zero time. The relative
+// text is written against now so it reads right before app.js runs.
+templ runTime(t, now time.Time) {
+	if t.IsZero() {
+		<span class="muted">—</span>
+	} else {
+		@components.TimeWithRel(t, format.Relative(t, now))
+	}
+}

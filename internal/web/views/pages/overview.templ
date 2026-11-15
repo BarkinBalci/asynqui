@@ -1,0 +1,75 @@
+package pages
+
+import (
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// Overview is the "All connections" page.
+type Overview struct {
+	Layout views.Layout
+	Cards  []components.ConnCard
+	// PollURL is fetched with HX-Request to refresh the cards.
+	PollURL string
+}
+
+// Unreachable counts the cards whose connection is down.
+func (m Overview) Unreachable() int {
+	n := 0
+	for _, c := range m.Cards {
+		if c.Health == components.HealthDown {
+			n++
+		}
+	}
+	return n
+}
+
+templ overviewTitle() {
+	All connections
+}
+
+// OverviewPage is the full page. The card grid polls with hx-swap none and the
+// answer replaces its parts out of band by id, so focus survives.
+// hx-disinherit keeps the cards' own forms from inheriting the grid's htmx
+// attributes.
+templ OverviewPage(m Overview) {
+	@views.Page(m.Layout, overviewTitle()) {
+		<div class="page-head">
+			<h1 class="h1">
+				@overviewTitle()
+			</h1>
+			@components.UnreachableBadge(m.Unreachable(), false)
+		</div>
+		if len(m.Cards) == 0 {
+			<p class="empty">No connections</p>
+		} else {
+			<section class="conn-grid" aria-label="Connections" data-poll hx-get={ m.PollURL } hx-trigger="asynqui-refresh" hx-swap="none" hx-disinherit="*">
+				for _, c := range m.Cards {
+					@components.ConnCardView(c, false)
+				}
+			</section>
+		}
+	}
+}
+
+// OverviewPoll answers a poll: every card plus the heading badge, the
+// Updated time and the sidebar connection list, all out of band.
+templ OverviewPoll(m Overview) {
+	for _, c := range m.Cards {
+		@components.ConnCardView(c, true)
+	}
+	@overviewExtras(m)
+}
+
+// RecheckResult answers "Retry now": the card itself (the request's swap
+// target) plus the same out-of-band updates as a poll.
+templ RecheckResult(m Overview, card components.ConnCard) {
+	@components.ConnCardView(card, false)
+	@overviewExtras(m)
+}
+
+templ overviewExtras(m Overview) {
+	@components.UnreachableBadge(m.Unreachable(), true)
+	@components.TimeID(components.UpdatedID, m.Layout.TopBar.UpdatedAt, true)
+	@components.SidebarConnList(m.Layout.Sidebar, true)
+}

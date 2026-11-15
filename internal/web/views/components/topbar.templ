@@ -1,0 +1,157 @@
+package components
+
+templ TopBarView(m TopBar) {
+	<header class="top">
+		<nav class="crumbs" aria-label="Breadcrumb">
+			<ol>
+				for i, c := range m.Crumbs {
+					<li>
+						if i == len(m.Crumbs)-1 || c.URL == "" {
+							<span aria-current="page" { crumbAttrs(c)... }>
+								@CrumbLabel(c)
+							</span>
+						} else {
+							<a href={ templ.SafeURL(c.URL) } { crumbAttrs(c)... }>
+								@CrumbLabel(c)
+							</a>
+						}
+					</li>
+				}
+			</ol>
+		</nav>
+		<div class="controls">
+			<span class="updated">
+				Updated{ " " }
+				@TimeID(UpdatedID, m.UpdatedAt, false)
+			</span>
+			<form method="post" action={ templ.SafeURL(m.PrefsURL) } data-pref="refresh">
+				<input type="hidden" name="next" value={ m.Next }/>
+				<div class="seg" role="group" aria-label="Auto refresh">
+					for _, r := range Refreshes() {
+						@segButton("refresh", r.Value(), r == m.Refresh, nil) {
+							@refreshLabel(r)
+						}
+					}
+				</div>
+			</form>
+			<form method="post" action={ templ.SafeURL(m.PrefsURL) } data-pref="theme">
+				<input type="hidden" name="next" value={ m.Next }/>
+				<div class="seg" role="group" aria-label="Theme">
+					for _, t := range Themes() {
+						@themeButton(t, t == m.Theme)
+					}
+				</div>
+			</form>
+			@AccountMenu(m.Account)
+		</div>
+	</header>
+}
+
+// segButton is one button of a segmented control: a submit button, so the
+// control works without JS; app.js applies it in place.
+templ segButton(name, value string, on bool, extra templ.Attributes) {
+	<button type="submit" name={ name } value={ value } aria-pressed={ AriaBool(on) } { segAttrs(on, extra)... }>
+		{ children... }
+	</button>
+}
+
+func segAttrs(on bool, extra templ.Attributes) templ.Attributes {
+	a := templ.Attributes{}
+	for k, v := range extra {
+		a[k] = v
+	}
+	if on {
+		a["class"] = "on"
+	}
+	return a
+}
+
+templ refreshLabel(r Refresh) {
+	switch r {
+		case RefreshOff:
+			Off
+		case Refresh2s:
+			2s
+		case Refresh5s:
+			5s
+		case Refresh10s:
+			10s
+	}
+}
+
+templ themeButton(t Theme, on bool) {
+	switch t {
+		case ThemeLight:
+			@segButton("theme", t.Value(), on, templ.Attributes{"aria-label": "Light theme", "title": "Light"}) {
+				@IconThemeLight("16")
+			}
+		case ThemeDark:
+			@segButton("theme", t.Value(), on, templ.Attributes{"aria-label": "Dark theme", "title": "Dark"}) {
+				@IconThemeDark("16")
+			}
+		default:
+			@segButton("theme", t.Value(), on, templ.Attributes{"aria-label": "System theme", "title": "System"}) {
+				@IconThemeSystem("16")
+			}
+	}
+}
+
+// crumbAttrs are a crumb's optional mono class and title.
+func crumbAttrs(c Crumb) templ.Attributes {
+	a := templ.Attributes{}
+	if c.Mono {
+		a["class"] = "crumb-mono"
+	}
+	if c.Title != "" {
+		a["title"] = c.Title
+	}
+	return a
+}
+
+// AriaBool is b as an ARIA boolean attribute value.
+func AriaBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// AccountMenu shows the user and their role with a Sign out menu. It renders
+// nothing when the account is hidden (auth none), and a plain label when
+// there is nothing to sign out of (proxy without logout_url).
+templ AccountMenu(a Account) {
+	if a.Visible {
+		if a.SignOutURL != "" {
+			<details class="account" data-menu>
+				<summary class="account-btn">
+					@accountLabel(a)
+					@IconChevron("14")
+				</summary>
+				<div class="account-menu">
+					if a.SignOutExternal {
+						<a class="menu-item" href={ templ.SafeURL(a.SignOutURL) }>Sign out</a>
+					} else {
+						<form method="post" action={ templ.SafeURL(a.SignOutURL) }>
+							<button type="submit" class="menu-item">Sign out</button>
+						</form>
+					}
+				</div>
+			</details>
+		} else {
+			<div class="account">
+				<span class="account-btn">
+					@accountLabel(a)
+				</span>
+			</div>
+		}
+	}
+}
+
+templ accountLabel(a Account) {
+	{ a.User }
+	if a.Role != RoleNone {
+		<span class="account-role">
+			@RoleName(a.Role)
+		</span>
+	}
+}

@@ -1,0 +1,890 @@
+package pages
+
+import (
+	"strings"
+	"time"
+
+	"github.com/BarkinBalci/asynqui/internal/web/format"
+	"github.com/BarkinBalci/asynqui/internal/web/views"
+	"github.com/BarkinBalci/asynqui/internal/web/views/components"
+)
+
+// QueuePage is the Queue page. See Live for requests and polling. The tabs,
+// the toolbar, the rows-per-page select and the dialogs sit outside the polled
+// regions, so typing, focus and an open dialog survive.
+templ QueuePage(m Queue) {
+	@views.Page(m.Layout, lastCrumb(m.Layout)) {
+		if m.NotFound {
+			@queueNotFound(m, false)
+		} else {
+			<div id={ QueuePageID } class="content-region" hx-sync="this:queue last">
+				@livePoll(m.Live, false)
+				<div class="page-head queue-head">
+					<div class="head-row">
+						<h1 class="h1"><bdi>{ m.Name }</bdi></h1>
+						@queueBadge(m, false)
+					</div>
+					<div class="head-acts" hx-sync={ "#" + QueuePageID + ":queue all" }>
+						<a id={ FindOpenID } class="btn" href={ templ.SafeURL(m.FindURL) } data-dialog-open={ FindDialogID }>
+							@components.IconSearch("14")
+							Find task
+						</a>
+						@queueToggle(m, false)
+					</div>
+				</div>
+				@findDialog(m.Find)
+				@liveBanner(m.Live, queueFailed(), false)
+				@queueStats(m, false)
+				@taskCard(m, false)
+			</div>
+		}
+	}
+}
+
+// queueNotFound replaces the whole page region: a queue deleted while the
+// page was open answers its polls and actions with it, which also stops
+// the polling.
+templ queueNotFound(m Queue, oob bool) {
+	<div id={ QueuePageID } class="content-region" { components.OOB(oob)... }>
+		<div class="page-head">
+			<h1 class="h1"><bdi>{ m.Name }</bdi></h1>
+		</div>
+		<section class="card">
+			<p class="empty">Queue not found</p>
+		</section>
+	</div>
+}
+
+// QueuePoll answers a poll, out of band. A user request (tab, page, size,
+// action) gets the whole card instead of its data regions.
+templ QueuePoll(m Queue) {
+	if m.NotFound {
+		@queueNotFound(m, true)
+	} else {
+		@queueLive(m)
+	}
+	@components.TimeID(components.UpdatedID, m.Layout.TopBar.UpdatedAt, true)
+	@components.SidebarConnList(m.Layout.Sidebar, true)
+}
+
+templ queueLive(m Queue) {
+	@livePoll(m.Live, true)
+	@queueBadge(m, true)
+	@queueToggle(m, true)
+	@liveBanner(m.Live, queueFailed(), true)
+	@queueStats(m, true)
+	if !m.Live.Poll || m.Live.Init {
+		@taskCard(m, true)
+	} else if !m.Live.Keep {
+		for _, t := range m.Tabs {
+			@tabCount(t, true)
+		}
+		if m.groupList() {
+			@groupsTable(m, true)
+		} else {
+			@tasksBanner(m, true)
+			@tasksTable(m, true)
+			@tasksPager(m.Pager, true)
+		}
+	}
+}
+
+// QueueActionResult answers an action posted with htmx: the user-request
+// answer (the card shows the notice) plus a toast per failure.
+templ QueueActionResult(m Queue, queueFailures []ActionFailure, taskFailures []TaskFailure) {
+	@QueuePoll(m)
+	if len(queueFailures) > 0 || len(taskFailures) > 0 {
+		@components.ToastsOOB() {
+			@FailureToasts(queueFailures)
+			@TaskFailureToasts(taskFailures)
+		}
+	}
+}
+
+templ queueBadge(m Queue, oob bool) {
+	<span id={ QueueBadgeID } { components.OOB(oob)... }>
+		if m.Live.State == DataReady {
+			@components.QueueStateBadge(m.Paused)
+		}
+	</span>
+}
+
+// queueToggle is the Pause queue or Resume queue button. It posts to the
+// Connection page's queue actions with from=queue, which answer for this
+// page.
+templ queueToggle(m Queue, oob bool) {
+	<span id={ QueueToggleID } { components.OOB(oob)... }>
+		if m.Live.State == DataReady {
+			<form class="inline-form" method="post" action={ templ.SafeURL(m.Toggle.URL) } hx-post={ m.Toggle.URL } hx-swap="none">
+				<input type="hidden" name="queue" value={ m.Toggle.Queue }/>
+				<input type="hidden" name="next" value={ m.Toggle.Next }/>
+				<input type="hidden" name="from" value="queue"/>
+				if m.Toggle.Allowed {
+					<button id="queue-toggle-btn" type="submit" class="btn">
+						@toggleLabel(m.Paused)
+					</button>
+				} else {
+					<button id="queue-toggle-btn" type="button" class="btn" disabled title="Requires operator">
+						@toggleLabel(m.Paused)
+					</button>
+				}
+			</form>
+		}
+	</span>
+}
+
+templ toggleLabel(paused bool) {
+	if paused {
+		@components.IconResume("14")
+		Resume queue
+	} else {
+		@components.IconPause("14")
+		Pause queue
+	}
+}
+
+templ queueStats(m Queue, oob bool) {
+	<section id={ QueueStatsID } class="kpis" aria-label="Queue stats" { components.OOB(oob)... }>
+		if m.Live.State == DataReady {
+			@kpi(format.Number(m.Stats.Size), false) {
+				Size
+			}
+			if m.Paused {
+				@kpi("—", false) {
+					Latency
+				}
+			} else {
+				@kpi(format.Latency(m.Stats.Latency), m.Stats.LatencyHigh) {
+					Latency
+				}
+			}
+			@kpi(format.Bytes(m.Stats.Memory), false) {
+				Memory
+			}
+			@kpi(format.Number(m.Stats.Processed), false) {
+				Processed today
+			}
+			@kpi(format.Number(m.Stats.Failed), m.Stats.Failed > 0) {
+				Failed today
+			}
+		}
+	</section>
+}
+
+templ kpi(value string, bad bool) {
+	<div class="kpi">
+		<span class="kpi-l">
+			{ children... }
+		</span>
+		<span class={ "kpi-v", templ.KV("c-failed", bad) }>{ value }</span>
+	</div>
+}
+
+// taskCard is the tabs, the toolbar, the table, the pager and the
+// dialogs. User requests replace it whole.
+templ taskCard(m Queue, oob bool) {
+	<section id={ TaskCardID } class="card tbl-card" aria-label="Tasks" { components.OOB(oob)... }>
+		@liveData(m.Live, queueFailed()) {
+			<nav class="tabs" aria-label="Task states">
+				for _, t := range m.Tabs {
+					<a
+						id={ TabID(t.State) }
+						class={ "tab", templ.KV("on", t.On) }
+						href={ templ.SafeURL(t.URL) }
+						hx-get={ t.URL }
+						hx-swap="none"
+						hx-push-url="true"
+						if t.On {
+							aria-current="page"
+						}
+					>
+						{ stateText(t.State) + " " }
+						@tabCount(t, false)
+					</a>
+				}
+			</nav>
+			if m.Notice != nil {
+				<div class="notice" role="status">
+					@noticeText(*m.Notice)
+				</div>
+			}
+			<form id={ TasksFormID } method="post" action={ templ.SafeURL(m.FormURL) }></form>
+			if m.groupList() {
+				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+					@components.SelectionToolbar(TasksFormID, nil) {
+						for _, b := range m.Actions {
+							@verbButton(b)
+						}
+					}
+				</div>
+				@groupsTable(m, false)
+				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+					for _, d := range m.AllDialogs {
+						@components.ConfirmDialog(d.Dialog, groupsTitle(d.Verb), verbLabel(d.Verb, true)) {
+							<ul class="dlg-list mono" data-sel-names></ul>
+							if d.Verb == TaskArchive {
+								@archiveWarning()
+							}
+						}
+					}
+				</div>
+			} else {
+				if m.Group != "" {
+					<div class="group-nav">
+						<a id="group-back" href={ templ.SafeURL(m.GroupsURL) } hx-get={ m.GroupsURL } hx-swap="none" hx-push-url="true">Groups</a>
+						<span class="muted" aria-hidden="true">/</span>
+						<span class="mono"><bdi>{ format.VisibleID(m.Group) }</bdi></span>
+					</div>
+				}
+				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+					@components.SelectionToolbar(TasksFormID, nil) {
+						<input id={ TasksAllID } type="hidden" form={ TasksFormID } name="all" value="" data-everything={ TasksFormID }/>
+						for _, b := range m.Actions {
+							@verbButton(b)
+						}
+					}
+				</div>
+				@tasksBanner(m, false)
+				@tasksTable(m, false)
+				<div class="tbl-foot">
+					@sizePicker(m.Sizes)
+					@tasksPager(m.Pager, false)
+				</div>
+				<div hx-sync={ "#" + QueuePageID + ":queue all" }>
+					if m.ArchiveDialog.ID != "" {
+						@components.ConfirmDialog(m.ArchiveDialog, archiveTasksTitle(), verbLabel(TaskArchive, false)) {
+							<ul class="dlg-list mono" data-sel-names></ul>
+							@archiveWarning()
+						}
+					}
+					if m.DeleteDialog.ID != "" {
+						@components.ConfirmDialog(m.DeleteDialog, deleteTasksTitle(), verbLabel(TaskDelete, false)) {
+							<ul class="dlg-list mono" data-sel-names></ul>
+						}
+					}
+					for _, d := range m.AllDialogs {
+						@components.ConfirmDialog(d.Dialog, allTitle(d.Verb, m.Tab, m.Group, m.Total), verbLabel(d.Verb, true)) {
+							if d.Verb == TaskArchive {
+								@archiveWarning()
+							}
+						}
+					}
+				</div>
+			}
+		}
+	</section>
+}
+
+templ tabCount(t Tab, oob bool) {
+	<span id={ TabCountID(t.State) } class={ "count", components.ToneClass(stateTone(t.State)) } { components.OOB(oob)... }>{ format.Number(t.Count) }</span>
+}
+
+templ verbButton(b TaskActionButton) {
+	@components.ActionButton(b.Action, verbIcon(b.Verb, "14"), verbText(b.Verb, b.All))
+}
+
+templ verbIcon(v TaskVerb, size string) {
+	switch v {
+		case TaskRun:
+			@components.IconRun(size)
+		case TaskArchive:
+			@components.IconArchive(size)
+		case TaskCancel:
+			@components.IconCancel(size)
+		default:
+			@components.IconDelete(size)
+	}
+}
+
+// tasksBanner is the "select all N" banner. app.js shows it once every row of
+// the page is selected and switches it to "all N" mode, which sets the form's
+// all=1.
+templ tasksBanner(m Queue, oob bool) {
+	if m.AllowAll && m.Total > int64(len(m.Rows)) {
+		<div id={ TasksBannerID } class="sel-banner" data-select-banner={ TasksFormID } data-total={ format.Number(m.Total) } hidden { components.OOB(oob)... }>
+			<span data-banner-page>All { format.Number(int64(len(m.Rows))) } on this page are selected.</span>
+			<button id="sel-everything" type="button" class="linkbtn" data-banner-page data-select-everything={ TasksFormID }>{ "Select all " + format.Number(m.Total) + " " + scopeTasks(m.Tab, m.Group, m.Total) }</button>
+			<span data-banner-all hidden>{ "All " + format.Number(m.Total) + " " + scopeTasks(m.Tab, m.Group, m.Total) + " are selected." }</span>
+			<button id="sel-clear" type="button" class="linkbtn" data-banner-all data-clear-everything={ TasksFormID } hidden>Clear selection</button>
+		</div>
+	} else {
+		<div id={ TasksBannerID } hidden { components.OOB(oob)... }></div>
+	}
+}
+
+templ tasksTable(m Queue, oob bool) {
+	<div id={ TasksTableID } { components.OOB(oob)... }>
+		<input type="hidden" form={ TasksFormID } name="next" value={ m.Next }/>
+		<input type="hidden" form={ TasksFormID } name="state" value={ StateParam(m.Tab) }/>
+		if m.Group != "" {
+			<input type="hidden" form={ TasksFormID } name="group" value={ m.Group }/>
+		}
+		@components.Table("tasks") {
+			<thead>
+				<tr>
+					@components.SelectAllHeader(TasksSelectAll, TasksFormID) {
+						Select all tasks on this page
+					}
+					@components.PlainHeader(false) {
+						Task ID
+					}
+					@components.PlainHeader(false) {
+						Type
+					}
+					@components.PlainHeader(false) {
+						Payload
+					}
+					@stateHeaders(m.Tab, m.Sort)
+				</tr>
+			</thead>
+			<tbody id={ TasksRowsID }>
+				if len(m.Rows) == 0 {
+					@components.EmptyRow(columns(m.Tab)) {
+						{ "No " + scopeTasks(m.Tab, m.Group, 0) }
+					}
+				}
+				for _, r := range m.Rows {
+					<tr>
+						@components.SelectCell(r.Select) {
+							Select task { format.VisibleID(r.ID) }
+						}
+						<td><a id={ r.LinkID } class="row-link mono" href={ templ.SafeURL(r.URL) } title={ r.ID }><bdi>{ format.ShortID(format.VisibleID(r.ID)) }</bdi></a></td>
+						<td class="ty"><bdi>{ format.VisibleID(r.Type) }</bdi></td>
+						<td class="mono payload-cell"><bdi>{ format.PreviewBytes(r.Payload, 120) }</bdi></td>
+						@stateCells(m.Tab, r)
+					</tr>
+				}
+			</tbody>
+		}
+	</div>
+}
+
+// columns counts the table's columns for the empty row: the checkbox,
+// Task ID, Type, Payload and the state's own.
+func columns(s TaskState) int {
+	switch s {
+	case StatePending:
+		return 5
+	case StateAggregating:
+		return 4
+	}
+	return 6
+}
+
+// timeHeader is a state's time column: sortable when the table sorts
+// (sort.ID set), plain otherwise.
+templ timeHeader(sort components.SortHead) {
+	if sort.ID != "" {
+		@components.SortHeader(sort) {
+			{ children... }
+		}
+	} else {
+		@components.PlainHeader(false) {
+			{ children... }
+		}
+	}
+}
+
+// stateHeaders are the columns that depend on the tab; sort is the time
+// column's sort link.
+templ stateHeaders(s TaskState, sort components.SortHead) {
+	switch s {
+		case StateActive:
+			@components.PlainHeader(false) {
+				Started
+			}
+			@components.PlainHeader(false) {
+				Running for
+			}
+		case StatePending:
+			@components.PlainHeader(true) {
+				Retried
+			}
+		case StateScheduled:
+			@timeHeader(sort) {
+				Process at
+			}
+			@components.PlainHeader(false) {
+				In
+			}
+		case StateRetry:
+			@timeHeader(sort) {
+				Next retry
+			}
+			@components.PlainHeader(false) {
+				Last error
+			}
+		case StateArchived:
+			@timeHeader(sort) {
+				Archived at
+			}
+			@components.PlainHeader(false) {
+				Last error
+			}
+		case StateCompleted:
+			@components.PlainHeader(false) {
+				Completed at
+			}
+			@timeHeader(sort) {
+				Result kept until
+			}
+	}
+}
+
+templ stateCells(s TaskState, r TaskRow) {
+	switch s {
+		case StateActive:
+			<td class="num">
+				@optTimeAbs(r.Started)
+			</td>
+			<td class="num">
+				switch true {
+					case r.Started.IsZero():
+						—
+					case r.RunningFor < time.Second:
+						{ "<1s" }
+					default:
+						{ format.Duration(r.RunningFor) }
+				}
+			</td>
+		case StatePending:
+			<td class="num">{ format.Number(int64(r.Retried)) }</td>
+		case StateScheduled:
+			<td class="num">
+				@optTimeAbs(r.NextProcessAt)
+			</td>
+			<td class="num">
+				@components.TimeOrDash(r.NextProcessAt)
+			</td>
+		case StateRetry:
+			<td class="num">
+				@components.TimeOrDash(r.NextProcessAt)
+			</td>
+			<td class="mono err-cell c-retry" title={ r.LastErr }><bdi>{ format.PreviewBytes([]byte(r.LastErr), 120) }</bdi></td>
+		case StateArchived:
+			<td class="num">
+				@optTimeAbs(r.ArchivedAt)
+			</td>
+			<td class="mono err-cell c-retry" title={ r.LastErr }><bdi>{ format.PreviewBytes([]byte(r.LastErr), 120) }</bdi></td>
+		case StateCompleted:
+			<td class="num">
+				@optTimeAbs(r.CompletedAt)
+			</td>
+			<td class="num">
+				@optTimeAbs(r.KeptUntil)
+			</td>
+	}
+}
+
+// groupsTable lists the Aggregating tab's groups: each links to its
+// tasks, and the selection feeds the groups' "all" actions.
+templ groupsTable(m Queue, oob bool) {
+	<div id={ TasksTableID } { components.OOB(oob)... }>
+		<input type="hidden" form={ TasksFormID } name="next" value={ m.Next }/>
+		<input type="hidden" form={ TasksFormID } name="state" value={ StateParam(StateAggregating) }/>
+		<input type="hidden" form={ TasksFormID } name="all" value="1"/>
+		if len(m.Groups) == 0 {
+			<div class="empty-state">
+				@components.IconQueues("32")
+				<p class="empty-state-title">No aggregating tasks</p>
+			</div>
+		} else {
+			@components.Table("groups") {
+				<thead>
+					<tr>
+						@components.SelectAllHeader(GroupsSelectAll, TasksFormID) {
+							Select all groups
+						}
+						@components.PlainHeader(false) {
+							Group
+						}
+						@components.PlainHeader(true) {
+							Size
+						}
+					</tr>
+				</thead>
+				<tbody id={ TasksRowsID }>
+					for _, g := range m.Groups {
+						<tr>
+							@components.SelectCell(g.Select) {
+								Select group { format.VisibleID(g.Name) }
+							}
+							<td><a id={ g.LinkID } class="row-link mono" href={ templ.SafeURL(g.URL) } hx-get={ g.URL } hx-swap="none" hx-push-url="true"><bdi>{ format.VisibleID(g.Name) }</bdi></a></td>
+							<td class="num">{ format.Number(g.Size) }</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	</div>
+}
+
+templ sizePicker(p SizePicker) {
+	<form id="tasks-size-form" class="size-picker" method="get" action={ templ.SafeURL(p.FormURL) } hx-get={ p.FormURL } hx-trigger="change" hx-swap="none" hx-push-url="true">
+		for _, h := range p.Hidden {
+			<input type="hidden" name={ h.Name } value={ h.Value }/>
+		}
+		<label class="size-label">
+			Rows per page
+			<select id={ TasksSizeID } name="size" class="select">
+				for _, n := range p.Choices {
+					<option value={ format.Int(int64(n)) } selected?={ n == p.Size }>{ format.Number(int64(n)) }</option>
+				}
+			</select>
+		</label>
+		<button id="tasks-size-apply" type="submit" class="btn sm" data-nojs>Apply</button>
+	</form>
+}
+
+templ tasksPager(p Pager, oob bool) {
+	<nav id={ TasksPagerID } class="pager" aria-label="Task pages" { components.OOB(oob)... }>
+		if p.Total == 0 {
+			<span class="muted num">0 of 0</span>
+		} else {
+			<span class="muted num">{ format.Number(p.From) }–{ format.Number(p.To) } of { format.Number(p.Total) }</span>
+		}
+		@pageLink("page-prev", p.PrevURL, "Previous page") {
+			‹
+		}
+		@pageLink("page-next", p.NextURL, "Next page") {
+			›
+		}
+	</nav>
+}
+
+templ optTimeAbs(t time.Time) {
+	if t.IsZero() {
+		—
+	} else {
+		@components.TimeAbs(t)
+	}
+}
+
+templ deleteTasksTitle() {
+	Delete tasks
+}
+
+templ archiveTasksTitle() {
+	Archive tasks
+}
+
+// archiveWarning is every Archive confirmation's note on asynq trimming
+// the archive.
+templ archiveWarning() {
+	<p class="dlg-warn">asynq keeps at most { format.Number(ArchiveCap) } archived tasks for { format.Number(ArchiveDays) } days; beyond that, tasks are removed.</p>
+}
+
+// groupsTitle is the title of an "all" dialog of the selected groups.
+templ groupsTitle(v TaskVerb) {
+	{ verbText(v, true) + " tasks in the selected groups" }
+}
+
+// allTitle is the "all" dialog's title; app.js updates the count when
+// it opens the dialog. In a group's list it names the group.
+templ allTitle(v TaskVerb, s TaskState, group string, total int64) {
+	{ verbText(v, true) + " " }<span data-all-total>{ format.Number(total) }</span>{ " " + scopeTasks(s, group, total) }
+}
+
+// scopeTasks names n of the tasks a table lists: "pending tasks", or
+// "tasks in {group}" in an aggregation group's list ("task" for one).
+func scopeTasks(s TaskState, group string, n int64) string {
+	if group != "" {
+		return tasksWord(n) + " in " + format.VisibleID(group)
+	}
+	return strings.ToLower(stateText(s)) + " " + tasksWord(n)
+}
+
+templ verbLabel(v TaskVerb, all bool) {
+	{ verbText(v, all) }
+}
+
+// StateName is a state's label: tabs, badges and breadcrumbs.
+templ StateName(s TaskState) {
+	{ stateText(s) }
+}
+
+// The labels below are copy too: plain strings, so titles and
+// breadcrumbs built from them have no markup and no stray whitespace.
+
+func stateText(s TaskState) string {
+	switch s {
+	case StateActive:
+		return "Active"
+	case StateAggregating:
+		return "Aggregating"
+	case StateScheduled:
+		return "Scheduled"
+	case StateRetry:
+		return "Retry"
+	case StateArchived:
+		return "Archived"
+	case StateCompleted:
+		return "Completed"
+	}
+	return "Pending"
+}
+
+// verbText is a verb's button label, or its "all" variant's.
+func verbText(v TaskVerb, all bool) string {
+	switch {
+	case all && v == TaskRun:
+		return "Run all"
+	case all && v == TaskArchive:
+		return "Archive all"
+	case all:
+		return "Delete all"
+	case v == TaskRun:
+		return "Run now"
+	case v == TaskArchive:
+		return "Archive"
+	case v == TaskCancel:
+		return "Cancel"
+	}
+	return "Delete"
+}
+
+// allTitleText is the "all" confirmation's title as plain text: the
+// confirmation page's heading, title and breadcrumb.
+func allTitleText(v TaskVerb, s TaskState, total int64) string {
+	return verbText(v, true) + " " + format.Number(total) + " " + scopeTasks(s, "", total)
+}
+
+func tasksWord(n int64) string {
+	if n == 1 {
+		return "task"
+	}
+	return "tasks"
+}
+
+func noticeString(n TaskNotice) string {
+	count := format.Number(n.Count) + " " + tasksWord(n.Count)
+	switch n.Verb {
+	case TaskRun:
+		return "Moved " + count + " to pending"
+	case TaskArchive:
+		return "Archived " + count
+	case TaskCancel:
+		return "Cancel requested for " + count
+	}
+	return "Deleted " + count
+}
+
+// StateBadge is a task state's badge.
+templ StateBadge(s TaskState) {
+	@components.Badge(stateTone(s)) {
+		@StateName(s)
+	}
+}
+
+func stateTone(s TaskState) components.Tone {
+	switch s {
+	case StateActive:
+		return components.ToneInfo
+	case StateAggregating:
+		return components.ToneTeal
+	case StateScheduled:
+		return components.ToneViolet
+	case StateRetry:
+		return components.ToneOrange
+	case StateArchived:
+		return components.ToneDanger
+	case StateCompleted:
+		return components.ToneOK
+	}
+	return components.ToneNeutral
+}
+
+templ noticeText(n TaskNotice) {
+	{ noticeString(n) }
+}
+
+// FlashToasts is a toast per failure an action posted without JS left.
+templ FlashToasts(f Flash) {
+	@FailureToasts(f.Failures)
+	@TaskFailureToasts(f.TaskFailures)
+}
+
+// TaskFailureToasts is a toast per failed task action.
+templ TaskFailureToasts(failures []TaskFailure) {
+	for _, f := range failures {
+		@components.Toast() {
+			@taskFailureText(f)
+		}
+	}
+}
+
+templ taskFailureText(f TaskFailure) {
+	if f.NotFound {
+		if f.ID == "" {
+			Queue not found
+		} else {
+			Task <span class="mono" title={ f.ID }><bdi>{ format.ShortID(format.VisibleID(f.ID)) }</bdi></span> not found
+		}
+	} else {
+		switch f.Verb {
+			case TaskRun:
+				Could not run
+			case TaskArchive:
+				Could not archive
+			case TaskCancel:
+				Could not cancel
+			default:
+				Could not delete
+		}
+		{ " " }
+		if f.ID == "" && f.Group != "" {
+			all tasks in <span class="mono"><bdi>{ format.VisibleID(f.Group) }</bdi></span>
+		} else if f.ID == "" {
+			all tasks
+		} else {
+			<span class="mono" title={ f.ID }><bdi>{ format.ShortID(format.VisibleID(f.ID)) }</bdi></span>
+		}
+		<span class="mono toast-detail">{ f.Detail }</span>
+	}
+}
+
+// findDialog is the Find task dialog: one Task ID field. app.js opens it
+// from the header button or "/", and returns focus to the button when it
+// closes. The form is a GET to the Find task page; with htmx a miss
+// re-renders FindBody and a hit navigates (HX-Redirect).
+templ findDialog(f Find) {
+	<dialog id={ FindDialogID } class="dialog" aria-labelledby="find-title" data-find-opener={ FindOpenID }>
+		<div class="dlghead">
+			<h2 id="find-title" class="dlgtitle">Find task in <bdi>{ f.Queue }</bdi></h2>
+			<button type="button" class="iconbtn" data-dialog-close aria-label="Close">
+				@components.IconClose("16")
+			</button>
+		</div>
+		<form id={ FindFormID } class="find-form" role="search" method="get" action={ templ.SafeURL(f.Action) } hx-get={ f.Action } hx-target={ "#" + FindBodyID } hx-swap="outerHTML">
+			@FindBody(f, "")
+		</form>
+	</dialog>
+}
+
+templ findTitle(queue string) {
+	{ "Find task in " + queue }
+}
+
+// FindBody is the Find task form's fields: the dialog's body, and what a
+// missed lookup answers with. cancelURL is the no-JS page's Cancel link;
+// empty in the dialog, whose Cancel closes it.
+templ FindBody(f Find, cancelURL string) {
+	<div id={ FindBodyID } class="find-body">
+		<label class="field">
+			<span>Task ID</span>
+			<input id={ FindInputID } class="mono" type="text" name="id" value={ f.ID } autocomplete="off" spellcheck="false" required autofocus { missedAttrs(f.Missed)... }/>
+		</label>
+		if f.Missed {
+			<p id="find-miss" class="find-miss" role="status">Task not found</p>
+		}
+		if f.Failed != "" {
+			@liveData(Live{State: DataFailed, Error: f.Failed, Down: f.Down}, findFailed())
+		}
+		<div class="dlgacts">
+			if cancelURL != "" {
+				<a class="btn" href={ templ.SafeURL(cancelURL) }>Cancel</a>
+			} else {
+				<button type="button" class="btn" data-dialog-close>Cancel</button>
+			}
+			<button type="submit" class="btn primary">Go</button>
+		</div>
+	</div>
+}
+
+func missedAttrs(missed bool) templ.Attributes {
+	if missed {
+		return templ.Attributes{"aria-invalid": "true", "aria-describedby": "find-miss"}
+	}
+	return nil
+}
+
+templ queueFailed() {
+	Could not load the queue
+}
+
+templ taskFailed() {
+	Could not load the task
+}
+
+templ findFailed() {
+	Could not look up the task
+}
+
+// FindCrumb is the Find task page's last breadcrumb.
+templ FindCrumb() {
+	Find task
+}
+
+// FindTaskPage is the Find task form as a page, for browsers without JS.
+templ FindTaskPage(m FindPage) {
+	@views.Page(m.Layout, findTitle(m.Find.Queue)) {
+		<div class="page-head">
+			<h1 class="h1">Find task in <bdi>{ m.Find.Queue }</bdi></h1>
+		</div>
+		<section class="card confirm-card">
+			<form class="find-form" role="search" method="get" action={ templ.SafeURL(m.Find.Action) }>
+				@FindBody(m.Find, m.QueueURL)
+			</form>
+		</section>
+	}
+}
+
+// ConfirmPage confirms an action posted without JS: a queue delete, or a
+// task action that needs it.
+templ ConfirmPage(m Confirm) {
+	@views.Page(m.Layout, m.Title) {
+		<div class="page-head">
+			<h1 class="h1">
+				@m.Title
+			</h1>
+		</div>
+		<section class="card confirm-card">
+			if len(m.Names) > 0 {
+				<ul class="dlg-list mono">
+					for _, n := range m.Names {
+						<li><bdi>{ format.VisibleID(n) }</bdi></li>
+					}
+				</ul>
+			}
+			if m.Verb == TaskArchive {
+				@archiveWarning()
+			}
+			<form class="dlgacts" method="post" action={ templ.SafeURL(m.Action) }>
+				for _, h := range m.Hidden {
+					<input type="hidden" name={ h.Name } value={ h.Value }/>
+				}
+				<input type="hidden" name="confirm" value="1"/>
+				<a class="btn" href={ templ.SafeURL(m.CancelURL) }>Cancel</a>
+				<button type="submit" class={ "btn", templ.KV("danger", dangerVerb(m.Verb)), templ.KV("primary", !dangerVerb(m.Verb)) }>
+					@verbIcon(m.Verb, "16")
+					@verbLabel(m.Verb, m.All)
+				</button>
+			</form>
+		</section>
+	}
+}
+
+// TasksConfirmTitle is a task action confirmation's title: of the tasks
+// names, or with all of every task in state s (total of them), or of
+// every task of the aggregation groups names.
+templ TasksConfirmTitle(v TaskVerb, all bool, s TaskState, total int64, names []string) {
+	switch true {
+		case all && s == StateAggregating && len(names) == 1:
+			{ verbText(v, true) + " " + scopeTasks(StateAggregating, names[0], 0) }
+		case all && s == StateAggregating:
+			{ verbText(v, true) + " tasks in " + format.Number(int64(len(names))) + " groups" }
+		case all:
+			{ allTitleText(v, s, total) }
+		case v == TaskArchive && len(names) == 1:
+			Archive task
+		case v == TaskArchive:
+			@archiveTasksTitle()
+		case len(names) == 1:
+			Delete task
+		default:
+			@deleteTasksTitle()
+	}
+}
+
+// dangerVerb is a verb whose buttons are red: Delete and Archive.
+func dangerVerb(v TaskVerb) bool { return v == TaskDelete || v == TaskArchive }

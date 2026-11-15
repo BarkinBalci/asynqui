@@ -1,0 +1,14 @@
+/bin/
+/asynqui
+/dist/
+*.test
+*.out
+coverage.*
+/asynqui.yaml
+.env
+.DS_Store
+.idea/
+.vscode/
+.claude/
+.task/
+/e2e/test-results/

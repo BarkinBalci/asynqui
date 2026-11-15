@@ -1,0 +1,166 @@
+package components
+
+// SelectionToolbar is the bar above a selectable table: an optional
+// filter, then "N selected" (shown by app.js while rows are selected) and
+// the action buttons, which are the children. form is the id of the form
+// the selection belongs to; app.js enables the buttons from it.
+templ SelectionToolbar(form string, filter templ.Component) {
+	<div class="tbar" data-toolbar={ form }>
+		if filter != nil {
+			@filter
+		}
+		<div class="tacts">
+			<span class="selc-live" role="status"><span class="selc" data-sel-label hidden><span data-sel-all hidden>All </span><span data-sel-count>0</span> selected</span></span>
+			{ children... }
+		</div>
+	</div>
+}
+
+// FilterInput filters the [data-filter-text] items of the element with id
+// target, client-side. label is its placeholder and accessible name.
+templ FilterInput(id, target, label string) {
+	<label class="tsearch">
+		<span class="sr-only">{ label }</span>
+		<input id={ id } type="search" placeholder={ label } autocomplete="off" data-filter={ "#" + target }/>
+	</label>
+}
+
+// ActionButton is a selection toolbar button labelled label. A role that
+// may not use it gets a disabled button whose only explanation is a native
+// title, also folded into its accessible name ("Delete (requires admin)").
+templ ActionButton(a Action, icon templ.Component, label string) {
+	if !a.Allowed {
+		switch true {
+			case a.Need == RoleAdmin && a.Conn != "":
+				@lockedAction(a, icon, label, "Requires admin on "+a.Conn, label+" (requires admin on "+a.Conn+")")
+			case a.Need == RoleAdmin:
+				@lockedAction(a, icon, label, "Requires admin", label+" (requires admin)")
+			case a.Conn != "":
+				@lockedAction(a, icon, label, "Requires operator on "+a.Conn, label+" (requires operator on "+a.Conn+")")
+			default:
+				@lockedAction(a, icon, label, "Requires operator", label+" (requires operator)")
+		}
+	} else {
+		<button { actionAttrs(a)... }>
+			@icon
+			{ label }
+		</button>
+	}
+}
+
+templ lockedAction(a Action, icon templ.Component, label, title, name string) {
+	<button id={ a.ID } type="button" class={ actionClass(a) } disabled title={ title } aria-label={ name }>
+		@icon
+		{ label }
+	</button>
+}
+
+func actionClass(a Action) string {
+	c := "btn"
+	if !a.Large {
+		c += " sm"
+	}
+	if a.Primary {
+		c += " primary"
+	}
+	if a.Danger {
+		c += " danger"
+	}
+	return c
+}
+
+func actionAttrs(a Action) templ.Attributes {
+	attrs := templ.Attributes{
+		"id":         a.ID,
+		"type":       "submit",
+		"form":       a.Form,
+		"formaction": a.URL,
+		"class":      actionClass(a),
+	}
+	switch a.Enable {
+	case EnableState:
+		attrs["data-enable"] = "state"
+		attrs["data-state"] = a.State
+	case EnableEvery:
+		attrs["data-enable"] = "every"
+		attrs["data-flag"] = a.Flag
+		attrs["data-blocked-title"] = a.Blocked
+	default:
+		attrs["data-enable"] = "any"
+	}
+	if a.ConfirmAll != "" {
+		attrs["data-confirm-all"] = a.ConfirmAll
+	}
+	if a.Confirm != "" {
+		attrs["data-confirm"] = a.Confirm
+	} else {
+		attrs["hx-post"] = a.URL
+		attrs["hx-swap"] = "none"
+	}
+	return attrs
+}
+
+// ConfirmDialog is a modal <dialog> that app.js opens for an Action with
+// Confirm set to its id. The children are its body; title and confirm
+// are the heading and the confirm button's label. Cancel and Escape close
+// it; Cancel has the initial focus. The confirm button submits the form
+// with confirm=1, through htmx.
+templ ConfirmDialog(d Dialog, title, confirm templ.Component) {
+	<dialog id={ d.ID } class="dialog" aria-labelledby={ d.TitleID() }>
+		<div class="dlghead">
+			<h2 id={ d.TitleID() } class="dlgtitle">
+				@title
+			</h2>
+			<button id={ d.ID + "-close" } type="button" class="iconbtn" data-dialog-close aria-label="Close">
+				@IconClose("16")
+			</button>
+		</div>
+		<div class="dlgbody">
+			{ children... }
+		</div>
+		<div class="dlgacts">
+			<button id={ d.ID + "-cancel" } type="button" class="btn" data-dialog-close autofocus>Cancel</button>
+			<button id={ d.ConfirmID() } type="submit" form={ d.Form } formaction={ templ.SafeURL(d.ConfirmURL) } hx-post={ d.ConfirmURL } hx-swap="none" name="confirm" value="1" class={ "btn", templ.KV("danger", d.Danger), templ.KV("primary", !d.Danger) }>
+				@confirm
+			</button>
+		</div>
+	</dialog>
+}
+
+// ToastRegion is where toasts appear, bottom right, with initial toasts
+// (a page rendered after a failed action without JS) or none. Action
+// answers append to it out of band (ToastsOOB). The template is the toast
+// app.js shows when a request fails without an answer to show.
+templ ToastRegion(initial templ.Component) {
+	<div id={ ToastsID } class="toasts" role="status">
+		if initial != nil {
+			@initial
+		}
+	</div>
+	<template id={ ToastFailedID }>
+		@Toast() {
+			Request failed
+		}
+	</template>
+}
+
+// Toast is one error toast; the children are its text. app.js removes it
+// after a while, or when its close button is pressed (shown only with JS).
+templ Toast() {
+	<div class="toast">
+		<div class="toast-body">
+			{ children... }
+		</div>
+		<button type="button" class="iconbtn js-only" data-toast-close aria-label="Dismiss">
+			@IconClose("14")
+		</button>
+	</div>
+}
+
+// ToastsOOB appends its children (Toasts) to the toast region from an
+// htmx answer.
+templ ToastsOOB() {
+	<div hx-swap-oob={ "beforeend:#" + ToastsID }>
+		{ children... }
+	</div>
+}

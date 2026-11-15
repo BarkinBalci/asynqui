@@ -1,0 +1,112 @@
+# asynqui developer tasks. Tool versions are set in tools/go.mod.
+version: '3'
+
+vars:
+  TOOL: go tool -modfile=tools/go.mod
+  # Stamped into main.version. Override it with: task build VERSION=x
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+
+tasks:
+  default:
+    desc: List tasks
+    silent: true
+    cmd: '{{.TASK_EXE}} --list'
+
+  generate:
+    desc: Generate templ code
+    sources:
+      - internal/web/views/**/*.templ
+    generates:
+      - internal/web/views/**/*_templ.go
+    cmd: '{{.TOOL}} templ generate'
+
+  lint:
+    desc: Run go vet and golangci-lint
+    cmds:
+      - go vet ./...
+      - '{{.TOOL}} golangci-lint run'
+
+  test:
+    desc: Run all tests (Redis-backed tests need Docker)
+    cmd: go test ./...
+
+  test-race:
+    desc: Run all tests with the race detector (needs cgo and a C compiler)
+    env:
+      CGO_ENABLED: '1'
+    cmd: go test -race ./...
+
+  e2e:
+    desc: Run the browser tests in Chromium against a throwaway Redis (see CONTRIBUTING.md)
+    cmd: go test -tags e2e -count=1 ./e2e/...
+
+  demo-gif:
+    desc: Regenerate docs/images/demo.gif (see CONTRIBUTING.md)
+    env:
+      ASYNQUI_E2E_GIF: RunRetries
+    cmd: go test -tags e2e -count=1 -run '^TestBrowser$/^RunRetries$' ./e2e/
+
+  screenshots:
+    desc: Regenerate the README screenshots in docs/images (see CONTRIBUTING.md)
+    env:
+      ASYNQUI_E2E_SCREENSHOTS: '1'
+    cmd: go test -tags e2e -count=1 -run '^TestBrowser$/^Accessibility$' ./e2e/
+
+  demo:
+    desc: Serve asynqui on a Redis seeded with the e2e fixture, flushing DBs 0-2 (see CONTRIBUTING.md)
+    vars:
+      ADDR: '{{.ADDR | default "127.0.0.1:8080"}}'
+    env:
+      ASYNQUI_E2E_DEMO: '{{.ADDR}}'
+    cmd: go test -tags e2e -count=1 -timeout 0 -v -run '^TestDemo$' ./e2e/
+
+  run:
+    desc: Run locally against localhost:6379 with config.dev.yaml
+    deps: [generate]
+    cmd: go run ./cmd/asynqui -config config.dev.yaml
+
+  build:
+    desc: Build the static binary into bin/
+    deps: [generate]
+    vars:
+      LDFLAGS: -s -w -X main.version={{.VERSION}}
+    env:
+      CGO_ENABLED: '0'
+    cmd: go build -trimpath -ldflags '{{.LDFLAGS}}' -o bin/asynqui ./cmd/asynqui
+
+  docker:
+    desc: Build the local image asynqui:dev from source (Dockerfile.dev)
+    cmd: docker build -f Dockerfile.dev --build-arg VERSION={{.VERSION}} -t asynqui:dev .
+
+  tidy:
+    desc: Tidy go.mod and tools/go.mod
+    cmds:
+      - go mod tidy
+      - task: tidy-tools
+
+  tidy-tools:
+    internal: true
+    dir: tools
+    cmd: go mod tidy{{if .FLAGS}} {{.FLAGS}}{{end}}
+
+  check:
+    desc: Run the CI check job locally
+    cmds:
+      - go mod tidy -diff
+      - task: tidy-tools
+        vars: {FLAGS: -diff}
+      # Fails only if generate changes something, so uncommitted work is fine.
+      - silent: true
+        cmd: |
+          before="$(git status --porcelain; git diff)"
+          {{.TOOL}} templ generate
+          if [ "$before" != "$(git status --porcelain; git diff)" ]; then
+            echo "templ output was stale; review and commit the regenerated files"
+            git status --porcelain
+            exit 1
+          fi
+      - go vet ./...
+      - '{{.TOOL}} golangci-lint run'
+      - go test ./...
+      - CGO_ENABLED=0 go build -trimpath ./cmd/asynqui

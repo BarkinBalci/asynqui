@@ -1,0 +1,108 @@
+package components
+
+import "github.com/BarkinBalci/asynqui/internal/web/format"
+
+templ SidebarNav(m Sidebar) {
+	<aside class="side" aria-label="Sidebar">
+		<a class="brand" href={ templ.SafeURL(m.OverviewURL) }>
+			@Logo("28")
+			@Wordmark()
+		</a>
+		<nav class="nav" aria-label="Global">
+			@navLink(m.OverviewURL, "", m.Section == SectionOverview) {
+				@IconOverview("18")
+				@SectionName(SectionOverview, false)
+			}
+		</nav>
+		<div class="side-conns">
+			<div class="navlabel"><span>Connections</span><span class="num">{ format.Number(int64(len(m.Conns))) }</span></div>
+			<label class="side-filter">
+				<span class="sr-only">Filter connections</span>
+				<input id="sidebar-filter" type="search" placeholder="Filter connections" autocomplete="off" data-filter={ "#" + SidebarListID }/>
+			</label>
+			@SidebarConnList(m, false)
+		</div>
+		@footer(m.Footer)
+	</aside>
+}
+
+// SidebarConnList is the connection list alone; the Overview poll replaces
+// it out of band so its status dots follow the cards.
+templ SidebarConnList(m Sidebar, oob bool) {
+	<nav id={ SidebarListID } class="conn-list" aria-label="Connections" { OOB(oob)... }>
+		for _, c := range m.Conns {
+			if c.Current {
+				<div class="conn-current" data-filter-text={ c.Name + " " + c.Addr }>
+					@connItem(c)
+					<div class="nav subnav">
+						@subItem(c.Sub.QueuesURL, SectionQueues, m.Section, c.Sub.Valkey) {
+							@IconQueues("16")
+						}
+						@subItem(c.Sub.ServersURL, SectionServers, m.Section, c.Sub.Valkey) {
+							@IconServers("16")
+						}
+						@subItem(c.Sub.SchedulersURL, SectionSchedulers, m.Section, c.Sub.Valkey) {
+							@IconSchedulers("16")
+						}
+						@subItem(c.Sub.InfoURL, SectionInfo, m.Section, c.Sub.Valkey) {
+							@IconDatabase("16")
+						}
+					</div>
+				</div>
+			} else {
+				<div data-filter-text={ c.Name + " " + c.Addr }>
+					@connItem(c)
+				</div>
+			}
+		}
+	</nav>
+}
+
+templ connItem(c SidebarConn) {
+	<a id={ NavConnID(c.Name) } class="citem" href={ templ.SafeURL(c.URL) }>
+		<span class="citem-name">
+			{ c.Name }{ " " }
+			@StatusDot(c.Health)
+		</span>
+		<span class="citem-addr" title={ c.Addr }>{ c.Addr }</span>
+	</a>
+}
+
+templ subItem(url string, s, active Section, valkey bool) {
+	@navLink(url, SubNavID(s), s == active) {
+		{ children... }
+		@SectionName(s, valkey)
+	}
+}
+
+// navLink is a nav item; the active one is tinted and marked current.
+templ navLink(url, id string, active bool) {
+	<a href={ templ.SafeURL(url) } { navAttrs(id, active)... }>
+		{ children... }
+	</a>
+}
+
+func navAttrs(id string, active bool) templ.Attributes {
+	a := templ.Attributes{}
+	if id != "" {
+		a["id"] = id
+	}
+	if active {
+		a["class"] = "on"
+		a["aria-current"] = "page"
+	}
+	return a
+}
+
+templ footer(f Footer) {
+	<div class="side-foot">
+		if f.UpdateAvailable {
+			<a class="version" href={ templ.SafeURL(f.ReleaseURL) } title="Release notes, update available">{ f.Version }<span class="dot dot-update"></span></a>
+		} else if f.FullVersion != "" {
+			<a class="version" href={ templ.SafeURL(f.ReleaseURL) } title={ f.FullVersion }>{ f.Version }</a>
+		} else {
+			<a class="version" href={ templ.SafeURL(f.ReleaseURL) } title="Release notes">{ f.Version }</a>
+		}
+		<a href={ templ.SafeURL(f.SourceURL) } title="Source on GitHub">Source ↗</a>
+	</div>
+}

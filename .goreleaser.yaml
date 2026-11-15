@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+#
+# Run by .github/workflows/release.yml. Validate with
+#   go run github.com/goreleaser/goreleaser/v2@<version> check
+# using the GoReleaser version set in that workflow.
+version: 2
+
+project_name: asynqui
+
+builds:
+  - id: asynqui
+    main: ./cmd/asynqui
+    binary: asynqui
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    # Reproducible builds.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: asynqui
+    ids: [asynqui]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # Reproducible archives.
+    builds_info:
+      owner: root
+      group: root
+      mode: 0755
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: LICENSE
+        info: &fileinfo
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info: *fileinfo
+      - src: config.example.yaml
+        info: *fileinfo
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: git
+  sort: asc
+  # Groups commits by their Conventional Commits prefix (see CONTRIBUTING.md).
+  # The regexps match the commit subject only, so they anchor at its start.
+  groups:
+    - title: Features
+      regexp: '^feat(\([^)]+\))?!?: '
+      order: 0
+    - title: Bug fixes
+      regexp: '^fix(\([^)]+\))?!?: '
+      order: 1
+    - title: Performance
+      regexp: '^perf(\([^)]+\))?!?: '
+      order: 2
+    - title: Documentation
+      regexp: '^docs(\([^)]+\))?!?: '
+      order: 3
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^(test|ci|chore|build)(\([^)]+\))?!?: '
+      - '^Merge (pull request|branch) '
+
+dockers_v2:
+  - id: asynqui
+    ids: [asynqui]
+    dockerfile: Dockerfile
+    images:
+      - ghcr.io/barkinbalci/asynqui
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: asynqui
+      org.opencontainers.image.description: Web dashboard for asynq across multiple Redis instances
+      org.opencontainers.image.source: https://github.com/BarkinBalci/asynqui
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+    # GHCR reads the package description and repository link from the index.
+    annotations:
+      org.opencontainers.image.description: Web dashboard for asynq across multiple Redis instances
+      org.opencontainers.image.source: https://github.com/BarkinBalci/asynqui
+      org.opencontainers.image.licenses: MIT
+
+release:
+  github:
+    owner: BarkinBalci
+    name: asynqui
+  prerelease: auto

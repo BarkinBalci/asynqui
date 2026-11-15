@@ -1,0 +1,89 @@
+package components
+
+import "github.com/BarkinBalci/asynqui/internal/web/format"
+
+// ConnCardView is one Overview card: reachable with its counters,
+// unreachable with the error and "Retry now", or unknown ("Checking").
+// With oob it replaces the card of the same id in an htmx response.
+templ ConnCardView(c ConnCard, oob bool) {
+	<article id={ CardID(c.Name) } class="card conn-card" data-health={ healthValue(c.Health) } { OOB(oob)... }>
+		<div class="conn-head">
+			<div class="conn-title">
+				<h2 class="card-title">{ c.Name }</h2>
+				if c.Role != RoleNone {
+					<span class="chip chip-role">
+						@RoleName(c.Role)
+					</span>
+				}
+			</div>
+			<div class="mono conn-addr">{ c.Addr }</div>
+		</div>
+		switch c.Health {
+			case HealthUp:
+				<div class="stats stats-4">
+					@stat(format.Number(c.Queues), false) {
+						Queues
+					}
+					@stat(format.Number(c.Pending), false) {
+						Pending
+					}
+					@stat(format.Number(c.Active), false) {
+						Active
+					}
+					@stat(format.Number(c.Retry), false) {
+						Retry
+					}
+				</div>
+				<div class="stats stats-3">
+					@stat(format.Number(c.Processed), false) {
+						Processed today
+					}
+					@stat(format.Number(c.Failed), true) {
+						Failed today
+					}
+					@stat(format.Duration(c.OldestPending), false) {
+						Oldest pending
+					}
+				</div>
+				<div class="conn-foot">
+					@HealthBadge(c.Health)
+					<a id={ CardOpenID(c.Name) } class="conn-open" href={ templ.SafeURL(c.OpenURL) }>Open →</a>
+				</div>
+			case HealthDown:
+				<div class="conn-error">
+					<div class="conn-error-title">
+						@IconAlert("16")
+						Connection failed
+					</div>
+					<div class="mono conn-error-text">{ c.Error }</div>
+				</div>
+				<div class="conn-foot">
+					@HealthBadge(c.Health)
+					<form method="post" action={ templ.SafeURL(c.RecheckURL) } hx-post={ c.RecheckURL } hx-target="closest article" hx-swap="outerHTML">
+						<button id={ CardRetryID(c.Name) } type="submit" class="btn retry">Retry now</button>
+					</form>
+				</div>
+			default:
+				<div class="conn-checking">Checking</div>
+		}
+	</article>
+}
+
+templ stat(value string, failed bool) {
+	<div class="stat">
+		<span class="stat-l">
+			{ children... }
+		</span>
+		<span class={ "stat-v", templ.KV("failed", failed) }>{ value }</span>
+	</div>
+}
+
+func healthValue(h Health) string {
+	switch h {
+	case HealthUp:
+		return "up"
+	case HealthDown:
+		return "down"
+	}
+	return "unknown"
+}
