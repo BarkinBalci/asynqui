@@ -10,13 +10,13 @@ permissions:
 
 jobs:
   check:
-    # `task check` runs the same gate locally (Taskfile.yml); keep the two in sync.
+    # `task check` in Taskfile.yml runs the same checks locally. Keep the two in sync.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Oldest supported minor; go.mod's toolchain line sets the patch.
+          # The oldest supported minor version. The toolchain line in go.mod sets the patch.
           go-version: '1.27.x'
           cache-dependency-path: |
             go.sum
@@ -42,7 +42,7 @@ jobs:
         run: CGO_ENABLED=0 go build -trimpath ./cmd/asynqui
 
   e2e:
-    # Browser tests (CONTRIBUTING.md).
+    # Browser tests, see CONTRIBUTING.md.
     runs-on: ubuntu-latest
     services:
       redis:

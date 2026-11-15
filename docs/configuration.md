@@ -1,13 +1,13 @@
 # Configuration
 
-asynqui reads one YAML file, plus a few flags and environment variables. [config.example.yaml](../config.example.yaml) shows every key and loads without any environment variables. Authentication and roles are in [authentication.md](authentication.md).
+asynqui reads one YAML file, plus a few flags and environment variables. [config.example.yaml](../config.example.yaml) shows every key and loads without any environment variables. For sign-in and roles, see [authentication.md](authentication.md).
 
 ## Command line
 
 - **Flags:** `-config`, `-addr`, `-log-level`, `-version`.
 - `-h` prints usage to stderr and exits 0.
 - `-version` prints `asynqui {version}` to stdout and exits 0 without reading the config. Release builds report the tag without its `v` (`0.1.0`).
-- **Exit codes:** 0 after a clean shutdown, `-h` or `-version`; 1 on a startup, serve or shutdown error (message on stderr); 2 on a usage error (unknown flag or positional argument).
+- **Exit codes:** 0 after a clean shutdown, `-h` or `-version`. 1 on a startup, serve or shutdown error, with the message on stderr. 2 on a usage error: an unknown flag or a positional argument.
 
 ## Precedence
 
@@ -31,7 +31,7 @@ asynqui fails fast:
 4. Build the connection registry. This opens no Redis connections, so a Redis that is down never fails startup.
 5. Open the listener and start the health loop and the update check.
 
-Any error in steps 1–5 is printed to stderr and exits 1. The process never serves in a half-initialised state.
+An error in any of these steps is printed to stderr, and asynqui exits with 1. It never serves in a half-initialised state.
 
 ## Logging
 
@@ -46,16 +46,16 @@ YAML, at the path from [Precedence](#precedence). Unknown keys are an error.
 ### Interpolation
 
 - `${NAME}` is replaced by the variable's value. An unset variable is an error naming the variable and its line. A variable set to an empty string is used as is.
-- `${NAME:-default}` uses `default` when `NAME` is unset (an empty value is still used as is).
+- `${NAME:-default}` uses `default` when `NAME` is unset. An empty value is still used as is.
 - `$$` produces a literal `$`.
 - Any other `$` is left alone, so bcrypt hashes like `$2y$12$…` need no escaping.
 - Only values are interpolated, never keys, so an interpolated value can never change the document's structure.
-- An interpolated value is read as if written unquoted, whatever its quoting, so it fills integer, boolean and duration fields: `db: ${REDIS_DB:-0}` works. String fields take it verbatim. An empty value keeps the field's default.
+- An interpolated value is read as if written unquoted, whatever its quoting, so it fills integer, boolean and duration fields: `db: ${REDIS_DB:-0}` works. String fields take it exactly as it is. An empty value keeps the field's default.
 
 ### Errors and warnings
 
 - A YAML syntax, type or unknown-key error, or an interpolation error, is reported on its own, with yaml's message and line. Type errors may quote the offending value.
-- Otherwise every validation problem is reported at once, as `location: problem` (e.g. `connections[2].name: duplicate of connections[0]`). Validation messages never contain a value.
+- Otherwise every validation problem is reported at once, as `location: problem`, for example `connections[2].name: duplicate of connections[0]`. Validation messages never contain a value.
 - Also rejected: null list entries and values of the wrong type.
 - Warnings (logged, not fatal): a binding glob that matches no connection, TLS options set while `tls.enabled` is false, an OIDC `redirect_url` whose path is not `<base_path>/auth/callback`.
 
@@ -87,7 +87,7 @@ YAML, at the path from [Precedence](#precedence). Unknown keys are an error.
 | `auth.provider` | `none` | `none`, `basic`, `proxy`, `oidc`. See [Providers](authentication.md#providers). |
 | `auth.session.hash_key` | — | Hex, 32 or 64 bytes. Required for `basic` and `oidc`. |
 | `auth.session.block_key` | — | Hex, 32 bytes, different from `hash_key`. Required for `basic` and `oidc`. |
-| `auth.session.previous_keys` | `[]` | List of `{hash_key, block_key}`, decode only. |
+| `auth.session.previous_keys` | `[]` | List of `{hash_key, block_key}`, used only to decode. |
 | `auth.session.ttl` | `12h` | Absolute. |
 | `auth.session.cookie_secure` | `true` | |
 | `auth.basic.users[]` | — | Required for `basic`, at least one. |
@@ -108,4 +108,4 @@ YAML, at the path from [Precedence](#precedence). Unknown keys are an error.
 | `authz.default` | `viewer` with `none`, otherwise `none` | `none`, `viewer`, `operator`, `admin`. See [Roles and access](authentication.md#roles-and-access). |
 | `authz.bindings[]` | `[]` | `users` and/or `groups`, `role` (`viewer`/`operator`/`admin`), `connections` (globs, non-empty). |
 
-Sections for providers other than `auth.provider` are not used but are still decoded and interpolated, so an unset `${NAME}` there is an error too. Keep inactive provider blocks commented out.
+Sections for providers other than the one in `auth.provider` aren't used, but they are still decoded and interpolated, so an unset `${NAME}` in them is still an error. Keep the blocks of unused providers commented out.
