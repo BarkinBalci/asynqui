@@ -38,8 +38,7 @@ cp config.example.yaml asynqui.yaml   # edit connections
 
 ### Docker
 
-The image reads its config from `/etc/asynqui/config.yaml` and runs as a
-non-root user:
+The image reads its config from `/etc/asynqui/config.yaml`:
 
 ```sh
 docker run --rm -p 8080:8080 \
@@ -52,66 +51,24 @@ Inside a container, `localhost` is the container itself, so point
 
 ### Kubernetes
 
-See [deployment](docs/deployment.md) for a Deployment and Service with probes
-and graceful shutdown.
+See the [deployment example](docs/deployment.md#kubernetes-example).
 
 ## Configuration
 
-| Setting | Flag | Env | Config key | Default |
-|---|---|---|---|---|
-| Config file | `-config` | `ASYNQUI_CONFIG` | — | `asynqui.yaml` |
-| Listen address | `-addr` | `ASYNQUI_ADDR` | `server.addr` | `:8080` |
-| Log level | `-log-level` | `ASYNQUI_LOG_LEVEL` | `log.level` | `info` |
+Every key is listed in [requirements §8](docs/requirements.md#8-configuration),
+and the flags and environment variables in
+[§7](docs/requirements.md#precedence). Values can come from the environment
+through `${NAME}` in the YAML.
 
-`asynqui -version` prints the version.
-
-Precedence is flag > env > file > default. Any other value can come from the
-environment through `${NAME}` or `${NAME:-default}` in the YAML. Every key is
-listed in [requirements §8](docs/requirements.md#8-configuration).
-
-asynqui checks GitHub for a newer release at startup and then daily, and shows a
-dot next to the version in the sidebar. Set `update_check: false` to turn it off.
-
-## Health probes
-
-Both live under `server.base_path`:
-
-- `GET /health/liveness`: 200 while the process runs.
-- `GET /health/readiness`: 200 while serving, 503 from the start of shutdown.
-  It never depends on Redis health.
-
-On SIGTERM, readiness turns 503 for `server.shutdown_delay` (5s) before the
-listener closes, then in-flight requests get 10s to finish. Keep
-`terminationGracePeriodSeconds` above the sum. See
-[deployment](docs/deployment.md).
-
-## Development
-
-Needs Go 1.27+. Tools are pinned in `tools/go.mod`. Tasks run with
-[Task](https://taskfile.dev/installation/), or without installing it as
-`go tool -modfile=tools/go.mod task`.
-
-```sh
-task              # list tasks
-task run          # localhost:6379, no login, admin (config.dev.yaml)
-task build        # bin/asynqui, version from git describe
-task docker       # asynqui:dev image from source (Dockerfile.dev)
-task lint test
-task test-race    # needs cgo and a C compiler
-task check        # the CI check job
-task e2e          # browser tests
-task demo-gif     # regenerate docs/images/demo.gif
-```
-
-The browser tests and the demo GIF need Chromium and a throwaway Redis; see
-[contributing](docs/contributing.md).
+asynqui checks GitHub for new releases; set `update_check: false` to turn it
+off ([deployment](docs/deployment.md#update-check)).
 
 ## Documentation
 
-- [Requirements](docs/requirements.md)
-- [Architecture](docs/architecture.md)
-- [Deployment](docs/deployment.md)
-- [Contributing](docs/contributing.md)
+- [Requirements](docs/requirements.md): behaviour and configuration
+- [Deployment](docs/deployment.md): running it in production
+- [Architecture](docs/architecture.md): internals, for contributors
+- [Contributing](docs/contributing.md): the dev workflow
 
 ## License
 
