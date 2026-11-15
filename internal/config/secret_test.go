@@ -156,8 +156,7 @@ func TestSecretInContainers(t *testing.T) {
 		}
 	}
 	// encoding/json writes string-kind map keys verbatim, bypassing
-	// MarshalText, so a Secret must never be a map key; no config type uses
-	// one.
+	// MarshalText, so a Secret must never be a map key.
 	w.K = nil
 	b, err := json.Marshal(w)
 	if err != nil {

@@ -14,18 +14,15 @@ import (
 )
 
 // Overrides are settings from flags or ASYNQUI_* variables. Non-empty fields
-// replace the file's value: flag > env > file > default.
+// replace the file's value.
 type Overrides struct {
-	Addr     string // server.addr
-	LogLevel string // log.level
+	Addr     string
+	LogLevel string
 }
 
-// Load reads, interpolates, decodes and validates the config file at path.
-// lookupEnv resolves ${NAME} references; pass os.LookupEnv in production.
-// overrides carries the flags and ASYNQUI_* variables that were set.
-//
-// A YAML or interpolation error is returned on its own. Otherwise every
-// validation problem is returned, joined with errors.Join.
+// Load reads, interpolates, decodes and validates the config file at path. A
+// YAML or interpolation error is returned on its own; otherwise every
+// validation problem is joined with errors.Join.
 func Load(path string, lookupEnv func(string) (string, bool), overrides Overrides) (*Config, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // the path is chosen by the operator
 	if err != nil {
@@ -65,10 +62,9 @@ func parse(data []byte, lookupEnv func(string) (string, bool), o Overrides) (*Co
 	return cfg, nil
 }
 
-// document decodes a whole config file into cfg. Its old-style
-// UnmarshalYAML keeps the Decoder, and so KnownFields, which Node.Decode
-// would drop: the first call hands the decoder's own tree to interpolate,
-// the second decodes the result.
+// document decodes a whole config file into cfg. Its old-style UnmarshalYAML
+// keeps the Decoder's KnownFields, which Node.Decode would drop: the first
+// call interpolates the decoder's own tree, the second decodes the result.
 type document struct {
 	cfg       *Config
 	lookupEnv func(string) (string, bool)

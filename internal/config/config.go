@@ -15,13 +15,13 @@ type Config struct {
 
 // Server configures the HTTP listener.
 type Server struct {
-	// Addr is the listen address. The -addr flag and ASYNQUI_ADDR override it.
+	// Addr is the listen address.
 	Addr string `yaml:"addr"`
 	// BasePath serves the whole app under a sub-path, e.g. "/asynq". It is
 	// empty or starts with "/" and has no trailing "/".
 	BasePath string `yaml:"base_path"`
-	// TrustedOrigins are extra origins (scheme://host[:port]) allowed to send
-	// cross-origin unsafe requests, passed to http.CrossOriginProtection.
+	// TrustedOrigins are extra origins (scheme://host[:port]) passed to
+	// http.CrossOriginProtection.AddTrustedOrigin.
 	TrustedOrigins []string `yaml:"trusted_origins"`
 	// ShutdownDelay is how long readiness reports draining before the
 	// listener closes. Zero disables it.
@@ -189,7 +189,7 @@ func DefaultScopes() []string { return []string{"openid", "profile", "email"} }
 
 // defaults returns a Config holding every default that does not depend on
 // another field. Decoding YAML on top of it keeps the defaults of absent or
-// null keys, so an explicit zero (e.g. shutdown_delay: 0s) is kept as written.
+// null keys.
 func defaults() *Config {
 	return &Config{
 		Server:      Server{Addr: DefaultAddr, ShutdownDelay: DefaultShutdownDelay},
@@ -209,8 +209,8 @@ func defaults() *Config {
 	}
 }
 
-// UnmarshalYAML decodes a connection on top of its default timeouts. It
-// uses the old-style callback so the Decoder's KnownFields still applies.
+// UnmarshalYAML decodes a connection on top of its default timeouts. The
+// old-style callback keeps the Decoder's KnownFields in effect.
 func (c *Connection) UnmarshalYAML(unmarshal func(any) error) error {
 	type connection Connection // no methods, so no recursion
 	p := connection{

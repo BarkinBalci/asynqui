@@ -88,7 +88,7 @@ func (p *problems) server(s Server) {
 		path.Clean(bp) != bp || strings.ContainsAny(bp, "?#% \t")) {
 		p.add("server.base_path", "must be empty or a clean path such as /asynq, without a trailing slash")
 	}
-	// Validate exactly as the web server will use them.
+	// AddTrustedOrigin is the check the web server applies.
 	cop := http.NewCrossOriginProtection()
 	for i, o := range s.TrustedOrigins {
 		if cop.AddTrustedOrigin(o) != nil {
@@ -200,8 +200,7 @@ func decodeKey(s Secret, want string, sizes ...int) ([]byte, error) {
 	return b, nil
 }
 
-// KeyPairs returns the decoded current and previous session keys as
-// hashKey, blockKey, hashKey, blockKey, ..., the order
+// KeyPairs returns the decoded current and previous session keys in the order
 // securecookie.CodecsFromPairs takes. Load has already validated them.
 func (s Session) KeyPairs() ([][]byte, error) {
 	pairs := append([]KeyPair{{HashKey: s.HashKey, BlockKey: s.BlockKey}}, s.PreviousKeys...)
@@ -251,12 +250,8 @@ func (p *problems) basic(b Basic) {
 	}
 }
 
-// FoldUsername lowercases ASCII A–Z and leaves every other byte alone, so
-// usernames compare case-insensitively without Unicode folding: the
-// duplicate check here, authz's binding match and auth's per-user rate
-// limit all use it. Unicode folding would let look-alikes such as the
-// Kelvin sign (U+212A) or the Angstrom sign (U+212B) match "k" or "å", and
-// İ (U+0130) match "i"; invalid UTF-8 stays as it is.
+// FoldUsername lowercases ASCII A–Z and leaves every other byte alone. Unicode
+// folding would let look-alikes such as the Kelvin sign (U+212A) match "k".
 func FoldUsername(s string) string {
 	b := []byte(s)
 	for i, c := range b {
@@ -374,10 +369,7 @@ func validGlob(g string) bool {
 	return g != "" && err == nil
 }
 
-// Warnings returns problems that do not stop startup:
-//   - connection globs that match no connection,
-//   - TLS options on a connection whose TLS is disabled,
-//   - an OIDC redirect_url that does not point at {base_path}/auth/callback.
+// Warnings returns problems that do not stop startup.
 func (c *Config) Warnings() []string {
 	var w []string
 	for i, b := range c.Authz.Bindings {

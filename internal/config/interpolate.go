@@ -10,10 +10,10 @@ import (
 )
 
 // interpolate expands environment variables in the scalar values (never the
-// keys) of the tree at n. An expanded value is read as if written unquoted,
-// so ${DB} fills an int and ${TLS} a bool; an empty one is null and keeps the
-// field's default. Aliases are skipped: their anchors are expanded in place.
-// Null list entries are rejected, since decoding would silently drop them.
+// keys) of the tree at n. An expanded value is read as if written unquoted, so
+// ${DB} fills an int; an empty one is null and keeps the field's default.
+// Aliases are skipped, since their anchors are expanded in place. Null list
+// entries are rejected, since decoding would silently drop them.
 func interpolate(n *yaml.Node, lookupEnv func(string) (string, bool)) error {
 	switch n.Kind {
 	case yaml.ScalarNode:
@@ -49,10 +49,8 @@ func interpolate(n *yaml.Node, lookupEnv func(string) (string, bool)) error {
 	return nil
 }
 
-// expand replaces ${NAME} by the variable's value and ${NAME:-default} by
-// default when NAME is unset, and turns $$ into $. Any other $ is kept, so
-// bcrypt hashes need no escaping. An unset NAME without a default is an
-// error; one set to "" expands to "".
+// expand expands ${NAME}, ${NAME:-default} and $$ in s (see
+// docs/requirements.md §8).
 func expand(s string, lookupEnv func(string) (string, bool)) (string, error) {
 	validName := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	var b strings.Builder
