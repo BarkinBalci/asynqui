@@ -38,14 +38,22 @@ tasks:
     cmd: go test -race ./...
 
   e2e:
-    desc: Run the browser tests (Chromium + a throwaway Redis; see docs/contributing.md)
+    desc: Run the browser tests (Chromium + a throwaway Redis; see CONTRIBUTING.md)
     cmd: go test -tags e2e -count=1 ./e2e/...
 
   demo-gif:
-    desc: Regenerate docs/images/demo.gif (see docs/contributing.md)
+    desc: Regenerate docs/images/demo.gif (see CONTRIBUTING.md)
     env:
       ASYNQUI_E2E_GIF: RunRetries
     cmd: go test -tags e2e -count=1 -run '^TestBrowser$/^RunRetries$' ./e2e/
+
+  demo:
+    desc: Serve asynqui on a Redis seeded with the e2e fixture; flushes DBs 0-2 (see CONTRIBUTING.md)
+    vars:
+      ADDR: '{{.ADDR | default "127.0.0.1:8080"}}'
+    env:
+      ASYNQUI_E2E_DEMO: '{{.ADDR}}'
+    cmd: go test -tags e2e -count=1 -timeout 0 -v -run '^TestDemo$' ./e2e/
 
   run:
     desc: Run locally against localhost:6379 with config.dev.yaml
@@ -76,8 +84,6 @@ tasks:
     dir: tools
     cmd: go mod tidy{{if .FLAGS}} {{.FLAGS}}{{end}}
 
-  # Keep in sync with the check job in .github/workflows/ci.yml, which also
-  # runs -race.
   check:
     desc: Run the CI check job locally
     cmds:

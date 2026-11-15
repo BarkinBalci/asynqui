@@ -1,6 +1,6 @@
 # asynqui example configuration. Every key is shown with its default, and the
 # file loads as is, without any environment variables.
-# Reference: docs/requirements.md §8.
+# Reference: docs/configuration.md; auth and roles: docs/authentication.md.
 #
 # Values can use ${NAME} (unset is an error) and ${NAME:-default}. $$ is a
 # literal "$"; any other "$" is kept, so bcrypt hashes need no escaping.
@@ -10,7 +10,7 @@ server:
   # Serve under a sub-path, e.g. "/asynq", probes and static files included.
   base_path: ""
   # Readiness reports 503 for this long before the listener closes; 0 disables.
-  # See docs/deployment.md.
+  # See docs/deployment.md#graceful-shutdown.
   shutdown_delay: 5s
   # Extra origins allowed to send POSTs, e.g. ["https://ops.example.com"].
   trusted_origins: []
@@ -55,7 +55,7 @@ connections:
 auth:
   provider: none
 
-  # Session cookie (basic and oidc). Generate each key with: openssl rand -hex 32
+  # Session cookie (basic and oidc). Generating keys: docs/authentication.md#sessions.
   # session:
   #   hash_key: ${ASYNQUI_SESSION_HASH_KEY}
   #   block_key: ${ASYNQUI_SESSION_BLOCK_KEY}
@@ -63,8 +63,7 @@ auth:
   #   ttl: 12h               # absolute
   #   cookie_secure: true    # false only for local plain http
 
-  # provider: basic. bcrypt hashes (max 72-byte passwords):
-  #   htpasswd -nbBC 12 "" 'secret' | cut -d: -f2
+  # provider: basic. Generating hashes: docs/authentication.md#basic.
   # basic:
   #   users:
   #     - username: jdoe
@@ -72,7 +71,7 @@ auth:
   #       groups: [payments-team]
 
   # provider: proxy. The proxy must strip client identity headers; see
-  # docs/deployment.md.
+  # docs/authentication.md#proxy.
   # proxy:
   #   user_header: X-Forwarded-User
   #   groups_header: ""              # e.g. X-Forwarded-Groups (comma-separated)
@@ -89,7 +88,7 @@ auth:
   #   username_claim: email                          # email requires email_verified
   #   groups_claim: groups
 
-# Roles per connection: viewer < operator < admin (docs/requirements.md §4).
+# Roles per connection: viewer < operator < admin (docs/authentication.md#roles-and-access).
 # A user's role is the highest of `default` and every matching binding.
 authz:
   # Defaults to viewer with provider none, otherwise none. Set admin for full

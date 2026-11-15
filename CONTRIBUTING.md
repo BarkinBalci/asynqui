@@ -2,7 +2,34 @@
 
 Dev tasks live in `Taskfile.yml`; run `task` to list them. Install [Task](https://taskfile.dev/installation/) or run it as `go tool -modfile=tools/go.mod task`. Run `task check` before pushing; it runs the CI check job.
 
-Code conventions are in [architecture.md](architecture.md). Each topic has one owning doc: behaviour and configuration in [requirements.md](requirements.md), internals in architecture.md, production in [deployment.md](deployment.md), the dev workflow here. Link to the owner instead of repeating it.
+Code conventions are in [architecture.md](docs/architecture.md). Each topic has one owning doc; link to the owner instead of repeating it.
+
+| Doc | Owns |
+|---|---|
+| [configuration.md](docs/configuration.md) | flags, environment, precedence, startup, logging, the config file and every key |
+| [authentication.md](docs/authentication.md) | providers, sessions, roles and bindings, cookies |
+| [deployment.md](docs/deployment.md) | install, Kubernetes, probes, shutdown, reverse proxy, update check |
+| [design.md](docs/design.md) | the behaviour spec: pages, UI rules, sign-in flow, HTTP behaviour |
+| [architecture.md](docs/architecture.md) | code layout, rules and internals |
+| CONTRIBUTING.md | the dev workflow |
+| [releasing.md](docs/releasing.md) | cutting a release |
+
+## Local development
+
+You need:
+
+- Go, at the version in `go.mod`
+- Docker, for the integration tests (they skip without it)
+- a Redis or Valkey to run against
+
+`task run` starts asynqui against `localhost:6379` with `config.dev.yaml`: no login, full control.
+
+`task demo` fills a **throwaway** Redis with the browser tests' fixture and serves asynqui on it, with the fixture's workers and schedulers running, until Ctrl-C. It flushes DBs 0–2 and shows four connections, one of them unreachable.
+
+```sh
+ASYNQUI_E2E_REDIS=localhost:6379 task demo   # http://127.0.0.1:8080
+task demo ADDR=127.0.0.1:9000                # without ASYNQUI_E2E_REDIS, testcontainers starts a Redis (Docker)
+```
 
 ## Commit messages
 
@@ -49,20 +76,6 @@ axe-core is vendored in `e2e/testdata`. To upgrade it, replace the directory wit
 
 The README's `docs/images/demo.gif` is recorded from the `RunRetries` browser test. Regenerate it with `ASYNQUI_E2E_REDIS=localhost:6379 task demo-gif` when a page in that flow changes, and watch it before committing.
 
-## Releases
+## Version stamping
 
-Push a tag `vX.Y.Z` (or `vX.Y.Z-rc.N` for a prerelease) on `main`. `.github/workflows/release.yml` runs the tests, then GoReleaser publishes the GitHub release, the archives and the images.
-
-- **No backport releases.** Cut releases only from the main line, in increasing version order. Each new release becomes GitHub's "latest", which the update check and the `latest` image tag follow, so a `v0.1.5` published after `v0.2.0` would point users backwards. Fix forward instead.
-- To bump GoReleaser, change the version in `release.yml` and run `go run github.com/goreleaser/goreleaser/v2@<version> check`.
-
-### First release checklist
-
-1. Push the first tag and wait for the workflow to finish.
-2. GHCR creates `ghcr.io/barkinbalci/asynqui` as a private package. In its package settings on GitHub, set the visibility to **Public** and check that it is linked to the repository.
-3. Confirm an anonymous pull works from a machine that is not logged in to ghcr.io:
-
-   ```sh
-   docker logout ghcr.io
-   docker pull ghcr.io/barkinbalci/asynqui:<version>
-   ```
+`task build` stamps `main.version` with the `git describe` output (override with `VERSION=x`); release builds stamp the tag without its `v`. A build without a stamped version reports the module version the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none (`go run`).

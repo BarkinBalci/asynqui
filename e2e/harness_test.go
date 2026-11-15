@@ -70,12 +70,12 @@ func newHarness(t *testing.T) *harness {
 	bin := buildApp(t)
 	dir := t.TempDir()
 	conns := connectionsConfig(redisAddr, deadAddr(t))
-	h.open = startApp(t, bin, writeConfig(t, dir, "open.yaml", openConfig(conns)))
-	h.basic = startApp(t, bin, writeConfig(t, dir, "basic.yaml", basicConfig(t, conns)))
+	h.open = startApp(t, bin, writeConfig(t, dir, "open.yaml", openConfig(conns)), anyLoopback)
+	h.basic = startApp(t, bin, writeConfig(t, dir, "basic.yaml", basicConfig(t, conns)), anyLoopback)
 
 	pw, err := playwright.Run()
 	if err != nil {
-		t.Fatalf("start playwright (install Chromium first, see docs/contributing.md): %v", err)
+		t.Fatalf("start playwright (install Chromium first, see CONTRIBUTING.md): %v", err)
 	}
 	t.Cleanup(func() { _ = pw.Stop() })
 	h.browser, err = pw.Chromium.Launch(h.look.launchOptions())
@@ -182,11 +182,14 @@ authz:
 		adminUser, hash(adminPassword), viewerUser, hash(viewerPass), adminUser)
 }
 
-// startApp runs the binary on a random loopback port and waits for its
-// "listening" log line. Its log is printed if the test fails.
-func startApp(t *testing.T, bin, cfg string) *instance {
+// anyLoopback is a random loopback port.
+const anyLoopback = "127.0.0.1:0"
+
+// startApp runs the binary on addr and waits for its "listening" log
+// line. Its log is printed if the test fails.
+func startApp(t *testing.T, bin, cfg, addr string) *instance {
 	t.Helper()
-	cmd := exec.Command(bin, "-config", cfg, "-addr", "127.0.0.1:0")
+	cmd := exec.Command(bin, "-config", cfg, "-addr", addr)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
