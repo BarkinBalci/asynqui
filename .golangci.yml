@@ -4,7 +4,7 @@ run:
   build-tags: [e2e] # lint the browser tests too
 
 linters:
-  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
   enable:
     - bodyclose
     - errorlint

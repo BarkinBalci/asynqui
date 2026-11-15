@@ -1,9 +1,8 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 #
-# Release configuration, run by .github/workflows/release.yml on vX.Y.Z* tags.
-# Validate locally with:
-#   go run github.com/goreleaser/goreleaser/v2@v2.19.0 check
-# Keep the version in sync with the workflow's goreleaser-action `version`.
+# Run by .github/workflows/release.yml. Validate with
+#   go run github.com/goreleaser/goreleaser/v2@<version> check
+# using the GoReleaser version pinned in that workflow.
 version: 2
 
 project_name: asynqui
@@ -20,7 +19,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w -X main.version={{ .Version }}
-    # Reproducible builds: file times come from the tagged commit.
+    # Reproducible builds.
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
@@ -31,7 +30,7 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    # Reproducible archives: fixed owner, mode and the tagged commit's time.
+    # Reproducible archives.
     builds_info:
       owner: root
       group: root
@@ -56,9 +55,8 @@ checksum:
 changelog:
   use: git
   sort: asc
-  # Grouped by conventional-commit prefix (docs/contributing.md); anything
-  # else lands in "Other". Groups and filters match the commit subject alone
-  # (the hash is added only when formatting), so they anchor at its start.
+  # Groups by conventional-commit prefix (docs/contributing.md). The regexps
+  # see the commit subject alone, so they anchor at its start.
   groups:
     - title: Features
       regexp: '^feat(\([^)]+\))?!?: '
@@ -85,7 +83,6 @@ dockers_v2:
     dockerfile: Dockerfile
     images:
       - ghcr.io/barkinbalci/asynqui
-    # Prereleases get only their exact version, never "latest" or "X.Y".
     tags:
       - "{{ .Version }}"
       - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
@@ -111,6 +108,4 @@ release:
   github:
     owner: BarkinBalci
     name: asynqui
-  # Tags like v0.2.0-rc.1 are published as GitHub prereleases, which the
-  # update check ignores.
   prerelease: auto

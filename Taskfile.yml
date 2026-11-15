@@ -1,11 +1,9 @@
-# asynqui developer tasks. Tools (task, templ, golangci-lint) are pinned in
-# tools/go.mod so the main go.mod stays lean.
+# asynqui developer tasks. Tools are pinned in tools/go.mod.
 version: '3'
 
 vars:
   TOOL: go tool -modfile=tools/go.mod
-  # Stamped into main.version; asynqui -version prints it. Releases get
-  # theirs from GoReleaser (.goreleaser.yaml). Override: task build VERSION=x
+  # Stamped into main.version. Override: task build VERSION=x
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo dev
 
@@ -44,7 +42,7 @@ tasks:
     cmd: go test -tags e2e -count=1 ./e2e/...
 
   demo-gif:
-    desc: Regenerate the README's docs/images/demo.gif from the RunRetries browser test (Chromium + a throwaway Redis; see docs/contributing.md)
+    desc: Regenerate docs/images/demo.gif (see docs/contributing.md)
     env:
       ASYNQUI_E2E_GIF: RunRetries
     cmd: go test -tags e2e -count=1 -run '^TestBrowser$/^RunRetries$' ./e2e/
@@ -78,8 +76,8 @@ tasks:
     dir: tools
     cmd: go mod tidy{{if .FLAGS}} {{.FLAGS}}{{end}}
 
-  # Keep in sync with the check job in .github/workflows/ci.yml. No -race
-  # (needs cgo; see test-race), and integration tests skip without Docker.
+  # Keep in sync with the check job in .github/workflows/ci.yml, which also
+  # runs -race.
   check:
     desc: Run the CI check job locally
     cmds:

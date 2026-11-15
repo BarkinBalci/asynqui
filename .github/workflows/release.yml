@@ -6,7 +6,6 @@ on:
 
 permissions: {}
 
-# One release at a time; a running release is never canceled halfway.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -25,9 +24,6 @@ jobs:
           go-version-file: go.mod
           cache: false # no cache restored into a release build
       - name: test
-        # ubuntu runners ship Docker (testcontainers) and gcc (-race needs cgo).
-        # ASYNQUI_REQUIRE_DOCKER fails the integration tests instead of
-        # skipping them when Docker is missing.
         env:
           ASYNQUI_REQUIRE_DOCKER: '1'
         run: go test -race ./...
@@ -56,7 +52,7 @@ jobs:
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: v2.19.0 # keep in sync with .goreleaser.yaml's header
+          version: v2.19.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
