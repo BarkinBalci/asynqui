@@ -27,8 +27,7 @@ const (
 
 // ErrNotRelease is returned by New for a running version that is not a
 // release: not a semantic version (such as "dev"), or one with a prerelease
-// part, which also covers git describe output ("v0.1.0-3-gabc1234-dirty").
-// Such builds are never checked.
+// part. Such builds are never checked.
 var ErrNotRelease = errors.New("not a release version")
 
 // Options configure a Checker. Version is required.
@@ -38,14 +37,13 @@ type Options struct {
 	// Logger receives the check's debug and info messages. Nil discards
 	// them.
 	Logger *slog.Logger
-	// Client sends the request. Nil means a new http.Client with the
-	// default transport, which honors HTTPS_PROXY.
+	// Client sends the request. Nil means a new http.Client.
 	Client *http.Client
 	// After is the clock that spaces the checks. Nil means time.After.
 	After func(time.Duration) <-chan time.Time
 	// URL is the releases API endpoint. Empty means DefaultURL.
 	URL string
-	// Timeout bounds one check. Zero means 5s.
+	// Timeout bounds one check. Zero means defaultTimeout.
 	Timeout time.Duration
 }
 
@@ -107,7 +105,7 @@ func (c *Checker) Latest() (version string, ok bool) {
 	return c.latest, c.latest != ""
 }
 
-// Run checks now and then every 24h until ctx ends.
+// Run checks now and then every interval until ctx ends.
 func (c *Checker) Run(ctx context.Context) {
 	for {
 		c.check(ctx)
