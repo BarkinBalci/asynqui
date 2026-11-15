@@ -1,6 +1,6 @@
 # Contributing
 
-Dev tasks live in `Taskfile.yml`; run `task` to list them. Install [Task](https://taskfile.dev/installation/) or run it as `go tool -modfile=tools/go.mod task`. Run `task check` before pushing; it runs the CI check job.
+Development tasks are in `Taskfile.yml`, and `task` lists them. Install [Task](https://taskfile.dev/installation/) or run it as `go tool -modfile=tools/go.mod task`. Before you push, run `task check`. It runs the same checks as CI.
 
 ## Documentation
 
@@ -23,13 +23,13 @@ You need:
 - Docker, for the integration tests (they skip without it)
 - a Redis or Valkey to run against
 
-`task run` starts asynqui against `localhost:6379` with `config.dev.yaml`: no login, full control.
+`task run` starts asynqui against `localhost:6379` with `config.dev.yaml`, which has no login and gives you full control.
 
-`task demo` fills a **throwaway** Redis with the browser tests' fixture and serves asynqui on it, with the fixture's workers and schedulers running, until Ctrl-C. It flushes DBs 0–2 and shows four connections, one of them unreachable.
+`task demo` fills a **throwaway** Redis with the browser tests' fixture and serves asynqui on it until you press Ctrl-C. The fixture's workers and schedulers keep running meanwhile. It flushes DBs 0–2 and shows four connections, one of them unreachable.
 
 ```sh
 ASYNQUI_E2E_REDIS=localhost:6379 task demo   # http://127.0.0.1:8080
-task demo ADDR=127.0.0.1:9000                # without ASYNQUI_E2E_REDIS, testcontainers starts a Redis (Docker)
+task demo ADDR=127.0.0.1:9000                # without ASYNQUI_E2E_REDIS, testcontainers starts Redis in Docker
 ```
 
 ## Commit messages
@@ -43,13 +43,13 @@ Start each commit subject with a [Conventional Commits](https://www.conventional
 | `perf:` | Performance |
 | `docs:` | Documentation |
 | `test:`, `ci:`, `chore:`, `build:` | left out |
-| anything else (e.g. `refactor:`) | Other |
+| anything else, such as `refactor:` | Other |
 
 A scope and `!` for breaking changes are fine: `feat(auth)!: drop the session cookie fallback`. Keep the subject short, in the imperative, without a trailing period.
 
 ## Browser tests
 
-`e2e/` holds the browser tests, behind the `e2e` build tag, so `go test ./...` needs no browser. They start the built `cmd/asynqui` against one shared fixture and drive Chromium through [playwright-go](https://github.com/mxschmitt/playwright-go).
+The browser tests are in `e2e/`, behind the `e2e` build tag, so `go test ./...` doesn't need a browser. They start the built `cmd/asynqui` against one shared fixture and drive Chromium through [playwright-go](https://github.com/mxschmitt/playwright-go).
 
 1. Install the driver and Chromium once:
 
@@ -66,10 +66,10 @@ A scope and `!` for breaking changes are fine: `feat(auth)!: drop the session co
 
 | Variable | Effect |
 |---|---|
-| `ASYNQUI_E2E_REDIS=host:port` | The Redis to use; unset, testcontainers starts one (Docker) |
+| `ASYNQUI_E2E_REDIS=host:port` | The Redis to use. If unset, testcontainers starts one in Docker. |
 | `ASYNQUI_E2E_HEADED=1` | Shows the browser |
 
-Each run leaves a video per test in `e2e/test-results/`, and a `.trace.zip` for each failed test; CI uploads the directory as the `e2e-test-results` artifact. Open a trace with `go run github.com/mxschmitt/playwright-go/cmd/playwright show-trace <file>.trace.zip` or on [trace.playwright.dev](https://trace.playwright.dev).
+Each run leaves a video per test in `e2e/test-results/`, and a `.trace.zip` for each failed test. CI uploads the directory as the `e2e-test-results` artifact. Open a trace with `go run github.com/mxschmitt/playwright-go/cmd/playwright show-trace <file>.trace.zip` or on [trace.playwright.dev](https://trace.playwright.dev).
 
 axe-core is vendored in `e2e/testdata`. To upgrade it, replace the directory with the new release's `axe.min.js` and `LICENSE` and update the path in `e2e/a11y_test.go`. The accessibility check fails on any violation, minor ones included.
 
@@ -79,4 +79,4 @@ The README's `docs/images/demo.gif` is recorded from the `RunRetries` browser te
 
 ## Version stamping
 
-`task build` stamps `main.version` with the `git describe` output (override with `VERSION=x`); release builds stamp the tag without its `v`. A build without a stamped version reports the module version the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none (`go run`).
+`task build` stamps `main.version` with the output of `git describe`. Set `VERSION=x` to override it. Release builds stamp the tag without its `v`. A build without a stamped version reports the module version that the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none, as with `go run`.

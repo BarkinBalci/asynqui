@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false # no cache restored into a release build
+          cache: false # release builds start without a restored cache
       - name: test
         env:
           ASYNQUI_REQUIRE_DOCKER: '1'
@@ -32,8 +32,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: write # GitHub release and its assets
-      packages: write # images on ghcr.io
+      contents: write # to publish the GitHub release and its assets
+      packages: write # to push images to ghcr.io
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

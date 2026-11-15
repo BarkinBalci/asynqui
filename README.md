@@ -15,15 +15,15 @@
 
 ## Features
 
-- Login with basic auth, reverse-proxy headers or OIDC
+- Sign in with basic auth, reverse-proxy headers or OIDC
 - Roles per connection for users and groups
 - A single static binary or a container image
 
 ## Quickstart
 
-Start from [config.example.yaml](config.example.yaml). It loads as is, with no
-login and the read-only `viewer` role. Set `authz.default: admin` for full
-control without login, or configure an auth provider.
+Start from [config.example.yaml](config.example.yaml). It works as is: there
+is no login, and everyone gets the read-only `viewer` role. For full control
+without login, set `authz.default: admin`, or configure an auth provider.
 
 ### Binary
 
@@ -58,15 +58,15 @@ See the [deployment example](docs/deployment.md#kubernetes-example).
 - Standalone Redis or Valkey only: no Sentinel or Cluster.
 - No metrics endpoint and no audit log.
 - Connections are managed in the config file, not in the UI.
-- Only empty queues can be deleted; there is no force delete.
-- Active tasks are cancelled by selection; there is no "Cancel all".
+- Only empty queues can be deleted. There is no force delete.
+- Active tasks can be cancelled only by selecting them. There is no "Cancel all".
 - asynq caps the archive at 10,000 tasks and 90 days.
-- Scheduler entries are read-only: no "run now".
+- Scheduler entries are read-only, so there is no "run now".
 
 ## Configuration
 
 Every flag, environment variable and config key is in [docs/configuration.md](docs/configuration.md).
-asynqui checks GitHub for new releases; [update check](docs/deployment.md#update-check) says how to turn it off.
+asynqui checks GitHub for new releases. You can [turn the update check off](docs/deployment.md#update-check).
 
 ## Documentation
 
@@ -79,8 +79,8 @@ asynqui checks GitHub for new releases; [update check](docs/deployment.md#update
 **Contributing**
 
 - [Contributing](CONTRIBUTING.md): local development and the dev workflow
-- [Design](docs/design.md): the behaviour spec
-- [Architecture](docs/architecture.md): internals
+- [Design](docs/design.md): how asynqui behaves
+- [Architecture](docs/architecture.md): how the code is organised
 - [Releasing](docs/releasing.md): cutting a release
 
 ## License
