@@ -15,16 +15,18 @@ import (
 	playwright "github.com/mxschmitt/playwright-go"
 )
 
-// TestBrowser runs every browser test against one harness: one Redis,
-// one seed, two asynqui instances and one Chromium. Each subtest gets its
-// own browser context (cookies, permissions) and its own queues, so any
-// of them can run alone: go test -tags e2e ./e2e -run 'TestBrowser/Theme'.
+// TestBrowser runs every browser test against one harness: one Redis
+// with the fixture, two asynqui instances and one Chromium. Each subtest
+// gets its own browser context (cookies, permissions) and changes only
+// what no other subtest reads, so any of them can run alone:
+// go test -tags e2e ./e2e -run 'TestBrowser/Theme'.
 func TestBrowser(t *testing.T) {
 	h := newHarness(t)
 	tests := []struct {
 		name string
 		run  func(*testing.T, *harness)
 	}{
+		{"RunRetries", testRunRetries},
 		{"ThemeNoFlash", testThemeNoFlash},
 		{"ThemeSystem", testThemeSystem},
 		{"RefreshOffAnd2s", testRefreshOffAnd2s},
@@ -242,12 +244,13 @@ func containing(s string) *regexp.Regexp { return regexp.MustCompile(regexp.Quot
 // hexID is components.HexID: the id of a row's checkbox or link.
 func hexID(prefix, s string) string { return prefix + hex.EncodeToString([]byte(s)) }
 
-// queuePath is the Queue page of q on one tab.
-func queuePath(q, state string) string {
-	return "/c/" + connName + "/queues/" + q + "?state=" + state
-}
+// connPath is the Connection page of c.
+func connPath(c string) string { return "/c/" + c }
 
-const connPath = "/c/" + connName
+// queuePath is the Queue page of q on c, on one tab.
+func queuePath(c, q, state string) string {
+	return connPath(c) + "/queues/" + q + "?state=" + state
+}
 
 // login signs in through the basic login form, starting at path.
 func (p *page) login(path, user, password string) {

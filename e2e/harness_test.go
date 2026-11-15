@@ -1,12 +1,10 @@
-//go:build e2e || demo
+//go:build e2e
 
 package e2e
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,16 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hibiken/asynq"
 	playwright "github.com/mxschmitt/playwright-go"
-	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"golang.org/x/crypto/bcrypt"
 )
-
-// connName is the one connection every instance shows.
-const connName = "local"
 
 // Basic-auth users of the login instance: admin has admin on every
 // connection, viewer only the default viewer role.
@@ -41,13 +34,10 @@ const (
 // harness is what every test shares: the seeded Redis, two asynqui
 // instances and the browser.
 type harness struct {
-	redisAddr string
-	rdb       *redis.Client
-	insp      *asynq.Inspector
 	// open is auth none with admin; basic is basic auth (admin and viewer).
 	open, basic *instance
 	browser     playwright.Browser
-	seed        seeded
+	fx          fixture
 }
 
 // instance is one running asynqui process.
@@ -55,25 +45,21 @@ type instance struct {
 	url string
 }
 
-// newHarness starts Redis, seeds it, builds and starts asynqui twice and
-// launches Chromium. Everything stops when t's cleanups run.
+// newHarness starts Redis, seeds the fixture, builds and starts asynqui
+// twice and launches Chromium. Everything stops when t's cleanups run.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{redisAddr: startRedis(t)}
-	h.rdb = redis.NewClient(&redis.Options{Addr: h.redisAddr})
-	t.Cleanup(func() { _ = h.rdb.Close() })
-	if err := h.rdb.FlushDB(t.Context()).Err(); err != nil {
-		t.Fatalf("flush redis %s: %v", h.redisAddr, err)
-	}
-	opt := asynq.RedisClientOpt{Addr: h.redisAddr}
-	h.insp = asynq.NewInspector(opt)
-	t.Cleanup(func() { _ = h.insp.Close() })
-	h.seed = seed(t, opt, h.insp)
+	h := &harness{}
+	redisAddr := startRedis(t)
+	start := time.Now()
+	h.fx = seedFixture(t, redisAddr)
+	t.Logf("seeded the fixture in %s", time.Since(start).Round(100*time.Millisecond))
 
 	bin := buildApp(t)
 	dir := t.TempDir()
-	h.open = startApp(t, bin, writeConfig(t, dir, "open.yaml", openConfig(h.redisAddr)))
-	h.basic = startApp(t, bin, writeConfig(t, dir, "basic.yaml", basicConfig(t, h.redisAddr)))
+	conns := connectionsConfig(redisAddr, deadAddr(t))
+	h.open = startApp(t, bin, writeConfig(t, dir, "open.yaml", openConfig(conns)))
+	h.basic = startApp(t, bin, writeConfig(t, dir, "basic.yaml", basicConfig(t, conns)))
 
 	pw, err := playwright.Run()
 	if err != nil {
@@ -127,29 +113,34 @@ func writeConfig(t *testing.T, dir, name, body string) string {
 	return p
 }
 
-// common is the config every instance shares: one connection, no update
-// check, no shutdown delay, polling off unless a test turns it on.
-func common(redisAddr string) string {
-	return fmt.Sprintf(`server:
+// connectionsConfig is the config every instance shares: the fixture's
+// connections, no update check, no shutdown delay, polling off unless a
+// test turns it on.
+func connectionsConfig(redisAddr, downAddr string) string {
+	var b strings.Builder
+	b.WriteString(`server:
   shutdown_delay: 0s
 update_check: false
 refresh:
   default: "off"
 connections:
-  - name: %s
-    addr: %q
-`, connName, redisAddr)
+`)
+	for _, c := range fixtureConns() {
+		fmt.Fprintf(&b, "  - name: %s\n    addr: %q\n    db: %d\n", c.name, redisAddr, c.db)
+	}
+	fmt.Fprintf(&b, "  - name: %s\n    addr: %q\n    dial_timeout: 1s\n", connDown, downAddr)
+	return b.String()
 }
 
-func openConfig(redisAddr string) string {
-	return common(redisAddr) + `auth:
+func openConfig(conns string) string {
+	return conns + `auth:
   provider: none
 authz:
   default: admin
 `
 }
 
-func basicConfig(t *testing.T, redisAddr string) string {
+func basicConfig(t *testing.T, conns string) string {
 	t.Helper()
 	hash := func(pw string) string {
 		b, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.MinCost)
@@ -158,7 +149,7 @@ func basicConfig(t *testing.T, redisAddr string) string {
 		}
 		return string(b)
 	}
-	return common(redisAddr) + fmt.Sprintf(`auth:
+	return conns + fmt.Sprintf(`auth:
   provider: basic
   session:
     hash_key: %q
@@ -254,123 +245,6 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.w.Write(p)
-}
-
-// ---- seed ----
-
-// Queues the seeder fills, one or more per test so tests do not interfere.
-const (
-	qSortA   = "conn-a" // 3 pending
-	qSortB   = "conn-b" // 1 pending
-	qSortC   = "conn-c" // 2 pending
-	qEmpty   = "empty"  // exists, no tasks
-	qBulk    = "bulk"   // bulkCount pending: "select all N"
-	qArchive = "arch"   // 2 pending: the Archive confirmation
-	qFind    = "find"   // findID
-	qSched   = "sched"  // 3 scheduled
-	qWork    = "work"   // activeCount active (a worker holds them)
-	qFlaky   = "flaky"  // one archived and one retry task, failed by the worker
-)
-
-const (
-	bulkCount   = 30
-	activeCount = 22 // more than the smallest page (20), so "select all N" would apply
-	findID      = "e2e-find-target"
-	// copyID is long enough to be shortened in tables; the Task page
-	// copies it whole.
-	copyID      = "0f8fad5b-d9cb-469f-a165-70867728950e"
-	copyPayload = `{"user_id":42,"note":"copy me in full"}`
-)
-
-// seeded names what the seeder made for the tests to use.
-type seeded struct {
-	taskURL     string // the Task page of copyID
-	archivedURL string // the Task page of the archived task (with an error)
-}
-
-func seed(t *testing.T, opt asynq.RedisClientOpt, insp *asynq.Inspector) seeded {
-	t.Helper()
-	c := asynq.NewClient(opt)
-	defer func() { _ = c.Close() }()
-	enqueue := func(q string, n int, opts ...asynq.Option) {
-		t.Helper()
-		for i := range n {
-			task := asynq.NewTask("email:send", fmt.Appendf(nil, `{"queue":%q,"n":%d}`, q, i))
-			if _, err := c.Enqueue(task, append([]asynq.Option{asynq.Queue(q)}, opts...)...); err != nil {
-				t.Fatalf("enqueue %s: %v", q, err)
-			}
-		}
-	}
-	enqueue(qSortA, 3)
-	enqueue(qSortB, 1)
-	enqueue(qSortC, 2)
-	enqueue(qBulk, bulkCount)
-	enqueue(qArchive, 2)
-	enqueue(qSched, 3, asynq.ProcessIn(10*time.Minute))
-	if _, err := c.Enqueue(asynq.NewTask("report:daily", []byte(`{"kind":"find"}`)), asynq.Queue(qFind), asynq.TaskID(findID)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Enqueue(asynq.NewTask("image:resize", []byte(copyPayload)), asynq.Queue(qFind), asynq.TaskID(copyID)); err != nil {
-		t.Fatal(err)
-	}
-	// An empty queue: asynq keeps a queue once it has had a task.
-	info, err := c.Enqueue(asynq.NewTask("noop", nil), asynq.Queue(qEmpty))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := insp.DeleteTask(qEmpty, info.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	// A worker holds activeCount tasks of qWork and fails qFlaky's.
-	for range activeCount {
-		if _, err := c.Enqueue(asynq.NewTask("block", nil), asynq.Queue(qWork)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	archived, err := c.Enqueue(asynq.NewTask("fail", []byte(`{"final":true}`)), asynq.Queue(qFlaky), asynq.MaxRetry(0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Enqueue(asynq.NewTask("fail", []byte(`{"final":false}`)), asynq.Queue(qFlaky), asynq.MaxRetry(5)); err != nil {
-		t.Fatal(err)
-	}
-	srv := asynq.NewServer(opt, asynq.Config{
-		Concurrency:     activeCount + 3,
-		Queues:          map[string]int{qWork: 1, qFlaky: 1},
-		RetryDelayFunc:  func(int, error, *asynq.Task) time.Duration { return time.Hour },
-		ShutdownTimeout: time.Second,
-		LogLevel:        asynq.ErrorLevel,
-	})
-	handler := asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
-		if task.Type() == "block" {
-			<-ctx.Done()
-			return ctx.Err()
-		}
-		return errors.New("dial tcp 10.0.3.7:443: i/o timeout")
-	})
-	if err := srv.Start(handler); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(srv.Shutdown)
-	sch := asynq.NewScheduler(opt, &asynq.SchedulerOpts{LogLevel: asynq.ErrorLevel})
-	if _, err := sch.Register("@every 1h", asynq.NewTask("report:daily", []byte(`{"kind":"summary"}`)), asynq.Queue(qSched)); err != nil {
-		t.Fatal(err)
-	}
-	if err := sch.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(sch.Shutdown)
-
-	waitFor(t, 30*time.Second, "the worker to pick up the seeded tasks", func() bool {
-		w, err1 := insp.GetQueueInfo(qWork)
-		f, err2 := insp.GetQueueInfo(qFlaky)
-		return err1 == nil && err2 == nil && w.Active == activeCount && f.Archived == 1 && f.Retry == 1
-	})
-	return seeded{
-		taskURL:     "/c/" + connName + "/queues/" + qFind + "/tasks/" + copyID,
-		archivedURL: "/c/" + connName + "/queues/" + qFlaky + "/tasks/" + archived.ID,
-	}
 }
 
 func waitFor(t *testing.T, d time.Duration, what string, ok func() bool) {
