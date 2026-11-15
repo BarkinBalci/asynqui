@@ -104,16 +104,34 @@ func startRedis(t *testing.T) string {
 	return addr
 }
 
-// buildApp builds cmd/asynqui into a temporary directory.
+// buildApp builds cmd/asynqui into a temporary directory and stamps
+// main.version with appVersion.
 func buildApp(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "asynqui")
-	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", bin, "./cmd/asynqui")
+	args := []string{"build", "-o", bin}
+	if v := appVersion(t); v != "" {
+		args = append(args, "-ldflags", "-X main.version="+v)
+	}
+	cmd := exec.CommandContext(t.Context(), "go", append(args, "./cmd/asynqui")...)
 	cmd.Dir = ".."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build asynqui: %v\n%s", err, out)
 	}
 	return bin
+}
+
+// appVersion returns the latest release tag without its "v", or "" outside
+// git or without one.
+func appVersion(t *testing.T) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "--exclude", "*-*")
+	cmd.Dir = ".."
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimSpace(string(out)), "v")
 }
 
 func writeConfig(t *testing.T, dir, name, body string) string {
