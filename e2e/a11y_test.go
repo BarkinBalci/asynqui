@@ -5,6 +5,7 @@ package e2e
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,20 +18,43 @@ import (
 // CSP does not apply to.
 const axeFile = "testdata/axe-core-4.14.0/axe.min.js"
 
-// a11yPages are the pages the accessibility and CSP checks visit.
-func a11yPages(h *harness) []struct{ name, path string } {
-	return []struct{ name, path string }{
-		{"Overview", "/"},
-		{"Connection", connPath(connPayments)},
-		{"Queue", queuePath(connPayments, qInvoices, "scheduled")},
-		{"Queue (retry)", queuePath(connPayments, qWebhooks, "retry")},
-		{"Queue (active)", queuePath(connNotifications, qPush, "active")},
-		{"Queue (paused)", queuePath(connNotifications, qDigest, "pending")},
-		{"Task", h.fx.refund.path()},
-		{"Task (archived)", h.fx.archived.path()},
-		{"Servers", connPath(connPayments) + "/servers"},
-		{"Schedulers", connPath(connPayments) + "/schedulers"},
-		{"Info", connPath(connPayments) + "/info"},
+// a11yPage is a page the accessibility and CSP checks visit.
+type a11yPage struct {
+	name, path string
+	// prepare puts the open page in the state the accessibility check
+	// sees.
+	prepare func(*page)
+	// shot is the README screenshot the accessibility check saves.
+	shot string
+}
+
+func a11yPages(h *harness) []a11yPage {
+	return []a11yPage{
+		{name: "Overview", path: "/", shot: "overview"},
+		{name: "Connection", path: connPath(connPayments)},
+		{name: "Queue", path: queuePath(connPayments, qInvoices, "scheduled")},
+		{name: "Queue (retry, 3 selected)", path: queuePath(connPayments, qWebhooks, "retry"), prepare: selectTasks(3), shot: "queue"},
+		{name: "Queue (active)", path: queuePath(connNotifications, qPush, "active")},
+		{name: "Queue (paused)", path: queuePath(connNotifications, qDigest, "pending")},
+		{name: "Task", path: h.fx.refund.path()},
+		{name: "Task (retry)", path: h.fx.retry.path(), shot: "task"},
+		{name: "Task (archived)", path: h.fx.archived.path()},
+		{name: "Servers", path: connPath(connPayments) + "/servers"},
+		{name: "Schedulers", path: connPath(connPayments) + "/schedulers", shot: "schedulers"},
+		{name: "Info", path: connPath(connPayments) + "/info"},
+	}
+}
+
+// selectTasks checks the first n rows of a Queue page, which shows the
+// selection toolbar.
+func selectTasks(n int) func(*page) {
+	return func(p *page) {
+		p.t.Helper()
+		boxes := p.Locator("#tasks-rows input.cb")
+		for i := range n {
+			p.ok(boxes.Nth(i).Check(), "select row %d", i+1)
+		}
+		p.ok(p.expect.Locator(p.Locator(`[data-toolbar=tasks-form] [data-sel-count]`)).ToHaveText(strconv.Itoa(n)), "%d selected", n)
 	}
 }
 
@@ -58,7 +82,13 @@ func testAccessibility(t *testing.T, h *harness) {
 		p.ok(p.ctx.AddCookies([]playwright.OptionalCookie{{Name: "asynqui_theme", Value: theme, URL: new(h.open.url)}}), "theme cookie")
 		for _, pg := range a11yPages(h) {
 			p.open(pg.path)
+			if pg.prepare != nil {
+				pg.prepare(p)
+			}
 			time.Sleep(200 * time.Millisecond) // app.js renders times, reveals copy buttons
+			if pg.shot != "" {
+				h.screenshot(p, pg.shot)
+			}
 			if !p.evalBool(`() => typeof window.axe === "object"`) {
 				p.eval(string(src))
 			}

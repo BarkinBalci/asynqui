@@ -95,19 +95,24 @@ func (h *harness) newPage(t *testing.T, inst *instance, o pageOpts) *page {
 		BaseURL:     new(inst.url),
 		Locale:      new("en-US"),
 		Permissions: o.permissions,
-		Viewport:    viewport(),
-		RecordVideo: &playwright.RecordVideo{Dir: new(videos), Size: viewport()},
+		Viewport:    h.look.viewport(),
+		RecordVideo: &playwright.RecordVideo{Dir: new(videos), Size: h.look.viewport()},
 	}
 	if o.timezone != "" {
 		opts.TimezoneId = new(o.timezone)
+	}
+	if h.look.screenshots {
+		opts.DeviceScaleFactor = new(shotScale)
 	}
 	bctx, err := h.browser.NewContext(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = bctx.Close() })
-	if err := bctx.AddInitScript(playwright.Script{Content: new(cursorScript)}); err != nil {
-		t.Fatal(err)
+	if !h.look.screenshots {
+		if err := bctx.AddInitScript(playwright.Script{Content: new(cursorScript)}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if len(o.cookies) > 0 {
 		var cs []playwright.OptionalCookie
