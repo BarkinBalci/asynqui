@@ -50,6 +50,7 @@ Design decisions behind asynqui, and why. For setup, see [configuration.md](conf
 ## UI conventions
 
 - **Minimal copy:** no helper or explanatory text. An empty state is one short line.
+- **No separator dots:** items are separated by spacing and type, never by "·".
 - **Works without JavaScript:** every page reads in full, and every action is a form post that redirects back, so a reload never posts again. Failures come back in a short-lived cookie. Timestamps stay in UTC without JavaScript and show in local time with it. htmx adds polling, partial swaps and selection on top.
 - **Polls never replace what the user is using:** the selection, sort, page, filters, toolbars and open dialogs stay as they are ([polling](architecture.md#frontend-conventions)). When a poll finds the connection failing, the last data stays, with a banner saying why.
 - **No third-party requests:** fonts and every other asset are embedded in the binary, and the Content-Security-Policy allows only asynqui's own origin.
