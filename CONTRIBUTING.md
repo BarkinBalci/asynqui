@@ -73,10 +73,6 @@ Each run leaves a video per test in `e2e/test-results/`, and a `.trace.zip` for 
 
 axe-core is vendored in `e2e/testdata`. To upgrade it, replace the directory with the new release's `axe.min.js` and `LICENSE` and update the path in `e2e/a11y_test.go`. The accessibility check fails on any violation, minor ones included.
 
-## Demo GIF
-
-The README's `docs/images/demo.gif` is recorded from the `RunRetries` browser test. Regenerate it with `ASYNQUI_E2E_REDIS=localhost:6379 task demo-gif` when a page in that flow changes, and watch it before committing.
-
 ## Version stamping
 
 `task build` stamps `main.version` with the output of `git describe`. Set `VERSION=x` to override it. Release builds stamp the tag without its `v`. A build without a stamped version reports the module version that the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none, as with `go run`.
