@@ -14,6 +14,23 @@ Code conventions are in [architecture.md](architecture.md). Each topic has one o
 | contributing.md | the dev workflow |
 | [releasing.md](releasing.md) | cutting a release |
 
+## Local development
+
+You need:
+
+- Go, at the version in `go.mod`
+- Docker, for the integration tests (they skip without it)
+- a Redis or Valkey to run against
+
+`task run` starts asynqui against `localhost:6379` with `config.dev.yaml`: no login, full control.
+
+`task demo` fills a **throwaway** Redis with the browser tests' fixture and serves asynqui on it, with the fixture's workers and schedulers running, until Ctrl-C. It flushes DBs 0–2 and shows four connections, one of them unreachable.
+
+```sh
+ASYNQUI_E2E_REDIS=localhost:6379 task demo   # http://127.0.0.1:8080
+task demo ADDR=127.0.0.1:9000                # without ASYNQUI_E2E_REDIS, testcontainers starts a Redis (Docker)
+```
+
 ## Commit messages
 
 Start each commit subject with a [Conventional Commits](https://www.conventionalcommits.org/) prefix. GoReleaser groups the release changelog by it:
