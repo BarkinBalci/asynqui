@@ -12,9 +12,9 @@ import (
 	playwright "github.com/mxschmitt/playwright-go"
 )
 
-// axeFile is axe-core, vendored (testdata/axe-core-4.14.0, MPL-2.0) so
-// the tests never fetch a script at run time. It is evaluated through the
-// DevTools protocol, which the page's CSP does not apply to.
+// axeFile is axe-core, vendored in testdata so the tests never fetch a script
+// at run time. It is evaluated through the DevTools protocol, which the page's
+// CSP does not apply to.
 const axeFile = "testdata/axe-core-4.14.0/axe.min.js"
 
 // a11yPages are the pages the accessibility and CSP checks visit.
@@ -86,9 +86,8 @@ func testAccessibility(t *testing.T, h *harness) {
 	}
 }
 
-// No page logs a CSP violation (or any console error), including after
-// app.js has polled, opened a dialog and swapped content. The page
-// helper fails the test on every console error at cleanup.
+// No page logs a CSP violation (or any console error), including after app.js
+// has polled, opened a dialog and swapped content.
 func testNoCSPViolations(t *testing.T, h *harness) {
 	p := h.newPage(t, h.open, pageOpts{cookies: map[string]string{"asynqui_refresh": "2s"}})
 	paths := []string{
