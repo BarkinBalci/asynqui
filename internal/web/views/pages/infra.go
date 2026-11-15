@@ -247,8 +247,7 @@ type SchedulerEntry struct {
 	Next     time.Time
 	Prev     time.Time
 	// Now is the time the relative run times are written against.
-	Now time.Time
-	// History is the enqueue history page.
+	Now     time.Time
 	History History
 }
 

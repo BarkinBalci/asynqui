@@ -10,18 +10,17 @@ import (
 // Element ids of the Task page. Polls replace the badge, the last error,
 // result and details cards, and the actions only when the state changed.
 const (
-	TaskPageID         = "task-page"
-	TaskPollID         = "task-poll"
-	TaskMainID         = "task-main"
-	TaskBannerID       = "task-banner"
-	TaskBadgeID        = "task-badge"
-	TaskActionsID      = "task-actions"
-	TaskErrorID        = "task-error"
-	TaskResultID       = "task-result"
-	TaskDetailsID      = "task-details"
-	TaskFormID         = "task-form"
-	TaskDeleteDialogID = "task-delete"
-	// TaskArchiveDialogID confirms archiving the task.
+	TaskPageID          = "task-page"
+	TaskPollID          = "task-poll"
+	TaskMainID          = "task-main"
+	TaskBannerID        = "task-banner"
+	TaskBadgeID         = "task-badge"
+	TaskActionsID       = "task-actions"
+	TaskErrorID         = "task-error"
+	TaskResultID        = "task-result"
+	TaskDetailsID       = "task-details"
+	TaskFormID          = "task-form"
+	TaskDeleteDialogID  = "task-delete"
 	TaskArchiveDialogID = "task-archive"
 )
 

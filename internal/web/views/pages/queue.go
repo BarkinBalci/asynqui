@@ -168,8 +168,7 @@ type Queue struct {
 	GroupsURL string
 	// Sort is the time column's sort link; its ID is empty for a table
 	// that does not sort.
-	Sort components.SortHead
-	// Actions are the toolbar's buttons, in order.
+	Sort    components.SortHead
 	Actions []TaskActionButton
 	// AllowAll offers "select all N" for this state.
 	AllowAll bool

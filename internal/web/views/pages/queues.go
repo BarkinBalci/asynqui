@@ -33,7 +33,6 @@ type DataState int
 
 // Data states.
 const (
-	// DataReady: the data was read.
 	DataReady DataState = iota
 	// DataFailed: the connection is down, or the read failed; Error says
 	// why.
