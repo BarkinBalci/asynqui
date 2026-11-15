@@ -79,4 +79,4 @@ axe-core is vendored in `e2e/testdata`. To upgrade it, replace the directory wit
 
 ## Version stamping
 
-`task build` stamps `main.version` with the output of `git describe`. Set `VERSION=x` to override it. Release builds stamp the tag without its `v`. A build without a stamped version reports the module version that the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none, as with `go run`.
+`task build` stamps `main.version` with the output of `git describe`. Set `VERSION=x` to override it. Release builds stamp the tag without its `v`. The browser tests stamp it with the output of `git describe` without its `v`, so at a release tag they show that release. A build without a stamped version reports the module version that the go command recorded: the tag for `go install …/cmd/asynqui@v0.1.0`, a pseudo-version for `go build` in a git checkout, and `dev` when there is none, as with `go run`.
