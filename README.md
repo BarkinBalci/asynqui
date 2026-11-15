@@ -53,22 +53,35 @@ Inside a container, `localhost` is the container itself, so point
 
 See the [deployment example](docs/deployment.md#kubernetes-example).
 
+## Limitations
+
+- Standalone Redis or Valkey only: no Sentinel or Cluster.
+- No metrics endpoint and no audit log.
+- Connections are managed in the config file, not in the UI.
+- Only empty queues can be deleted; there is no force delete.
+- Active tasks are cancelled by selection; there is no "Cancel all".
+- asynq caps the archive at 10,000 tasks and 90 days.
+- Scheduler entries are read-only: no "run now".
+
 ## Configuration
 
-Every key is listed in [requirements §8](docs/requirements.md#8-configuration),
-and the flags and environment variables in
-[§7](docs/requirements.md#precedence). Values can come from the environment
-through `${NAME}` in the YAML.
-
-asynqui checks GitHub for new releases; set `update_check: false` to turn it
-off ([deployment](docs/deployment.md#update-check)).
+Every flag, environment variable and config key is in [docs/configuration.md](docs/configuration.md).
+asynqui checks GitHub for new releases; [update check](docs/deployment.md#update-check) says how to turn it off.
 
 ## Documentation
 
-- [Requirements](docs/requirements.md): behaviour and configuration
-- [Deployment](docs/deployment.md): running it in production
-- [Architecture](docs/architecture.md): internals, for contributors
-- [Contributing](docs/contributing.md): the dev workflow
+**Using**
+
+- [Configuration](docs/configuration.md): flags, environment and every config key
+- [Authentication](docs/authentication.md): providers, sessions, roles and cookies
+- [Deployment](docs/deployment.md): install, Kubernetes, probes and reverse proxies
+
+**Contributing**
+
+- [Contributing](docs/contributing.md): local development and the dev workflow
+- [Design](docs/design.md): the behaviour spec
+- [Architecture](docs/architecture.md): internals
+- [Releasing](docs/releasing.md): cutting a release
 
 ## License
 
