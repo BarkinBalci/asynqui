@@ -1,9 +1,9 @@
-# asynqui developer tasks. Tools are pinned in tools/go.mod.
+# asynqui developer tasks. Tool versions are set in tools/go.mod.
 version: '3'
 
 vars:
   TOOL: go tool -modfile=tools/go.mod
-  # Stamped into main.version. Override: task build VERSION=x
+  # Stamped into main.version. Override it with: task build VERSION=x
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo dev
 
@@ -38,7 +38,7 @@ tasks:
     cmd: go test -race ./...
 
   e2e:
-    desc: Run the browser tests (Chromium + a throwaway Redis; see CONTRIBUTING.md)
+    desc: Run the browser tests in Chromium against a throwaway Redis (see CONTRIBUTING.md)
     cmd: go test -tags e2e -count=1 ./e2e/...
 
   demo-gif:
@@ -48,7 +48,7 @@ tasks:
     cmd: go test -tags e2e -count=1 -run '^TestBrowser$/^RunRetries$' ./e2e/
 
   demo:
-    desc: Serve asynqui on a Redis seeded with the e2e fixture; flushes DBs 0-2 (see CONTRIBUTING.md)
+    desc: Serve asynqui on a Redis seeded with the e2e fixture, flushing DBs 0-2 (see CONTRIBUTING.md)
     vars:
       ADDR: '{{.ADDR | default "127.0.0.1:8080"}}'
     env:

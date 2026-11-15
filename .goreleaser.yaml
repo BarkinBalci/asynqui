@@ -2,7 +2,7 @@
 #
 # Run by .github/workflows/release.yml. Validate with
 #   go run github.com/goreleaser/goreleaser/v2@<version> check
-# using the GoReleaser version pinned in that workflow.
+# using the GoReleaser version set in that workflow.
 version: 2
 
 project_name: asynqui
@@ -55,8 +55,8 @@ checksum:
 changelog:
   use: git
   sort: asc
-  # Groups by conventional-commit prefix (CONTRIBUTING.md). The regexps
-  # see the commit subject alone, so they anchor at its start.
+  # Groups commits by their Conventional Commits prefix (see CONTRIBUTING.md).
+  # The regexps match the commit subject only, so they anchor at its start.
   groups:
     - title: Features
       regexp: '^feat(\([^)]+\))?!?: '

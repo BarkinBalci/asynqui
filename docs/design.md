@@ -1,6 +1,6 @@
 # asynqui design
 
-The behaviour spec for contributors: the code and tests follow it. To run asynqui, see [configuration.md](configuration.md), [authentication.md](authentication.md) and [deployment.md](deployment.md).
+How asynqui behaves, page by page, written for contributors. If you want to run asynqui, read [configuration.md](configuration.md), [authentication.md](authentication.md) and [deployment.md](deployment.md) instead.
 
 ## 1. Scope
 
@@ -8,7 +8,7 @@ The behaviour spec for contributors: the code and tests follow it. To run asynqu
 - multiple connections
 - an overview across connections
 - authentication
-- per-connection RBAC
+- per-connection roles
 - Valkey detection
 - dark mode
 
@@ -19,7 +19,7 @@ The behaviour spec for contributors: the code and tests follow it. To run asynqu
 - Audit log.
 - Metrics or Prometheus integration.
 - Alerting.
-- Per-queue RBAC.
+- Per-queue roles.
 - Editing scheduler entries (no asynq API).
 - Connection env tags or colours.
 - Localisation. The UI is English only, with no i18n framework.
@@ -29,7 +29,7 @@ The behaviour spec for contributors: the code and tests follow it. To run asynqu
 
 - **Config only:** connections are defined in YAML ([configuration](configuration.md#keys-and-defaults)) and are read-only in the UI.
 - **What a connection is:** a Redis address plus a logical DB, plus a **name**.
-- **Name:** required and unique. Duplicates make the binary refuse to start, with an error that names both entries. Names must match `^[a-z0-9][a-z0-9._-]{0,62}$`. The name is used in URLs and RBAC.
+- **Name:** required and unique. Duplicates make the binary refuse to start, with an error that names both entries. Names must match `^[a-z0-9][a-z0-9._-]{0,62}$`. The name is used in URLs and in role bindings.
 - **Standalone Redis only.** Supported options:
   - TLS: on/off, CA file, client cert/key, `insecure_skip_verify`, server name
   - ACL username and password
@@ -46,7 +46,7 @@ The behaviour spec for contributors: the code and tests follow it. To run asynqu
 
 ## 3. Authentication
 
-Providers, sessions, keys and roles are configured as described in [authentication.md](authentication.md). This section is how sign-in behaves.
+[authentication.md](authentication.md) explains how to configure providers, sessions, keys and roles. Sign-in then behaves as follows.
 
 ### Common rules
 - **No identity:**
@@ -69,7 +69,7 @@ Providers, sessions, keys and roles are configured as described in [authenticati
 - **Userinfo:** its claims are used only when the userinfo `sub` is present and equals the ID token's.
 
 ### Session cookie (`basic`, `oidc`)
-- **Payload:** identity claims only, never tokens, plus the provider name: a cookie minted by another provider (e.g. a `basic` deployment sharing the keys) is rejected. Basic sessions store no groups. Cookie values over 4096 bytes are rejected before decoding; when several `asynqui_session` cookies arrive, the first valid one is used.
+- **Payload:** identity claims only, never tokens, plus the provider name: a cookie minted by another provider (for example, a `basic` deployment sharing the keys) is rejected. Basic sessions store no groups. Cookie values over 4096 bytes are rejected before decoding; when several `asynqui_session` cookies arrive, the first valid one is used.
 
 ### Login page
 - The username/password form appears only for `basic`.
@@ -79,7 +79,7 @@ Providers, sessions, keys and roles are configured as described in [authenticati
 
 ## 4. Authorization
 
-Roles, bindings, hidden connections and the capability table are in [authentication.md](authentication.md#roles-and-access). Every action is checked on the server; disabled buttons are only a UI hint.
+[authentication.md](authentication.md#roles-and-access) describes roles, bindings, hidden connections and what each role can do. Every action is checked on the server; disabled buttons are only a UI hint.
 
 - **Insufficient role:** the button is still shown, **disabled**, with a native `title` of "Requires {role}" ("Requires {role} on {conn}" on the Task page). There is no lock icon and no explanatory text.
 
@@ -122,7 +122,7 @@ Roles, bindings, hidden connections and the capability table are in [authenticat
 - **No "·" separators anywhere.** Separate items with spacing, weight and muted colour.
 - **Links:** always look like links (accent `#3B5BDB` light, `#7C93F5` dark). This includes whole-row links.
 - **Monospace** (JetBrains Mono) only for IDs, cron specs, payloads, options, errors, addresses and INFO output. Everything else uses Inter.
-- **Shortened IDs:** a UUID shows its first 8-4 hex groups plus "…" (e.g. `c3e81b90-04aa…`). Any other ID longer than 12 characters shows its first 12 characters plus "…"; shorter IDs are shown whole. The full ID is always in `title` and in what Copy copies.
+- **Shortened IDs:** a UUID shows its first 8-4 hex groups plus "…", such as `c3e81b90-04aa…`. Any other ID longer than 12 characters shows its first 12 characters plus "…"; shorter IDs are shown whole. The full ID is always in `title` and in what Copy copies.
 - **Code blocks:** dark block with a copy button pinned top-right, outside the scrolling area.
 - **Fonts:** self-hosted and embedded. No requests to third-party domains.
 - **Tokens:** colours, spacing and type are the custom properties in `app.css`. Dark mode swaps them.
@@ -322,7 +322,7 @@ Paths are shown without `base_path` (§7). Every page works without JavaScript f
 
 ## 7. HTTP
 
-Startup, flags and logging are in [configuration.md](configuration.md); probes, shutdown and the update check in [deployment.md](deployment.md).
+[configuration.md](configuration.md) covers startup, flags and logging, and [deployment.md](deployment.md) covers probes, shutdown and the update check.
 
 - **Base path:** `server.base_path` applies to every route, including `/health/*` and `/static/`, to cookie paths and to every redirect. Requests outside it get 404.
 - **Paths:** every generated link carries `base_path`, and every path segment (connection, queue, task, server and entry IDs) is escaped.
